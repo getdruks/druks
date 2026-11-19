@@ -29,6 +29,7 @@ from druks.chat.channels.calls.exceptions import CallsLinkError
 from druks.chat.channels.whatsapp.exceptions import WahaError, WhatsAppLinkError
 from druks.chat.dependencies import current_conversation
 from druks.chat.sockets import router as chat_sockets_router
+from druks.configured_agents.routes import router as configured_agents_router
 from druks.core.apis.exceptions import TwilioError
 from druks.core.templates import render_page
 from druks.database import (
@@ -333,6 +334,7 @@ app.include_router(notifications_external_router)
 app.include_router(webhooks_router)
 app.include_router(auth_router)
 app.include_router(teams_router)
+app.include_router(configured_agents_router)
 app.include_router(providers_router)
 app.include_router(secrets_router)
 app.include_router(browser_sessions_router)
