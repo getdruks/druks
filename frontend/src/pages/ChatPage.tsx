@@ -6,13 +6,14 @@ import { useStickToBottom } from 'use-stick-to-bottom'
 import { Link, useLocation } from 'wouter'
 
 import { api, ApiError, UnauthorizedError } from '../api/client'
-import type { Field } from '../api/types'
+import type { Account, Field } from '../api/types'
 import { appLabel } from '../apps/registry'
 import { chatApi } from '../chat/api'
 import {
   compareConversations, conversationReducer, conversationTitle, formAnswer, formErrors, initialConversation, questionAnswer, savedReplyRows,
   type ActiveRun, type Conversation, type ConversationAction, type ConversationSummary, type Message, type Question, type ReplyRow,
 } from '../chat/state'
+import { Select } from '../components/Control'
 import { Markdown } from '../components/Markdown'
 import { Page } from '../components/Page'
 import { Fields } from '../druksui/Fields'
@@ -30,7 +31,7 @@ const stoppedTurns: Partial<Record<NonNullable<Message['state']>, { title: strin
   failed: { title: 'Failed', detail: 'Druks could not deliver this message.' },
 }
 
-export function ChatPage({ id }: { id?: string }) {
+export function ChatPage({ id, account }: { id?: string; account: Account }) {
   const [, navigate] = useLocation()
   const queryClient = useQueryClient()
   const [drafts, setDrafts] = useState<Record<string, string>>({})
@@ -118,8 +119,10 @@ export function ChatPage({ id }: { id?: string }) {
                   {format.absTimeCompact(conversation.lastMessageAt)}
                 </time>
                 {conversation.activeMessageId
-                  ? <span className="chat-list-status"><span className="chat-activity-dot" />Agent is replying</span>
-                  : <span className="chat-list-status">{conversation.messageCount} {conversation.messageCount === 1 ? 'message' : 'messages'}</span>}
+                  ? <span className="chat-list-status"><span className="chat-activity-dot" />{conversation.agentName ?? 'Agent'} is replying</span>
+                  : <span className="chat-list-status">{conversation.messageCount} {conversation.messageCount === 1 ? 'message' : 'messages'}
+                    {conversation.agentName && <> <span aria-hidden="true">/</span> {conversation.agentName}</>}
+                  </span>}
               </Link>
               <PinButton conversation={conversation} onPin={togglePinned} disabled={pin.isPending} />
             </div>)}
@@ -129,6 +132,7 @@ export function ChatPage({ id }: { id?: string }) {
       <ConversationThread
         key={draftKey}
         id={conversationId}
+        account={account}
         summary={list.data?.find((conversation) => conversation.id === conversationId)}
         onPin={togglePinned}
         pinPending={pin.isPending}
@@ -157,8 +161,9 @@ function PinButton({ conversation, onPin, disabled }: {
   </button>
 }
 
-function ConversationThread({ id, summary, onPin, pinPending, draft, onDraft, onCreated }: {
+function ConversationThread({ id, account, summary, onPin, pinPending, draft, onDraft, onCreated }: {
   id?: string
+  account: Account
   summary?: ConversationSummary
   onPin: (conversation: ConversationSummary) => void
   pinPending: boolean
@@ -177,6 +182,11 @@ function ConversationThread({ id, summary, onPin, pinPending, draft, onDraft, on
   const composer = useRef<HTMLTextAreaElement>(null)
   const format = useFormatters()
   const apps = useQuery({ queryKey: ['apps'], queryFn: api.listApps, enabled: !id, staleTime: 60_000 })
+  const agents = useQuery({ queryKey: ['configuredAgents'], queryFn: api.configuredAgents, enabled: !id })
+  // An admin sees every agent, but only its owner talks to a private agent.
+  const talkableAgents = (agents.data ?? []).filter((agent) => !agent.isPrivate || agent.ownerId === account.id)
+  const [agentId, setAgentId] = useState('')
+  const chosenAgent = talkableAgents.find((agent) => agent.id === agentId)
   // A run's state sends no events, so the page reads its active runs again.
   const activeRuns = useQuery({ queryKey: ['chat', 'active-runs', id], queryFn: () => chatApi.listActiveRuns(id!), enabled: Boolean(id), refetchInterval: 2_000 })
   const { scrollRef, contentRef, isAtBottom, scrollToBottom } = useStickToBottom({ initial: 'instant', resize: 'instant' })
@@ -206,6 +216,7 @@ function ConversationThread({ id, summary, onPin, pinPending, draft, onDraft, on
           userName: action.userName, createdAt: action.createdAt,
           isPinned: action.isPinned, lastMessageAt: action.lastMessageAt,
           messageCount: action.messageCount, activeMessageId: action.activeMessageId,
+          agentId: action.agentId, agentName: action.agentName,
         }
         queryClient.setQueryData<ConversationSummary[]>(conversationListKey, (current = []) =>
           [...current.filter((item) => item.id !== summary.id), summary].sort(compareConversations),
@@ -272,7 +283,7 @@ function ConversationThread({ id, summary, onPin, pinPending, draft, onDraft, on
         composer.current?.focus()
         void scrollToBottom()
       } else {
-        const conversation = await chatApi.create(body)
+        const conversation = await chatApi.create(body, chosenAgent?.id)
         void queryClient.invalidateQueries({ queryKey: conversationListKey })
         if (mounted.current) onCreated(conversation, body)
       }
@@ -310,6 +321,7 @@ function ConversationThread({ id, summary, onPin, pinPending, draft, onDraft, on
       <div className="chat-thread-title">
         {id && <h1>{conversation ? conversationTitle(conversation) : 'Conversation'}</h1>}
         {conversation && <p>{conversation.messageCount} {conversation.messageCount === 1 ? 'message' : 'messages'}
+          {conversation.agentName && <> <span aria-hidden="true">/</span> {conversation.agentName}</>}
           {lastReply && <> <span aria-hidden="true">/</span> last reply <time dateTime={lastReply.createdAt} title={format.absTime(lastReply.createdAt)}>{format.absTimeCompact(lastReply.createdAt)}</time></>}
         </p>}
       </div>
@@ -319,6 +331,13 @@ function ConversationThread({ id, summary, onPin, pinPending, draft, onDraft, on
     {!id && <div className="chat-intro">
       <h1>What should Druks do?</h1>
       <p>Ask about activity, usage, or schedules. Tell Druks what to do next.</p>
+      {talkableAgents.length > 0 && <label className="chat-agent-picker">Talk to
+        <Select value={agentId} onChange={(event) => setAgentId(event.target.value)}>
+          <option value="">Druks</option>
+          {talkableAgents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}
+        </Select>
+      </label>}
+      {chosenAgent && <p>{chosenAgent.description}</p>}
     </div>}
     <div className="chat-messages" ref={scrollRef} role="log" aria-label="Messages" aria-live="polite" hidden={!id}>
       <div className="chat-messages-content" ref={contentRef}>
@@ -384,7 +403,7 @@ function ConversationThread({ id, summary, onPin, pinPending, draft, onDraft, on
           ref={composer}
           aria-label="Message"
           aria-describedby="chat-send-help"
-          placeholder={id ? 'Reply, or ask Druks to do something…' : 'Message Druks…'}
+          placeholder={id ? 'Reply, or ask Druks to do something…' : `Message ${chosenAgent?.name ?? 'Druks'}…`}
           rows={1}
           value={draft}
           onChange={(event) => { draftRef.current = event.target.value; onDraft(event.target.value) }}
