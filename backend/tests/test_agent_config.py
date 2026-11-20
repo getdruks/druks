@@ -11,7 +11,7 @@ from conftest import (
     make_jwt,
 )
 from drukbox_sdk import Secret
-from druks import agents
+from druks import instructions
 from druks.accounts.models import Account
 from druks.apps import App
 from druks.db import db_session
@@ -44,8 +44,8 @@ from sqlalchemy.exc import IntegrityError
 
 class Timeouts(App):
     name = "timeouts"
-    declared = agents.Agent(prompt="probe.md", contract=ConfigOutput, timeout=900)
-    oversized = agents.Agent(
+    declared = instructions.Instruction(prompt="probe.md", contract=ConfigOutput, timeout=900)
+    oversized = instructions.Instruction(
         prompt="probe.md",
         contract=ConfigOutput,
         timeout=MAX_AGENT_TIMEOUT_SECONDS * 2,
@@ -449,17 +449,17 @@ async def test_an_unregistered_agent_is_named(druks_db):
 async def test_two_apps_declare_the_same_agent_name(druks_db, declared_apps):
     class Ticketing(App):
         name = "ticketing"
-        file_tickets = agents.Agent(prompt="probe.md", contract=ConfigOutput)
+        file_tickets = instructions.Instruction(prompt="probe.md", contract=ConfigOutput)
 
     class BugHunter(App):
         name = "bug_hunter"
-        file_tickets = agents.Agent(
+        file_tickets = instructions.Instruction(
             name="File tickets", prompt="probe.md", contract=ConfigOutput, timeout=300
         )
 
     await connect_anthropic_subscription("a@example.com")
     await SettingsOverride.set_agent_effort(druks_db, BugHunter.file_tickets.id, "low")
-    declared = (Ticketing.agents.all(), BugHunter.agents.all())
+    declared = (Ticketing.instructions.all(), BugHunter.instructions.all())
     ticketing = await get_config(druks_db, Ticketing.file_tickets.id, None)
     bug_hunter = await get_config(druks_db, BugHunter.file_tickets.id, None)
     settings = [

@@ -4,13 +4,13 @@ from unittest.mock import AsyncMock
 import pytest
 from dbos import DBOS
 from druks.accounts.models import Account
-from druks.agents import Agent, AgentOutput
 from druks.apps import App
 from druks.durable.models import Run
 from druks.events.models import Event
 from druks.events.routes import list_feed
 from druks.harnesses.codex import CodexHarness
 from druks.harnesses.exceptions import HarnessSpendLimitError, Retry
+from druks.instructions import Instruction, InstructionOutput
 from druks.sandbox.datastructures import HarnessRunResult
 from druks.testing import seed_run
 from druks.usage.models import UsageScrape
@@ -27,7 +27,7 @@ SPEND_CAP_MESSAGE = (
 
 class Failures(App):
     name = "failures"
-    probe = Agent(contract=AgentOutput)
+    probe = Instruction(contract=InstructionOutput)
 
 
 FAILURE_PROBE = Failures.probe
@@ -83,7 +83,7 @@ async def test_spend_limit_records_one_terminal_attempt_without_quota_wait(
             HarnessRunResult(returncode=1, stdout=b"", stderr=SPEND_CAP_MESSAGE.encode())
         )
 
-    monkeypatch.setattr(Agent, "_run", run_agent)
+    monkeypatch.setattr(Instruction, "_run", run_agent)
     token = current_workflow.set(workflow)
     try:
         with pytest.raises(HarnessSpendLimitError):

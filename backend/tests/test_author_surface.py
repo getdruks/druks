@@ -28,7 +28,7 @@ AUTHOR_SURFACE = {
         "auth",
     },
     "druks.sandbox": {"Sandbox", "SandboxMcpServer", "SandboxSecret"},
-    "druks.agents": {"Agent", "AgentOutput", "Bot", "BotUser"},
+    "druks.instructions": {"Instruction", "InstructionOutput", "Bot", "BotUser"},
     "druks.workflows": {
         "AgentCall",
         "AgentCallResponse",

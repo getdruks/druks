@@ -48,7 +48,7 @@ For app-surface changes, inspect the proof app at
   method to the class that holds the data. Do not add a namespace, facade,
   context object, or one-use helper module.
 - Do not import an app from an author-surface module. Import only
-  `druks.accounts`, `druks.workflows`, `druks.workspaces`, `druks.agents`, `druks.events`,
+  `druks.accounts`, `druks.workflows`, `druks.workspaces`, `druks.instructions`, `druks.events`,
   `druks.signals`, `druks.db`, `druks.schemas`, `druks.prompts`, `druks.durable`,
   `druks.apps`, `druks.ui`, and `druks.webhooks`. A reference to `druks.build` or another app in these modules
   inverts the platform. The builtin apps `core` and `chat` are platform code, so
@@ -88,8 +88,8 @@ For app-surface changes, inspect the proof app at
   imports it from there, never through an author namespace's package. `druks.apps`
   loads no models, so that every layer can import it. A method of `App` that reads the
   database imports what it needs when it runs.
-- A workflow, an agent, a bot, a page, and a browser session belong to an `App`, which
-  holds them: `app.workflows`, `app.agents`, `app.bot`, `app.page_routes`, and
+- A workflow, an instruction, a bot, a page, and a browser session belong to an `App`,
+  which holds them: `app.workflows`, `app.instructions`, `app.bot`, `app.page_routes`, and
   `app.browser_sessions`. None of them exists without an `App` class, in the tests
   too. Ask the app (`app.workflows.all()`) or the object that holds the name
   (`run.workflow`). A service, a webhook, and a channel belong to the installation, so
