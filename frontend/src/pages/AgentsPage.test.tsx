@@ -106,7 +106,7 @@ describe('AgentsPage', () => {
     expect(screen.queryByRole('button', { name: 'deploy' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'review' }))
     fireEvent.click(screen.getByRole('button', { name: /^Model:/ }))
-    fireEvent.click(screen.getByRole('option', { name: /Claude Opus/ }))
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Model choices' })).getByRole('button', { name: /Claude Opus/ }))
     fireEvent.click(screen.getByRole('button', { name: 'Create agent' }))
 
     await waitFor(() =>
@@ -135,7 +135,7 @@ describe('AgentsPage', () => {
     fireEvent.change(screen.getByLabelText('Agent name'), { target: { value: 'Helper' } })
     fireEvent.click(screen.getByRole('button', { name: 'Private' }))
     fireEvent.click(screen.getByRole('button', { name: /^Model:/ }))
-    fireEvent.click(screen.getByRole('option', { name: /Claude Opus/ }))
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Model choices' })).getByRole('button', { name: /Claude Opus/ }))
     fireEvent.click(screen.getByRole('button', { name: 'Create agent' }))
 
     await waitFor(() =>

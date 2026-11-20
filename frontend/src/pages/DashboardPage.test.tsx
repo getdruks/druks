@@ -4,13 +4,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Router } from 'wouter'
 
 import { api } from '../api/client'
-import type { DashboardOverview, DashboardRun, DashboardSection } from '../api/types'
+import type { DashboardOverview, DashboardRun, DashboardSection, ProviderKey } from '../api/types'
 import { registerAppUI, targetQuery } from '../apps/registry'
 import { absTime } from '../lib/format'
 import { UserPreferencesProvider } from '../lib/preferences'
 import { DashboardPage } from './DashboardPage'
 
-vi.mock('../api/client', () => ({ api: { dashboardOverview: vi.fn(), getPersonalSettings: vi.fn() } }))
+vi.mock('../api/client', () => ({ api: {
+  dashboardOverview: vi.fn(),
+  getPersonalSettings: vi.fn(),
+  services: vi.fn().mockResolvedValue([
+    { slug: 'notes_store', title: 'Notes Store', description: 'Keeps notes.', connected: false },
+    { slug: 'mail', title: 'Mail', description: 'Sends mail.', connected: true },
+  ]),
+  providerSubscriptions: vi.fn().mockResolvedValue([]),
+  providerKeys: vi.fn().mockResolvedValue([]),
+} }))
 
 const pending: DashboardRun = {
   app: 'notes', run: 'run-one', kind: 'summarize', state: 'parked',
@@ -81,9 +90,9 @@ describe('Dashboard', () => {
     expect(within(status).queryByRole('button')).toBeNull()
     expect(within(status).getAllByRole('listitem')).toHaveLength(2)
     const total = waiting || failed || running
-    expect(screen.queryAllByRole('article')).toHaveLength(Math.min(total, 4))
     if (primary) {
       const cards = screen.getByRole('region', { name: primary })
+      expect(within(cards).getAllByRole('article')).toHaveLength(Math.min(total, 4))
       const state = waiting ? 'parked' : failed ? 'failed' : 'running'
       expect(within(cards).getAllByRole('article').map((card) => card.getAttribute('aria-label')))
         .toEqual(Array.from({ length: Math.min(total, 4) }, (_, index) => `${state} subject ${index}`))
@@ -94,10 +103,13 @@ describe('Dashboard', () => {
       }
     } else {
       expect(screen.getByText('Nothing needs you right now.')).toBeTruthy()
+      expect((await screen.findByRole('link', { name: 'Connect Notes Store' })).getAttribute('href'))
+        .toBe('/settings/connections?tab=services')
+      expect(screen.queryByRole('link', { name: 'Connect Mail' })).toBeNull()
     }
     if (waiting) {
       expect(screen.getByText(`${waiting} ${waiting === 1 ? 'thing is' : 'things are'} waiting on you.`)).toBeTruthy()
-      expect(screen.getAllByRole('link', { name: 'Review' }).filter((link) => link.classList.contains('primary'))).toHaveLength(1)
+      expect(screen.getAllByRole('link', { name: 'Review' }).filter((link) => link.classList.contains('druks-button--primary'))).toHaveLength(1)
     }
     if (!failed) expect(screen.getByText('No current failures')).toBeTruthy()
     if (failed && waiting) expect(within(status).getByText(`${failed} failed`)).toBeTruthy()
@@ -109,6 +121,15 @@ describe('Dashboard', () => {
     }
     expect(screen.queryByText(/Last (run finished|failure)/)).toBeNull()
     expect(screen.queryByText(/Scheduled work|installed apps|See them|sample data/i)).toBeNull()
+  })
+
+  it('goes quiet once the setup steps are done', async () => {
+    vi.mocked(api.providerKeys).mockResolvedValueOnce([{ keyTail: '1234' } as ProviderKey])
+    overview.mockResolvedValue({ ...empty, lastFinishedAt: pending.updatedAt })
+    mount()
+
+    expect(await screen.findByText('Your apps will put anything they need right here.')).toBeTruthy()
+    expect(screen.queryByText("Let's start by connecting your accounts")).toBeNull()
   })
 
   it('puts the requested action first and preserves the exact run and request round', async () => {
@@ -184,7 +205,7 @@ describe('Dashboard', () => {
     window.history.replaceState(null, '', '/?app=notes')
     const client = mount(['notes', 'other'])
     await screen.findByText('No current work for this app.')
-    expect(overview).toHaveBeenLastCalledWith('notes')
+    await waitFor(() => expect(overview).toHaveBeenCalledWith('notes'))
     const filter = screen.getByRole('combobox') as HTMLSelectElement
     filter.focus()
     await act(() => client.invalidateQueries({ queryKey: ['dashboard', 'overview'] }))

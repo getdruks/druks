@@ -36,11 +36,11 @@ const reviewer: Agent = {
   skills: [], harness: 'claude', model: 'claude-opus', isPrivate: true, ownerId: 'admin', channelId: null, pictureUrl: null,
 }
 
-function mount(path = `/chat/${conversation.id}`, timezone?: string) {
+function mount(path = `/chat/${conversation.id}`, timezone?: string, account = admin) {
   window.history.replaceState(null, '', path)
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   const page = <Router>
-    <Route path="/chat/:id?">{(params) => <ChatPage id={params.id} account={admin} />}</Route>
+    <Route path="/chat/:id?">{(params) => <ChatPage id={params.id} account={account} />}</Route>
   </Router>
   if (timezone) vi.spyOn(api, 'getPersonalSettings').mockResolvedValue({ timezone, theme: 'system', notificationChannelId: null, isTagRequired: false })
   render(<StrictMode><QueryClientProvider client={client}>
@@ -70,6 +70,7 @@ beforeEach(() => {
   vi.mocked(chatApi.setPinned).mockImplementation(async (_id, isPinned) => ({ ...conversation, isPinned }))
   vi.spyOn(api, 'listApps').mockResolvedValue([])
   vi.spyOn(api, 'agents').mockResolvedValue([])
+  vi.spyOn(api, 'services').mockResolvedValue([])
 })
 
 afterEach(() => {
@@ -81,6 +82,16 @@ afterEach(() => {
 })
 
 describe('Chat page', () => {
+  it('offers Chat Settings to an admin only', () => {
+    mount('/chat')
+    expect(screen.getByRole('link', { name: 'Chat Settings' }).getAttribute('href')).toBe('/apps/chat/settings')
+
+    cleanup()
+    mount('/chat', undefined, { ...admin, id: 'member', role: 'member' })
+    expect(screen.getByRole('heading', { name: 'Chat', level: 1 })).toBeTruthy()
+    expect(screen.queryByRole('link', { name: 'Chat Settings' })).toBeNull()
+  })
+
   it('distinguishes your messages, the agent, and Druks', async () => {
     vi.mocked(chatApi.get).mockResolvedValue({ ...conversation, messages: [
       { ...message, state: 'replied' },
@@ -164,6 +175,7 @@ describe('Chat page', () => {
     const thread = within(screen.getByRole('region', { name: 'Conversation' }))
     fireEvent.click(thread.getByRole('button', { name: `Pin ${conversation.title}` }))
     await waitFor(() => expect(thread.getByRole('button', { name: `Pin ${conversation.title}` }).getAttribute('aria-pressed')).toBe('true'))
+    expect(thread.getByRole('button', { name: `Pin ${conversation.title}` }).querySelector('svg')?.getAttribute('fill')).toBe('currentColor')
     socket.receive({ type: 'snapshot', ...conversation, isPinned: true, lastMessageAt: '2026-09-18T11:00:00Z' })
     expect(client.getQueryData<Conversation[]>(['chat', 'conversations'])?.[0]?.isPinned).toBe(true)
     expect(screen.getByText('Pinned', { selector: 'h2' })).toBeTruthy()

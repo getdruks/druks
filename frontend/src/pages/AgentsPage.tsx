@@ -184,7 +184,7 @@ export function AgentsPage({ account }: { account: Account }) {
 
       {draft && (
         <section
-          className="set-card mcp-custom-body"
+          className="druks-panel mcp-custom-body"
           aria-label={editingAgentId ? 'Edit agent' : 'Add agent'}
         >
           <Field label="Name">

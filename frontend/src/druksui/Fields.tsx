@@ -2,6 +2,7 @@ import { useId, useRef, useState, type ReactNode } from 'react'
 
 import type { Field, Option } from '../api/types'
 import { MarkdownEditor } from './MarkdownEditor'
+import { Select } from '../components/Control'
 
 function groupedOptions(options: Option[]): { group: string; options: Option[] }[] {
   const groups: { group: string; options: Option[] }[] = []
@@ -201,9 +202,8 @@ function Input({
       )
     case 'select':
       return (
-        <select
+        <Select
           {...shared}
-          className="dui-input"
           value={String(value ?? '')}
           onChange={(event) => onChange(field.name, event.target.value)}
         >
@@ -211,7 +211,7 @@ function Input({
             <option value="">—</option>
           ) : null}
           {selectOptions(field.options)}
-        </select>
+        </Select>
       )
     case 'multi_select':
       return (
@@ -308,7 +308,7 @@ function Input({
                   <span>{file.name}</span>
                   <button
                     type="button"
-                    className="dui-action"
+                    className="druks-button druks-button--compact"
                     aria-label={`Remove ${file.name}`}
                     onClick={() => {
                       const remaining = files.filter((_, one) => one !== index)
