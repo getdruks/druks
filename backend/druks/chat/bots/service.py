@@ -259,7 +259,7 @@ async def ask_for_answer(session: AsyncSession, run: Run) -> str | None:
     request = to_json(await read_ask(session, run)).decode()
     if not conversation.admin_account_id:
         return await report_outcome(
-            session, run, PARKED_MESSAGE.format(run=run.id, request=request)
+            session, run.conversation_id, PARKED_MESSAGE.format(run=run.id, request=request)
         )
     admin = await get_or_create_admin_conversation(session, conversation)
     body = QUESTION_MESSAGE.format(
