@@ -11,7 +11,7 @@ from druks.accounts.dependencies import current_account
 from druks.accounts.models import Account
 from druks.api.dependencies import EngineDep, SessionDep
 from druks.database import session_scope
-from druks.durable.live import SSE_HEADERS
+from druks.durable.live import EventStream
 from druks.events import reads
 from druks.events.feed import FeedDestinations, FeedItem, FeedResponse
 from druks.events.models import Event
@@ -131,8 +131,4 @@ async def stream_feed(
             yield f"event: batch-end\nid: {cursor}\ndata: {json.dumps({'cursor': cursor})}\n\n"
             await asyncio.sleep(_SSE_POLL_INTERVAL_SECONDS)
 
-    return StreamingResponse(
-        feed_stream(),
-        media_type="text/event-stream",
-        headers=SSE_HEADERS,
-    )
+    return EventStream(feed_stream())

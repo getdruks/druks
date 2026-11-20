@@ -110,11 +110,21 @@ async function throwApiError(response: Response, path: string): Promise<never> {
 
 const SAME_ORIGIN: RequestCredentials = 'same-origin'
 
+// A read that repeats an earlier read is a poll. The W3C traceparent header with
+// its sampled flag off tells the server to send no trace of it.
+const readPaths = new Set<string>()
+
+function unsampledTraceparent(): string {
+  const hex = (size: number) =>
+    Array.from(crypto.getRandomValues(new Uint8Array(size)), (byte) => byte.toString(16).padStart(2, '0')).join('')
+  return `00-${hex(16)}-${hex(8)}-00`
+}
+
 export async function getJSON<T>(path: string): Promise<T> {
-  const response = await fetch(path, {
-    headers: { Accept: 'application/json' },
-    credentials: SAME_ORIGIN,
-  })
+  const headers: Record<string, string> = { Accept: 'application/json' }
+  if (readPaths.has(path)) headers.traceparent = unsampledTraceparent()
+  readPaths.add(path)
+  const response = await fetch(path, { headers, credentials: SAME_ORIGIN })
   if (!response.ok) {
     await throwApiError(response, path)
   }

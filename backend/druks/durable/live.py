@@ -3,13 +3,31 @@ import json
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
+from opentelemetry.instrumentation.utils import suppress_instrumentation
 from pydantic import BaseModel
+from starlette.responses import StreamingResponse
+from starlette.types import Send
 
 DEFAULT_POLL_INTERVAL_SECONDS = 2.0
 
 # no-store so a proxy never replays a stale snapshot; X-Accel-Buffering off so nginx
 # forwards each event instead of buffering the stream.
 SSE_HEADERS = {"Cache-Control": "no-store", "X-Accel-Buffering": "no"}
+
+
+class EventStream(StreamingResponse):
+    """A stream of server-sent events. Its body polls on a timer for as long as the
+    client listens, so the statements and calls of the body send no span: a span
+    for each poll would bury the request of the stream."""
+
+    media_type = "text/event-stream"
+
+    def __init__(self, events: AsyncIterator[str]) -> None:
+        super().__init__(events, headers=SSE_HEADERS)
+
+    async def stream_response(self, send: Send) -> None:
+        with suppress_instrumentation():
+            await super().stream_response(send)
 
 
 def serialize_event(event_type: str, data: dict[str, Any]) -> str:

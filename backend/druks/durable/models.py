@@ -57,6 +57,7 @@ from druks.notifications.models import Notification
 from druks.secrets.models import VaultSecret
 from druks.settings import get_settings
 from druks.signals import publish
+from druks.tracing import record_gate_wait
 from druks.ui.blocks import iter_parts, list_context_blocks
 
 if TYPE_CHECKING:
@@ -558,6 +559,8 @@ class Run(Base):
         # A parked run's question ends with it, so the question's messages close.
         if self.input_gate:
             await self.close_park_notifications()
+        gate = self.input_gate
+        requested_at = self.input_requested_at
         # Clear the ask (so nothing tries to answer it) and keep the operator's
         # reason, then cancel the DBOS workflow — that writes the CANCELLED
         # status state derives from, dequeues it, and frees the subject's dedup
@@ -569,6 +572,8 @@ class Run(Base):
         self.failure = failure
         await self.session.flush()
         await DBOS.cancel_workflow_async(self.id)
+        if gate:
+            record_gate_wait(self.id, gate, requested_at, is_answered=False)
         # A cancelled run runs no more steps, so a workflow of its own reports it. A
         # cancel from the run's own chat gets no report: that turn tells the person.
         if self.conversation_id and self.conversation_id != from_conversation_id:
