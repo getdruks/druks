@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from conftest import connect_service, installation_key, make_agent_result
-from druks import agents
+from druks import instructions
 from druks.accounts.models import Account
 from druks.apps import App
 from druks.browser import BrowserClient, BrowserSession
@@ -33,11 +33,11 @@ from pydantic import BaseModel, SecretStr
 from sqlalchemy import select
 
 
-class DummyOutput(agents.AgentOutput):
+class DummyOutput(instructions.InstructionOutput):
     ok: bool
 
 
-class FileOutput(agents.AgentOutput):
+class FileOutput(instructions.InstructionOutput):
     image: File
 
 
@@ -47,9 +47,9 @@ ATLAS = BrowserSession(site="atlas.example", read_only=True)
 
 class Probes(App):
     name = "agent_probes"
-    dummy = agents.Agent(prompt="dummy/agent.md", contract=DummyOutput)
-    file = agents.Agent(prompt="dummy/agent.md", contract=FileOutput)
-    browser_probe = agents.Agent(
+    dummy = instructions.Instruction(prompt="dummy/agent.md", contract=DummyOutput)
+    file = instructions.Instruction(prompt="dummy/agent.md", contract=FileOutput)
+    browser_probe = instructions.Instruction(
         prompt="dummy/agent.md",
         contract=DummyOutput,
         browser=ATLAS,
@@ -62,12 +62,12 @@ FILE_AGENT = Probes.file
 BROWSER_AGENT = Probes.browser_probe
 
 
-def declare(**fields) -> agents.Agent:
-    """An agent of a one-off app, for a test that needs its own."""
+def declare(**fields) -> instructions.Instruction:
+    """An instruction of a one-off app, for a test that needs its own."""
 
     class OneOff(App):
         name = "one_off"
-        agent = agents.Agent(**fields)
+        agent = instructions.Instruction(**fields)
 
     return OneOff.agent
 
@@ -103,7 +103,7 @@ def _patch_runtime(monkeypatch, tmp_path, payload):
     monkeypatch.setattr("druks.sandbox.client.Client.lease", lease)
     settings = MagicMock()
     settings.artifacts_dir = tmp_path
-    monkeypatch.setattr(agents, "get_settings", lambda: settings)
+    monkeypatch.setattr(instructions, "get_settings", lambda: settings)
 
     async def _template(name, *, repo):
         async def render_async(**_context):
@@ -111,7 +111,7 @@ def _patch_runtime(monkeypatch, tmp_path, payload):
 
         return SimpleNamespace(render_async=render_async)
 
-    monkeypatch.setattr(agents, "get_template", _template)
+    monkeypatch.setattr(instructions, "get_template", _template)
     sandbox = Host(record=SimpleNamespace(id="host-test", ssh_username="root"))  # type: ignore[arg-type]
     sandbox.run_agent = AsyncMock(return_value=make_agent_result(payload, agent=DUMMY_AGENT.id))
     return sandbox
@@ -158,8 +158,8 @@ def _inline_agent_steps(monkeypatch):
         return await function(*args)
 
     sleep = AsyncMock()
-    monkeypatch.setattr(agents.DBOS, "run_step_async", run_inline)
-    monkeypatch.setattr(agents.DBOS, "sleep_async", sleep)
+    monkeypatch.setattr(instructions.DBOS, "run_step_async", run_inline)
+    monkeypatch.setattr(instructions.DBOS, "sleep_async", sleep)
     return checkpoints, sleep
 
 
@@ -184,17 +184,19 @@ async def lent_browser(druks_db, monkeypatch):
         lent.append((session, client, account_id, call_id))
         yield BROWSER_SERVER, SecretRef(name="mcp_browser_token", secret_id=key.id)
 
-    monkeypatch.setattr(agents.AgentBrowser, "lend", lend)
+    monkeypatch.setattr(instructions.AgentBrowser, "lend", lend)
     return lent
 
 
 def test_a_browser_agent_drives_with_the_pinchtab_client():
     with pytest.raises(TypeError, match="needs browser_client=BrowserClient.PINCHTAB"):
-        agents.Agent(contract=DummyOutput, browser=ATLAS)
+        instructions.Instruction(contract=DummyOutput, browser=ATLAS)
     with pytest.raises(TypeError, match="needs browser_client=BrowserClient.PINCHTAB"):
-        agents.Agent(contract=DummyOutput, browser=ATLAS, browser_client=BrowserClient.PLAYWRIGHT)
+        instructions.Instruction(
+            contract=DummyOutput, browser=ATLAS, browser_client=BrowserClient.PLAYWRIGHT
+        )
     with pytest.raises(TypeError, match="needs browser="):
-        agents.Agent(contract=DummyOutput, browser_client=BrowserClient.PINCHTAB)
+        instructions.Instruction(contract=DummyOutput, browser_client=BrowserClient.PINCHTAB)
 
 
 async def test_an_agent_browser_gets_its_own_box_and_the_browser_server(
@@ -229,7 +231,7 @@ async def test_a_replayed_call_starts_no_browser(monkeypatch, current_run, lent_
     async def replay(options, function):
         return DummyOutput(ok=True)
 
-    monkeypatch.setattr(agents.DBOS, "run_step_async", replay)
+    monkeypatch.setattr(instructions.DBOS, "run_step_async", replay)
 
     assert await BROWSER_AGENT() == DummyOutput(ok=True)
     assert lent_browser == []
@@ -244,7 +246,7 @@ async def test_run_outside_workflow_raises():
 async def test_run_refuses_an_agent_with_no_id():
     # Built loose — never assigned to an App — so the call it would record would
     # name nobody.
-    loose = agents.Agent(prompt="dummy/agent.md", contract=DummyOutput)
+    loose = instructions.Instruction(prompt="dummy/agent.md", contract=DummyOutput)
     with pytest.raises(WorkflowError, match="runs under its own id"):
         await loose(repo="acme/widget")
 
@@ -428,15 +430,15 @@ def test_get_loads_the_owning_app_before_it_reads_the_registry(monkeypatch, decl
 
         class Later(App):
             name = "later"
-            writer = agents.Agent(prompt="dummy/agent.md", contract=DummyOutput)
+            writer = instructions.Instruction(prompt="dummy/agent.md", contract=DummyOutput)
 
-    monkeypatch.setattr(agents, "resolve_app", resolve_app)
+    monkeypatch.setattr(instructions, "resolve_app", resolve_app)
 
-    assert agents.Agent.get("later.writer").id == "later.writer"
-    assert agents.Agent.get(DUMMY_AGENT.id) is DUMMY_AGENT
+    assert instructions.Instruction.get("later.writer").id == "later.writer"
+    assert instructions.Instruction.get(DUMMY_AGENT.id) is DUMMY_AGENT
     assert loaded == ["later"]
     with pytest.raises(ObjectNotFound):
-        agents.Agent.get("later.reader")
+        instructions.Instruction.get("later.reader")
 
 
 async def test_after_agent_hooks_answer_the_turn_from_a_box_of_their_own(
@@ -686,7 +688,7 @@ async def test_file_output_reaches_the_next_agents_input(
 
         return SimpleNamespace(render_async=render_async)
 
-    monkeypatch.setattr(agents, "get_template", _template)
+    monkeypatch.setattr(instructions, "get_template", _template)
     monkeypatch.setattr(
         FileOutput,
         "to_artifact",
@@ -701,7 +703,7 @@ async def test_file_output_reaches_the_next_agents_input(
     sandbox.upload_file.assert_awaited_once()
     calls = await AgentCall.list_for_run(db_session(), "wf-9")
     assert [call.status for call in calls] == ["succeeded", "succeeded"]
-    artifact = (await db_session().scalars(select(agents.Artifact))).one()
+    artifact = (await db_session().scalars(select(instructions.Artifact))).one()
     content = (tmp_path / "run-wf-9" / artifact.agent_call_id / artifact.path).read_text()
     assert content == produced.image.url
 
@@ -754,7 +756,7 @@ async def test_body_level_overload_retries_as_separate_durable_attempts(
         ]
     )
     _patch_ephemeral(monkeypatch, sandbox)
-    monkeypatch.setattr(agents.random, "uniform", MagicMock(side_effect=[0.95, 1.05]))
+    monkeypatch.setattr(instructions.random, "uniform", MagicMock(side_effect=[0.95, 1.05]))
     current_run._reap_run = AsyncMock()
     checkpoints, sleep = _inline_agent_steps
 
@@ -785,7 +787,7 @@ async def test_body_level_first_byte_retries_immediately_then_reraises(
         ]
     )
     _patch_ephemeral(monkeypatch, sandbox)
-    monkeypatch.setattr(agents.random, "uniform", lambda _low, _high: 1.0)
+    monkeypatch.setattr(instructions.random, "uniform", lambda _low, _high: 1.0)
     current_run._reap_run = AsyncMock()
     _, sleep = _inline_agent_steps
 
@@ -844,9 +846,9 @@ def _patch_quota(monkeypatch, tmp_path, current_run, failures, *, now):
     _patch_ephemeral(monkeypatch, sandbox)
     clock = MagicMock()
     clock.now.return_value = now
-    monkeypatch.setattr(agents, "datetime", clock)
+    monkeypatch.setattr(instructions, "datetime", clock)
     monkeypatch.setattr(
-        agents.UsageScrape,
+        instructions.UsageScrape,
         "latest_for",
         classmethod(
             _async_scrape(
@@ -868,7 +870,7 @@ def _patch_quota(monkeypatch, tmp_path, current_run, failures, *, now):
             )
         ),
     )
-    monkeypatch.setattr(agents.random, "uniform", MagicMock(return_value=90.0))
+    monkeypatch.setattr(instructions.random, "uniform", MagicMock(return_value=90.0))
     current_run._reap_run = AsyncMock()
     return sandbox
 
@@ -895,9 +897,9 @@ async def test_body_level_quota_waits_for_the_reset_once(
     failures = [HarnessRateLimitError(f"quota {attempt}") for attempt in range(2)]
     _patch_quota(monkeypatch, tmp_path, current_run, failures, now=now)
     set_run_phase = AsyncMock()
-    monkeypatch.setattr(agents, "set_run_phase", set_run_phase)
+    monkeypatch.setattr(instructions, "set_run_phase", set_run_phase)
     post_to_chat = AsyncMock()
-    monkeypatch.setattr(agents, "_post_to_chat", post_to_chat)
+    monkeypatch.setattr(instructions, "_post_to_chat", post_to_chat)
     current_run.conversation_id = "conversation-1"
     current_run.sleep = AsyncMock(return_value=False)
     checkpoints, _sleep = _inline_agent_steps
@@ -996,9 +998,9 @@ async def test_body_level_quota_reset_over_six_hours_reraises_without_sleeping(
     _patch_ephemeral(monkeypatch, sandbox)
     clock = MagicMock()
     clock.now.return_value = now
-    monkeypatch.setattr(agents, "datetime", clock)
+    monkeypatch.setattr(instructions, "datetime", clock)
     monkeypatch.setattr(
-        agents.UsageScrape,
+        instructions.UsageScrape,
         "latest_for",
         classmethod(
             _async_scrape(
@@ -1069,12 +1071,12 @@ async def test_in_step_transient_retry_uses_asyncio_sleep(monkeypatch, current_r
             raise HarnessOverloadedError("overloaded")
         return DummyOutput(ok=True)
 
-    monkeypatch.setattr(agents.Agent, "_run", run_agent)
-    monkeypatch.setattr(agents.random, "uniform", lambda _low, _high: 1.0)
+    monkeypatch.setattr(instructions.Instruction, "_run", run_agent)
+    monkeypatch.setattr(instructions.random, "uniform", lambda _low, _high: 1.0)
     memory_sleep = AsyncMock()
     durable_sleep = AsyncMock()
-    monkeypatch.setattr(agents.asyncio, "sleep", memory_sleep)
-    monkeypatch.setattr(agents.DBOS, "sleep_async", durable_sleep)
+    monkeypatch.setattr(instructions.asyncio, "sleep", memory_sleep)
+    monkeypatch.setattr(instructions.DBOS, "sleep_async", durable_sleep)
     token = _in_step.set(True)
     try:
         result = await DUMMY_AGENT()
@@ -1096,11 +1098,11 @@ async def test_in_step_quota_reraises_without_sleeping(monkeypatch, current_run)
     async def run_agent(_self, **_context):
         raise failure
 
-    monkeypatch.setattr(agents.Agent, "_run", run_agent)
+    monkeypatch.setattr(instructions.Instruction, "_run", run_agent)
     memory_sleep = AsyncMock()
     durable_sleep = AsyncMock()
-    monkeypatch.setattr(agents.asyncio, "sleep", memory_sleep)
-    monkeypatch.setattr(agents.DBOS, "sleep_async", durable_sleep)
+    monkeypatch.setattr(instructions.asyncio, "sleep", memory_sleep)
+    monkeypatch.setattr(instructions.DBOS, "sleep_async", durable_sleep)
     token = _in_step.set(True)
     try:
         with pytest.raises(HarnessRateLimitError) as excinfo:
@@ -1148,7 +1150,7 @@ async def test_provisioning_failure_recovers_through_durable_retry(
             sandbox, keys, failures=[HarnessSandboxProvisioningError("exe.dev create timed out")]
         ),
     )
-    monkeypatch.setattr(agents.random, "uniform", lambda _low, _high: 1.0)
+    monkeypatch.setattr(instructions.random, "uniform", lambda _low, _high: 1.0)
     current_run._reap_run = AsyncMock()
     checkpoints, sleep = _inline_agent_steps
 
@@ -1184,11 +1186,11 @@ async def test_provisioning_failure_recovers_in_step_retry(
             sandbox, keys, failures=[HarnessSandboxProvisioningError("exe.dev create timed out")]
         ),
     )
-    monkeypatch.setattr(agents.random, "uniform", lambda _low, _high: 1.0)
+    monkeypatch.setattr(instructions.random, "uniform", lambda _low, _high: 1.0)
     memory_sleep = AsyncMock()
     durable_sleep = AsyncMock()
-    monkeypatch.setattr(agents.asyncio, "sleep", memory_sleep)
-    monkeypatch.setattr(agents.DBOS, "sleep_async", durable_sleep)
+    monkeypatch.setattr(instructions.asyncio, "sleep", memory_sleep)
+    monkeypatch.setattr(instructions.DBOS, "sleep_async", durable_sleep)
 
     token = _in_step.set(True)
     try:
@@ -1249,7 +1251,7 @@ async def test_provisioning_failure_exhausts_retries_with_classified_code(
     monkeypatch.setattr(
         "druks.sandbox.client.Client.ephemeral", _flaky_ephemeral(None, [], failures=failures)
     )
-    monkeypatch.setattr(agents.random, "uniform", lambda _low, _high: 1.0)
+    monkeypatch.setattr(instructions.random, "uniform", lambda _low, _high: 1.0)
     current_run._reap_run = AsyncMock()
     _, sleep = _inline_agent_steps
 

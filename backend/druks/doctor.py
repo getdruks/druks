@@ -19,7 +19,6 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from .accounts.models import Account
-from .agents import Agent
 from .apps.loader import load_installed_apps
 from .browser.sessions import BrowserSession
 from .chat.bridge import Bridge
@@ -28,11 +27,12 @@ from .core.services import Github
 from .database import create_async_engine_from_url, create_engine_from_url, session_scope
 from .harnesses.providers import get_providers
 from .harnesses.registry import get_harnesses
+from .instructions import Instruction
 from .registry import (
     _ROLES,
     autodiscover,
-    iter_agents,
     iter_apps,
+    iter_instructions,
     iter_workflows,
     service_registry,
     webhook_registry,
@@ -481,8 +481,8 @@ def _defined_capability(module: ModuleType) -> tuple[str, str] | None:
             and value.__module__ == name
         ):
             return "services", value.slug
-        if isinstance(value, Agent) and value.module == name:
-            return "agents", value.name
+        if isinstance(value, Instruction) and value.module == name:
+            return "instructions", value.name
         if (
             isinstance(value, type)
             and issubclass(value, Channel)
@@ -505,7 +505,7 @@ def check_capability_modules(settings: Settings) -> CheckResult:
         discovered = {
             "workflows": {workflow.kind for workflow in iter_workflows()},
             "webhooks": set(webhook_registry._items),
-            "agents": {agent.id for agent in iter_agents()},
+            "instructions": {instruction.id for instruction in iter_instructions()},
             "services": set(service_registry._items),
         }
         # Tasks register straight into DBOS's own map — it is their registry.

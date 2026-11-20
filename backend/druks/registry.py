@@ -7,9 +7,9 @@ from typing import TYPE_CHECKING, Any
 from druks.exceptions import AppsNotRegisteredError
 
 if TYPE_CHECKING:
-    from druks.agents import Agent, Bot
     from druks.apps import App
     from druks.browser.sessions import BrowserSession
+    from druks.instructions import Bot, Instruction
     from druks.workflows import Workflow
 
 # Leaf-module names that carry self-registering capabilities. ``autodiscover``
@@ -197,12 +197,12 @@ def iter_workflows() -> "list[type[Workflow]]":
     return _list("workflows")
 
 
-def get_agent(id: str) -> "Agent | None":
-    return _find("agents", id)
+def get_instruction(id: str) -> "Instruction | None":
+    return _find("instructions", id)
 
 
-def iter_agents() -> "list[Agent]":
-    return _list("agents")
+def iter_instructions() -> "list[Instruction]":
+    return _list("instructions")
 
 
 def get_bot(id: str) -> "Bot | None":

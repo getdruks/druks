@@ -6,7 +6,7 @@ from drukbox_sdk import Secret
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from druks.accounts.models import Account
-from druks.registry import get_agent, get_bot
+from druks.registry import get_bot, get_instruction
 from druks.sandbox.constants import MAX_AGENT_TIMEOUT_SECONDS
 from druks.sandbox.models import SecretRef
 from druks.secrets.datastructures import Audience
@@ -108,7 +108,7 @@ async def check_config(
 async def get_config(session: AsyncSession, agent_name: str, account_id: str | None) -> AgentConfig:
     """Resolve an agent's shared execution settings and the supplied or default account's
     credential. A missing credential raises."""
-    agent = get_agent(agent_name) or get_bot(agent_name)
+    agent = get_instruction(agent_name) or get_bot(agent_name)
     if not agent:
         raise KeyError(f"no agent is registered as {agent_name!r}")
     settings = await InstallationSettings.get_or_create(session)

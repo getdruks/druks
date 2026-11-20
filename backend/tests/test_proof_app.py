@@ -1,7 +1,7 @@
 from druks.apps.loader import load_app
 from druks.browser import BrowserClient
 from druks.models import Base
-from druks.registry import get_agent, get_browser_session
+from druks.registry import get_browser_session, get_instruction
 
 _PACKAGE = "druks_field_notes"
 
@@ -28,7 +28,7 @@ def test_discovery_registers_the_agent_hooks():
     load_app("field_notes")
     from druks_field_notes.hooks import keep_the_checkout
 
-    assert get_agent("field_notes.survey")._after_agent == [keep_the_checkout]
+    assert get_instruction("field_notes.survey")._after_agent == [keep_the_checkout]
 
 
 def test_boot_registers_the_read_only_browser_session():
@@ -41,7 +41,7 @@ def test_boot_registers_the_read_only_browser_session():
 def test_boot_registers_the_browser_agent():
     app = load_app("field_notes")
 
-    identify = get_agent("field_notes.identify")
+    identify = get_instruction("field_notes.identify")
     assert identify.browser is app.atlas
     assert identify.browser_client == BrowserClient.PINCHTAB
 

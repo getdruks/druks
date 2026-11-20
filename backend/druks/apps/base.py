@@ -32,11 +32,11 @@ from .settings import (
 if TYPE_CHECKING:
     from fastapi import APIRouter
 
-    from druks.agents import Bot
     from druks.doctor import CheckResult
     from druks.durable.datastructures import Subject
     from druks.durable.models import Run
     from druks.durable.schemas import SubjectStatus, SubjectSummary
+    from druks.instructions import Bot
     from druks.models import StoredSubject
     from druks.ui import Page
     from druks.ui.page import PageRoute
@@ -94,7 +94,7 @@ class App:
     """A pluggable application. Subclass it, set ``name``, and register the
     subclass under the ``druks.apps`` entry-point group. At boot the loader
     calls ``discover``, which imports the package's conventionally-named modules —
-    that import is where the app's webhooks, workflows, agents, and
+    that import is where the app's webhooks, workflows, instructions, and
     subscribers self-register.
 
     Used as a class, never instantiated: an app is a stateless install
@@ -130,7 +130,7 @@ class App:
     # class lives somewhere other than its package root.
     package: ClassVar[str]
     # ``builtin`` apps carry platform-core settings rather than a user-facing
-    # app — the settings UI folds their agents into the Druks tab instead of
+    # app — the settings UI folds their instructions into the Druks tab instead of
     # giving them their own.
     builtin: ClassVar[bool] = False
     # The app's declared ``Settings`` inner class, if any — operator knobs that
@@ -148,7 +148,7 @@ class App:
     # What this app's code declares. Each thing files itself here when Python
     # defines it.
     workflows = _OwnRegistry("workflows", key=lambda cls: cls.kind)
-    agents = _OwnRegistry("agents", key=lambda agent: agent.id)
+    instructions = _OwnRegistry("instructions", key=lambda instruction: instruction.id)
     page_routes = _OwnRegistry("pages", key=lambda page_route: page_route.key)
     browser_sessions = _OwnRegistry("browser_sessions", key=lambda session: session.name)
 
@@ -335,7 +335,7 @@ class App:
     @classmethod
     def discover(cls) -> list[ModuleType]:
         """Import the app's capability modules so its webhooks, workflows,
-        agents, and subscribers self-register. The default walks ``package``;
+        instructions, and subscribers self-register. The default walks ``package``;
         override to customize discovery (the Django ``AppConfig.ready`` escape
         hatch — the override, not a platform special-case, is how a weird app
         stays weird). Returns the imported modules so ``get_routers`` can read the

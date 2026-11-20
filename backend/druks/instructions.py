@@ -39,7 +39,7 @@ from druks.harnesses.exceptions import (
     Retry,
 )
 from druks.prompts.resolver import get_template
-from druks.registry import get_agent
+from druks.registry import get_instruction
 from druks.sandbox import gate as sandbox_gate
 from druks.sandbox.models import SecretRef
 from druks.secrets.enums import SecretKind
@@ -55,7 +55,7 @@ if TYPE_CHECKING:
     from druks.services.base import ServiceField
     from druks.workspaces import Workspace
 
-__all__ = ["Agent", "AgentOutput", "Bot", "BotUser"]
+__all__ = ["Instruction", "InstructionOutput", "Bot", "BotUser"]
 
 _QUOTA_FALLBACK_WAIT_SECONDS = 30 * 60
 _QUOTA_MAX_WAIT_SECONDS = 6 * 60 * 60
@@ -66,8 +66,8 @@ _QUOTA_TOPIC = "agents.quota"
 _in_after_agent: ContextVar[bool] = ContextVar("_in_after_agent", default=False)
 
 
-class AgentOutput(BaseModel):
-    """Base for an agent's structured output contract — the model an ``Agent``
+class InstructionOutput(BaseModel):
+    """Base for an instruction's structured output contract — the model an ``Instruction``
     declares as its ``contract``. The harness sends the model's schema to OpenAI's
     strict structured-output validator on a Codex model, which requires every
     object node to set ``additionalProperties: false`` and list every property in
@@ -79,8 +79,8 @@ class AgentOutput(BaseModel):
 
     def to_result(self) -> Any:
         # What the caller gets back from an agent call: the validated output itself
-        # by default. Override to map the strict agent output onto a looser domain
-        # type — the seam that keeps the agent contract out of durable records,
+        # by default. Override to map the strict output onto a looser domain
+        # type — the seam that keeps the output contract out of durable records,
         # applied by the call so no caller ever invokes it.
         return self
 
@@ -96,17 +96,17 @@ class AgentOutput(BaseModel):
 
 
 @dataclass(frozen=True)
-class Agent:
-    contract: type[AgentOutput]
+class Instruction:
+    contract: type[InstructionOutput]
     # Display label for the settings UI; the attribute name shows when it's None.
     name: str | None = None
-    # Short human-friendly blurb of what the agent does, shown in the settings UI.
+    # Short human-friendly blurb of what the instruction does, shown in the settings UI.
     description: str = ""
-    # The prompt template ``run`` renders. None for agents that build their
+    # The prompt template ``run`` renders. None for instructions that build their
     # prompt inline and drive the harness themselves (planning) instead of
     # going through ``run``.
     prompt: str | None = None
-    # Declared run timeout in seconds, overridable per agent; None inherits the
+    # Declared run timeout in seconds, overridable per instruction; None inherits the
     # harness default. How long a step may take is a fact about the task; the
     # model and the effort are the operator's, set in Settings.
     timeout: int | None = None
@@ -114,7 +114,7 @@ class Agent:
     # that hit no MCP server.
     include_plugins: bool = True
     # ``include_mcp=False`` gives the call no MCP server and its sandbox no
-    # server entry, for an agent that reads untrusted content.
+    # server entry, for an instruction that reads untrusted content.
     include_mcp: bool = True
     # The service secrets the call's sandbox holds, ``(Acme.fields.api_key,)``.
     # Each is a placeholder that the secrets proxy swaps at the service's host.
@@ -122,10 +122,10 @@ class Agent:
     # The saved browser session the call drives, and the client Druks starts
     # beside Chrome for it. The call gets the ``browser`` MCP server beside the
     # servers it has anyway.
-    # A session is mutable, so it stays out of the agent's hash.
+    # A session is mutable, so it stays out of the instruction's hash.
     browser: "BrowserSession | None" = field(default=None, compare=False)
     browser_client: BrowserClient | None = None
-    # ``id`` is the agent's durable key (settings, timeline, registry, step name):
+    # ``id`` is the instruction's durable key (settings, timeline, registry, step name):
     # ``<app>.<attribute>``, from the App it is declared on. ``app`` is that App's
     # name. Both are read from the class in __set_name__.
     id: str = field(default="", init=False, compare=False)
@@ -137,11 +137,13 @@ class Agent:
     def __post_init__(self) -> None:
         if self.browser and self.browser_client != BrowserClient.PINCHTAB:
             raise TypeError(
-                "An agent with browser= needs browser_client=BrowserClient.PINCHTAB. "
+                "An instruction with browser= needs browser_client=BrowserClient.PINCHTAB. "
                 "Druks starts no other client for an agent call."
             )
         if self.browser_client and not self.browser:
-            raise TypeError("Agent(browser_client=...) needs browser=, the session it drives.")
+            raise TypeError(
+                "Instruction(browser_client=...) needs browser=, the session it drives."
+            )
         for secret in self.secrets:
             declared = f"{secret.service.__name__}.fields.{secret.name}"
             if not secret.is_secret:
@@ -157,21 +159,21 @@ class Agent:
                 )
 
     def __set_name__(self, owner: type, attr: str) -> None:
-        if self.id:  # a second name for an agent that an App declares already
+        if self.id:  # a second name for an instruction that an App declares already
             return
         object.__setattr__(self, "id", f"{owner.name}.{attr}")
         object.__setattr__(self, "app", owner.name)
-        owner.agents.register(self)
+        owner.instructions.register(self)
 
     @classmethod
-    def get(cls, id: str) -> "Agent":
-        """The agent registered as ``id``, ``<app>.<attribute>``, loading its app first."""
-        if not get_agent(id):
+    def get(cls, id: str) -> "Instruction":
+        """The instruction registered as ``id``, ``<app>.<attribute>``, loading its app first."""
+        if not get_instruction(id):
             resolve_app(id.partition(".")[0])
-        agent = get_agent(id)
-        if not agent:
-            raise ObjectNotFound("agent", {"id": id})
-        return agent
+        instruction = get_instruction(id)
+        if not instruction:
+            raise ObjectNotFound("instruction", {"id": id})
+        return instruction
 
     def after_agent(
         self, hook: Callable[..., Awaitable[str | None]]
@@ -182,17 +184,17 @@ class Agent:
         return hook
 
     async def get_config(self) -> AgentConfig:
-        """How this agent runs for the current run's actor, read from settings now."""
+        """How this instruction runs for the current run's actor, read from settings now."""
         workflow = current_workflow.get(None)
         if not workflow:
-            raise WorkflowError(f"agent {self.id!r} reads its config only inside a workflow")
+            raise WorkflowError(f"instruction {self.id!r} reads its config only inside a workflow")
         return await get_config(db_session(), self.id, workflow.account_id)
 
     async def __call__(
-        self, *, contract: type[AgentOutput] | None = None, **context: object
+        self, *, contract: type[InstructionOutput] | None = None, **context: object
     ) -> Any:
-        """Run the agent — ``await SoftwareFactory.implement(...)`` — as a durable step in the
-        current workflow and return its parsed output. An agent run is always memoized —
+        """Run the instruction — ``await SoftwareFactory.implement(...)`` — as a durable step in the
+        current workflow and return its parsed output. An instruction run is always memoized —
         this picks which step does it: its own, or the @step it's already inside.
         workflow_id comes from the workflow context, not the caller; everything
         else (repo, …) is prompt context. ``contract`` overrides the output
@@ -200,11 +202,11 @@ class Agent:
         if not self.id:
             # Built loose — never assigned to an App — so its settings, its
             # registry entry and the call it would record all key on nothing.
-            raise WorkflowError("an agent runs under its own id — declare it on an App")
+            raise WorkflowError("an instruction runs under its own id — declare it on an App")
         workflow = current_workflow.get(None)
         if not workflow:
             raise WorkflowError(
-                f"agent {self.id!r} can only run inside a workflow; standalone agent "
+                f"instruction {self.id!r} can only run inside a workflow; standalone instruction "
                 "runs aren't supported yet"
             )
 
@@ -335,7 +337,7 @@ class Agent:
         self,
         *,
         workflow_id: str,
-        contract: type[AgentOutput] | None = None,
+        contract: type[InstructionOutput] | None = None,
         **context: Any,
     ) -> Any:
         """The raw execution: read what the call needs, provision or attach a host,
@@ -343,7 +345,7 @@ class Agent:
         wrapping + nesting. Each read is a unit of work of its own, so no
         connection sits idle through the boot, the preparation, or the run."""
         if not self.prompt:
-            raise WorkflowError(f"agent {self.id!r} has no prompt template to render")
+            raise WorkflowError(f"instruction {self.id!r} has no prompt template to render")
         contract = contract or self.contract
         workflow = current_workflow.get()
         # The span that __call__ opened for this call.
@@ -581,8 +583,8 @@ class Agent:
         return uploaded
 
     def _parse_output(
-        self, contract: type[AgentOutput], result: "AgentResult"
-    ) -> tuple[AgentOutput, list[File]]:
+        self, contract: type[InstructionOutput], result: "AgentResult"
+    ) -> tuple[InstructionOutput, list[File]]:
         workspace_files: list[File] = []
         try:
             output = contract.model_validate(
@@ -590,12 +592,13 @@ class Agent:
             )
         except ValidationError as error:
             raise HarnessInvalidOutputError(
-                f"agent {self.id!r} returned a payload that fails {contract.__name__}: {error}"
+                f"instruction {self.id!r} returned a payload that fails "
+                f"{contract.__name__}: {error}"
             ) from error
         return output, workspace_files
 
     def _get_event_and_artifact(
-        self, contract: type[AgentOutput], output: AgentOutput
+        self, contract: type[InstructionOutput], output: InstructionOutput
     ) -> tuple[dict[str, str], dict[str, str]]:
         event = output.to_event()
         artifact = output.to_artifact()
