@@ -2198,6 +2198,7 @@ async def test_each_agent_turn_answers_by_the_agents_instructions_at_that_turn(
         druks_db,
         editor=owner,
         slack_channel_id=None,
+        picture_url=None,
         **{**AGENT, "owner_id": owner.id, "instructions": "Answer as a release manager."},
     )
     await conversation.create_message(druks_db, "And now?")
@@ -2516,6 +2517,7 @@ async def test_a_task_run_refuses_once_a_public_agent_turns_private(druks_db, mo
         editor=owner,
         owner_id=owner.id,
         slack_channel_id=None,
+        picture_url=None,
         **{**AGENT, "is_private": True},
     )
     await druks_db.commit()
