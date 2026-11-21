@@ -35,20 +35,21 @@ def test_the_ticket_s_example_reads_as_its_two_fields():
     ]
 
 
-def test_a_form_reads_each_field_by_its_bare_name():
+@pytest.mark.parametrize("prefix", ["", "ui."], ids=["bare", "ui-prefix"])
+def test_a_form_reads_each_field_by_its_bare_name_or_with_the_ui_prefix(prefix):
     calls = [
         'TextField(name="title", label="Title", placeholder="A short title", is_required=True)',
         'TextAreaField(name="notes", label="Notes", help_text="Markdown is fine.", rows=3)',
         'NumberField(name="budget", label="Budget", minimum=-10, maximum=+10.5, step=0.5, '
         "value=-2)",
-        'SelectField(name="where", label="Where", options=[Option("Staging", value="s")])',
-        'MultiSelectField(name="tags", label="Tags", options=[Option(label="Rack", '
+        f'SelectField(name="where", label="Where", options=[{prefix}Option("Staging", value="s")])',
+        f'MultiSelectField(name="tags", label="Tags", options=[{prefix}Option(label="Rack", '
         'value="rack"), Option("Shelf", value="shelf")], value=["shelf"])',
-        'RadioField(name="size", label="Size", options=[Option("Large", value="l")])',
+        f'RadioField(name="size", label="Size", options=[{prefix}Option("Large", value="l")])',
         'CheckboxField(name="notify", label="Notify the owner", value=True)',
     ]
 
-    fields = parse_fields("[" + ", ".join(calls) + "]")
+    fields = parse_fields("[" + ", ".join(prefix + call for call in calls) + "]")
 
     assert [(field["field"], field["name"]) for field in fields] == [
         ("text", "title"),
@@ -85,23 +86,16 @@ def test_a_form_reads_each_field_by_its_bare_name():
         ),
         ('[TextField(name="t", **{"label": "T"})]', "TextField takes no argument **."),
         ('[TextField(*["t"])]', "TextField takes its arguments by name"),
-        ('[*[TextField(name="t", label="T")]]', "Call each field and option by its bare name"),
+        ('[*[TextField(name="t", label="T")]]', "Call each field and option by its name"),
         ('[EmailField(name="e", label="E")]', "EmailField is not one of TextField,"),
         ('[Option("Staging", value="staging")]', "Option is not one of TextField,"),
-        ('[ui.TextField(name="t", label="T")]', "Call each field and option by its bare name"),
-        (
-            '[SelectField(name="s", label="S", options=[ui.Option("A", value="a")])]',
-            "Call each field and option by its bare name",
-        ),
+        ('[druks.ui.TextField(name="t", label="T")]', "Call each field and option by its name"),
         ('[TextField(name="t", label="T", name="u")]', "TextField takes name once."),
         ('[TextField(name="t", label=("T"), value="a" + "b")]', "Replace the BinOp"),
         ('[TextField(name="t", label=title)]', "Replace the Name at line 1, column 28."),
         ('[TextField(name="t", label=f"{1}")]', "Replace the JoinedStr"),
         ('[TextField(name="t", label="T", value={"a": "b"})]', "Replace the Dict"),
-        (
-            '[TextField(name="t", label=(lambda: "T")())]',
-            "Call each field and option by its bare name",
-        ),
+        ('[TextField(name="t", label=(lambda: "T")())]', "Call each field and option by its name"),
         ('[NumberField(name="n", label="N", value=1e999)]', "Replace the Constant"),
     ],
     ids=[
@@ -112,8 +106,7 @@ def test_a_form_reads_each_field_by_its_bare_name():
         "list-unpacking",
         "unknown-name",
         "option-as-a-field",
-        "ui-prefix",
-        "ui-prefix-on-an-option",
+        "other-qualification",
         "repeated-argument",
         "expression",
         "name",
@@ -180,9 +173,10 @@ def test_pydantic_s_reason_reaches_the_agent(text, reason):
         ("MultiUploadField", "Slack shows a file input only in a modal"),
     ],
 )
-def test_a_form_refuses_a_secret_or_an_upload_with_its_reason(name, reason):
+@pytest.mark.parametrize("prefix", ["", "ui."], ids=["bare", "ui-prefix"])
+def test_a_form_refuses_a_secret_or_an_upload_with_its_reason(name, reason, prefix):
     with pytest.raises(FormError) as refused:
-        parse_fields(f'[TextField(name="t", label="T"), {name}(name="f", label="F")]')
+        parse_fields(f'[TextField(name="t", label="T"), {prefix}{name}(name="f", label="F")]')
 
     assert str(refused.value).startswith(f"A form takes no {name}.")
     assert reason in str(refused.value)

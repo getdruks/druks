@@ -65,15 +65,14 @@ def parse_fields(text: str) -> list[dict]:
 
 def get_object(node: ast.expr, models: dict, depth: int) -> ui.Option | ui.Field:
     """The field or the option that the call ``node`` makes: one of ``models``, called by
-    its bare name. Only an option takes a positional argument, its label. Pydantic checks
-    the arguments."""
+    its bare name or with the ``ui.`` prefix. Only an option takes a positional argument,
+    its label. Pydantic checks the arguments."""
     match node:
-        case ast.Call(func=ast.Name(id=name)):
+        case ast.Call(func=ast.Name(id=name) | ast.Attribute(value=ast.Name(id="ui"), attr=name)):
             pass
         case _:
             raise FormError(
-                "Call each field and option by its bare name, such as TextField(...) or "
-                "Option(...)."
+                "Call each field and option by its name, such as TextField(...) or ui.Option(...)."
             )
     if name in constants.REFUSED_FIELDS:
         raise FormError(constants.REFUSED_FIELDS[name])
