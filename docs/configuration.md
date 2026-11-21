@@ -669,6 +669,10 @@ ticket at the trigger status with no other open blocker starts its build. No
 person starts that build, so it uses the account of the ticket assignee.
 **druks** board tickets do not wait for blockers.
 
+A chain builds each ticket on code that no person has approved yet. Keep
+`gates.implementation_approval` at its default, `human`, for a repository that
+builds chains, so that a person approves each pull request.
+
 On Linear, the planner can split a ticket whose work needs more than one pull
 request. It proposes one ticket for each repository, with the "blocked by" links
 between them, and a person approves the proposal whatever the plan gate. Druks
