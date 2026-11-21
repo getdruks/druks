@@ -49,7 +49,7 @@ class Notification(Base, Uuid7Pk):
     question_offset: Mapped[int | None] = mapped_column(default=None)
     # The offered choices [{id, label}]; None for a one-way notification.
     actions: Mapped[list[dict] | None] = mapped_column(JSONB, default=None)
-    # The fields of a chat agent's form, for the check of a Submit's answers.
+    # The druks.ui fields of a chat agent's form, or of a parked run's questions and note.
     fields: Mapped[list[dict] | None] = mapped_column(JSONB, default=None)
     # Reply-routing back to a parked run: (run_id, run_parked_at) is the exact
     # round a click answers — stored on the row because a run can re-park a new

@@ -1,6 +1,7 @@
 from contextlib import suppress
 
 from dbos import DBOS
+from pydantic_core import to_json
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from druks import ui
@@ -15,7 +16,12 @@ from druks.durable.exceptions import ArtifactContentMissing
 from druks.durable.models import Artifact, Run
 from druks.durable.reads import read_ask
 from druks.exceptions import ObjectNotFound
-from druks.notifications.constants import TEAM_ONLY_MESSAGE
+from druks.notifications.constants import (
+    NOTE_FIELD,
+    NOTE_REQUIRED_MESSAGE,
+    QUESTION_FIELD_PREFIX,
+    TEAM_ONLY_MESSAGE,
+)
 from druks.notifications.exceptions import (
     AlreadyAcknowledgedError,
     AnswerNotAllowedError,
@@ -37,11 +43,11 @@ async def list_notification_channels() -> list[dict]:
     return sorted(await client.list_member_channels(), key=lambda channel: channel["name"])
 
 
-async def get_rendered_ask(session: AsyncSession, run: Run, *, has_chat: bool) -> dict:
+async def get_rendered_ask(session: AsyncSession, run: Run) -> dict:
     """The ask that ``run`` is parked on, as the content of its notification. The blocks
     are the ask in order, and the body is their text form. Each action is a control that a
-    click can send, and delivery makes its button. A control that needs a note is an action
-    only with ``has_chat``, because the chat's agent asks for the note."""
+    click can send, and delivery makes its button. Each field is an input for a reply field
+    that the gate takes: one for each question, and one for the note."""
     ask = await read_ask(session, run)
     # An external ask has no questions, controls or artifact, so only this branch reads them.
     if ask["presentation"] == "in_app":
@@ -72,18 +78,39 @@ async def get_rendered_ask(session: AsyncSession, run: Run, *, has_chat: bool) -
         actions = [
             {"id": control["id"], "label": control["id"].replace("_", " ").capitalize()}
             for control in ask["controls"]
-            if has_chat or not control["note_required"]
         ]
+        fields = []
+        if "answers" in ask["reply_fields"]:
+            for question in ask["questions"]:
+                name = f"{QUESTION_FIELD_PREFIX}{question['id']}"
+                options = [
+                    ui.Option(option["label"], value=option["id"]) for option in question["options"]
+                ]
+                # A question without options takes the person's own words.
+                if options:
+                    field = ui.SelectField(name=name, label=question["prompt"], options=options)
+                else:
+                    field = ui.TextAreaField(name=name, label=question["prompt"])
+                fields.append(field.model_dump())
+        if "note" in ask["reply_fields"]:
+            fields.append(ui.TextAreaField(name=NOTE_FIELD, label="Note").model_dump())
         return {
             "body": ui.Stack(blocks).to_markdown(),
             # Each subject status keeps the status that the ask read, as the body does.
             "blocks": [block.model_dump(mode="json", by_alias=True) for block in blocks],
             "actions": actions,
+            "fields": fields,
             "deep_link": None,
         }
-    # A person answers an external ask on its source, so it has no actions. Its link is the
-    # one that the author of its gate declares.
-    return {"body": ask["label"], "blocks": None, "actions": None, "deep_link": ask.get("url")}
+    # A person answers an external ask on its source, so it has no actions and no fields. Its
+    # link is the one that the author of its gate declares.
+    return {
+        "body": ask["label"],
+        "blocks": None,
+        "actions": None,
+        "fields": None,
+        "deep_link": ask.get("url"),
+    }
 
 
 async def create_park_notification(
@@ -99,7 +126,7 @@ async def create_park_notification(
     or in the conversation, and return its id. The caller queues its delivery. The
     notification keeps the run and the time that it parked, so Druks refuses a click on an
     old button after the run parks again."""
-    rendered = await get_rendered_ask(session, run, has_chat=bool(conversation_id))
+    rendered = await get_rendered_ask(session, run)
     notification = await Notification.create(
         session,
         account_id=account_id,
@@ -109,6 +136,7 @@ async def create_park_notification(
         blocks=rendered["blocks"],
         subject=subject,
         actions=rendered["actions"],
+        fields=rendered["fields"],
         run_id=run.id,
         run_parked_at=run.input_requested_at,
         deep_link=rendered["deep_link"] or deep_link,
@@ -132,6 +160,7 @@ async def validate_in_app_answer(
     control: str,
     answers: dict[str, str],
     note: str,
+    has_note_input: bool = False,
 ) -> dict:
     # The in-app answer contract, shared by the runs resume route, the answer_gate
     # tool, and the notification respond rail. A question that a chat on an app's
@@ -160,8 +189,12 @@ async def validate_in_app_answer(
             raise AnswerNotAllowedError(reason)
     ask = await run.get_ask()
     offered = await get_offered_control(ask, control)
-    if offered["note_required"] and not answers and not note.strip():
-        raise InvalidChoiceError(f"{control} needs an answer or a note to guide the re-plan")
+    if offered["note_required"] and not note.strip():
+        # A person who sees the note input writes the note. Elsewhere, an answer takes its place.
+        if has_note_input:
+            raise InvalidChoiceError(NOTE_REQUIRED_MESSAGE)
+        if not answers:
+            raise InvalidChoiceError(f"{control} needs an answer or a note to guide the re-plan")
     # Answers may be an offered option id or the operator's own words — free
     # text is content that flows into the next agent prompt, so only the
     # question ids are held to the ask; a blank answer is a client bug.
@@ -184,12 +217,18 @@ async def respond_to_notification(
     user_id: str | None,
     account_id: str | None,
     values: dict | None = None,
+    has_inputs: bool = False,
 ) -> Notification:
     """Answer the notification with a click by ``user_id``, whose account is
     ``account_id``, or with a link, which names nobody. In a chat, only its person answers.
-    A click on the question of the chat's agent, or one that needs more, goes to the agent
-    as the person's message. The Submit of a form carries ``values``, the answers in its
-    inputs by field name, and a form takes them only when its fields take them."""
+    A click on the question of the chat's agent goes to the agent as the person's message.
+    So does a click on a run's control that needs more, when its message shows no inputs:
+    the chat's channel has none, or the notification holds none. A click carries
+    ``values``, the answers in the inputs of its message by field name. A form takes them
+    only when its fields take them. With ``has_inputs``, the click comes from a channel
+    that shows a run's inputs: the answers and the note are those of the inputs that the
+    notification holds. When it holds a note input, a control that needs a note takes no
+    empty note."""
     notification = await Notification.get_for_token(session, token)
     if not notification:
         raise UnknownTokenError()
@@ -222,44 +261,54 @@ async def respond_to_notification(
         if not user_id or user_id != conversation.user_id:
             raise AnswerNotAllowedError("Only the person of this conversation can answer it.")
         # The answers are checked before the claim, so a wrong one leaves the form open.
-        if notification.fields:
+        if not run and notification.fields:
             answer = get_answer(notification.fields, values or {})
         else:
             answer = notification.get_action(control)["label"]
-        if (
-            not run
-            or (await get_offered_control(ask, control))["note_required"]
-            or ask["questions"]
+        if not run or (
+            not (conversation.channel.has_inputs and notification.fields)
+            and ((await get_offered_control(ask, control))["note_required"] or ask["questions"])
         ):
-            # A click on the agent's question, or on a control that needs more, reaches the
-            # chat's agent as the person's message.
+            # A click on the agent's question, or on a control that needs more from a message
+            # with no inputs, reaches the chat's agent as the person's message.
             if not await notification.mark_acknowledged():
                 raise AlreadyAcknowledgedError()
             await conversation.create_message(session, answer)
             await session.commit()
             await DBOS.start_workflow_async(deliver, conversation.id)
             return notification
-        resume_payload = await validate_in_app_answer(
-            session, run, account_id=conversation.account_id, control=control, answers={}, note=""
-        )
-        if not await notification.mark_acknowledged():
-            raise AlreadyAcknowledgedError()
-        await run.resume(**resume_payload)
-        await conversation.create_message(
-            session, CLICK_ANSWER_MESSAGE.format(run=run.id, answer=answer), is_internal=True
-        )
-        return notification
+        # The person of the chat answers its run as the chat's account.
+        account_id = conversation.account_id
+    answers, note = choice.get("answers", {}), choice.get("note", "")
+    has_note_input = False
+    if has_inputs:
+        names = [field["name"] for field in notification.fields or []]
+        answers = {
+            name.removeprefix(QUESTION_FIELD_PREFIX): value
+            for name in names
+            if name.startswith(QUESTION_FIELD_PREFIX) and (value := values.get(name, "").strip())
+        }
+        has_note_input = NOTE_FIELD in names
+        if has_note_input:
+            note = values.get(NOTE_FIELD, "").strip()
     resume_payload = await validate_in_app_answer(
         session,
         run,
         account_id=account_id,
         control=control,
-        answers=choice.get("answers", {}),
-        note=choice.get("note", ""),
+        answers=answers,
+        note=note,
+        has_note_input=has_note_input,
     )
     # Claim first: once the run resumes, close_notifications takes each message of the
     # question that is still open, and this one must show the click instead.
     if not await notification.mark_acknowledged():
         raise AlreadyAcknowledgedError()
     await run.resume(**resume_payload)
+    if notification.conversation_id:
+        await conversation.create_message(
+            session,
+            CLICK_ANSWER_MESSAGE.format(run=run.id, answer=to_json(resume_payload).decode()),
+            is_internal=True,
+        )
     return notification

@@ -18,8 +18,8 @@ from druks.core.services import Slack
 from druks.files.datastructures import File
 from druks.models import Base
 from druks.notifications.constants import CLOSED_MESSAGE, MARKDOWN_TEXT_LIMIT
+from druks.notifications.delivery import check_input, get_blocks
 from druks.notifications.delivery import deliver as deliver_notification
-from druks.notifications.delivery import get_blocks
 from druks.notifications.models import Notification, mint_correlation_token
 from druks.prompts import render_prompt
 from druks.redis import get_client
@@ -28,19 +28,11 @@ from druks.secrets.models import VaultSecret
 from druks.settings import get_settings
 
 from .constants import (
-    BLOCK_ID_LIMIT,
-    HINT_LIMIT,
-    INITIAL_VALUE_LIMIT,
     JOINED_THREAD_SECONDS,
-    LABEL_LIMIT,
     LINK_KEY,
     LINK_MESSAGE,
     LINK_TTL_SECONDS,
     MESSAGE_BLOCKS_LIMIT,
-    OPTION_TEXT_LIMIT,
-    OPTION_VALUE_LIMIT,
-    OPTIONS_LIMITS,
-    PLACEHOLDER_LIMIT,
     THREAD_MESSAGES,
     UNACCEPTED_AUTOMATION_REPLY,
     UNLINKED_REPLY,
@@ -258,32 +250,7 @@ class SlackChannel(Channel):
             )
         # The inputs come between the question and the Submit button.
         for block in blocks[1:-1]:
-            name, element = block["block_id"], block["element"]
-            options = element.get("options", [])
-            if len(options) > OPTIONS_LIMITS[element["type"]]:
-                raise FormError(
-                    f"Field {name!r} has {len(options)} options. Slack shows "
-                    f"{OPTIONS_LIMITS[element['type']]} at most in this field."
-                )
-            texts = [
-                ("name", name, BLOCK_ID_LIMIT),
-                ("label", block["label"]["text"], LABEL_LIMIT),
-            ]
-            if hint := block.get("hint"):
-                texts.append(("help text", hint["text"], HINT_LIMIT))
-            if placeholder := element.get("placeholder"):
-                texts.append(("placeholder", placeholder["text"], PLACEHOLDER_LIMIT))
-            if "initial_value" in element:
-                texts.append(("value", element["initial_value"], INITIAL_VALUE_LIMIT))
-            for option in options:
-                texts.append(("option label", option["text"]["text"], OPTION_TEXT_LIMIT))
-                texts.append(("option value", option["value"], OPTION_VALUE_LIMIT))
-            for part, text, limit in texts:
-                if not 0 < len(text) <= limit:
-                    raise FormError(
-                        f"Slack takes 1 to {limit} characters for the {part} of a field. The "
-                        f"{part} of field {name!r} has {len(text)}."
-                    )
+            check_input(block)
 
     @classmethod
     async def post_buttons(

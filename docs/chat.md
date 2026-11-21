@@ -259,9 +259,10 @@ message, with a button for each choice. Only the person who started the run can 
 them. The question with its buttons is the only message that you get about it. Druks
 keeps the internal message for the agent's next turn, such as the turn of your next
 message there, and starts no turn for it. The agent then knows that the run waits and
-what it waits for. When a choice needs more from you, such as Request changes or the
-answers to the question's own questions, the agent asks for it in the thread and then
-answers the run. When the run
+what it waits for. The message also has an input for each of the question's own
+questions, a menu of its options or a box for your own words, and a box for your note. A
+click sends them with your choice and answers the run, so the agent does not ask for
+them. When the run
 waits for the provider's usage limit to reset, Druks itself posts a line with the
 time the run continues, in the installation's timezone. The agent shares the
 run's login, so its own turn would fail on the same limit. When the run

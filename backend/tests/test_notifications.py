@@ -4,8 +4,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 from conftest import FORM_TEXT
+from druks import ui
 from druks.accounts.models import Account
 from druks.chat.bots.service import request_approval
+from druks.chat.channels.slack.channel import SlackChannel
 from druks.chat.constants import CLICK_ANSWER_MESSAGE
 from druks.chat.enums import ConversationSource, MessageRole
 from druks.chat.forms import parse_fields
@@ -181,6 +183,7 @@ _IN_APP_ASK = {
         {"id": "request_changes", "note_required": True},
     ],
     "questions": [{"id": "q1", "prompt": "which?", "options": [{"id": "a", "label": "A"}]}],
+    "reply_fields": ["action", "answers", "note"],
 }
 
 
@@ -209,24 +212,62 @@ async def _parked_notification(druks_db, *, ask=None, run_state="parked"):
     return run, notification
 
 
-async def test_a_control_that_needs_a_note_gets_a_button_only_in_a_chat(druks_db):
-    run, _ = await _parked_notification(druks_db)
-    approve = {"id": "approve", "label": "Approve"}
-    request_changes = {"id": "request_changes", "label": "Request changes"}
-
-    assert (await get_rendered_ask(druks_db, run, has_chat=False))["actions"] == [approve]
-    rendered = await get_rendered_ask(druks_db, run, has_chat=True)
-    assert rendered["actions"] == [approve, request_changes]
-
-    run.input_request = {
-        **_IN_APP_ASK,
-        "controls": [
-            {"id": "approve", "note_required": False},
-            {"id": "request_changes", "note_required": False},
+APPROVE = {"id": "approve", "label": "Approve"}
+REQUEST_CHANGES = {"id": "request_changes", "label": "Request changes"}
+# A question's id is any text: one of these is the note's name, and one is a question's.
+QUESTIONS = [
+    {
+        "id": "note",
+        "prompt": "Which database?",
+        "options": [
+            {"id": "postgres", "label": "Postgres", "recommended": True},
+            {"id": "mysql", "label": "MySQL"},
         ],
-    }
-    rendered = await get_rendered_ask(druks_db, run, has_chat=False)
-    assert rendered["actions"] == [approve, request_changes]
+    },
+    {
+        "id": "question:note",
+        "prompt": "Which cache?",
+        "options": [{"id": "redis", "label": "Redis"}],
+    },
+    {"id": "why", "prompt": "Why now?", "options": []},
+]
+QUESTION_FIELDS = [
+    ui.SelectField(
+        name="question:note",
+        label="Which database?",
+        options=[ui.Option("Postgres", value="postgres"), ui.Option("MySQL", value="mysql")],
+    ).model_dump(),
+    ui.SelectField(
+        name="question:question:note",
+        label="Which cache?",
+        options=[ui.Option("Redis", value="redis")],
+    ).model_dump(),
+    ui.TextAreaField(name="question:why", label="Why now?").model_dump(),
+]
+NOTE = ui.TextAreaField(name="note", label="Note").model_dump()
+
+
+@pytest.mark.parametrize(
+    ("reply_fields", "fields"),
+    [
+        (["action", "answers", "note"], [*QUESTION_FIELDS, NOTE]),
+        (["action", "answers"], QUESTION_FIELDS),
+        (["action", "note"], [NOTE]),
+        (["action"], []),
+    ],
+    ids=["answers-and-note", "answers", "note", "neither"],
+)
+async def test_an_approval_offers_every_control_and_an_input_for_each_reply_it_takes(
+    druks_db, reply_fields, fields
+):
+    run, _ = await _parked_notification(
+        druks_db, ask={**_IN_APP_ASK, "questions": QUESTIONS, "reply_fields": reply_fields}
+    )
+
+    rendered = await get_rendered_ask(druks_db, run)
+
+    assert rendered["actions"] == [APPROVE, REQUEST_CHANGES]
+    assert rendered["fields"] == fields
 
 
 async def _thread_notification(druks_db, *, ask):
@@ -255,6 +296,31 @@ async def _thread_notification(druks_db, *, ask):
         druks_db, run, {"type": "notification_probe", "id": 1}, conversation_id=conversation.id
     )
     return run, await druks_db.get(Notification, notification_id)
+
+
+async def _account_notification(druks_db, *, ask):
+    """A run parked on ``ask``, and the notification that its park made for its account."""
+    run, _ = await _parked_notification(druks_db, ask=ask)
+    notification_id = await create_park_notification(
+        druks_db, run, _SUBJECT, account_id=run.account_id
+    )
+    return run, await druks_db.get(Notification, notification_id)
+
+
+@pytest.mark.parametrize(
+    "park", [_account_notification, _thread_notification], ids=["account", "chat"]
+)
+async def test_a_park_keeps_the_whole_ask_every_control_and_its_inputs(druks_db, park):
+    _, notification = await park(druks_db, ask={**_IN_APP_ASK, "questions": QUESTIONS})
+
+    assert notification.body == (
+        "# Review\n\n"
+        "Which database?\n- Postgres (recommended)\n- MySQL\n\n"
+        "Which cache?\n- Redis\n\n"
+        "Why now?"
+    )
+    assert notification.actions == [APPROVE, REQUEST_CHANGES]
+    assert notification.fields == [*QUESTION_FIELDS, NOTE]
 
 
 @pytest.fixture
@@ -317,23 +383,108 @@ async def test_a_click_that_answers_in_a_thread_tells_the_chat(druks_db, resume_
             Message.conversation_id == run.conversation_id, Message.is_internal
         )
     )
-    assert list(internal) == [CLICK_ANSWER_MESSAGE.format(run=run.id, answer="Approve")]
+    answer = '{"action":"approve","answers":{},"note":""}'
+    assert list(internal) == [CLICK_ANSWER_MESSAGE.format(run=run.id, answer=answer)]
+
+
+async def test_a_click_with_inputs_in_a_thread_answers_the_run_without_the_agent(
+    druks_db, resume_spy, started
+):
+    run, notification = await _thread_notification(
+        druks_db, ask={**_IN_APP_ASK, "questions": QUESTIONS}
+    )
+
+    await respond_to_notification(
+        druks_db,
+        notification.correlation_token,
+        {"control": "request_changes"},
+        user_id="U1",
+        account_id=None,
+        values={
+            "question:note": "mysql",
+            "question:question:note": "",
+            "note": " Use a queue. ",
+            "question:why": " Because. ",
+        },
+        has_inputs=True,
+    )
+
+    assert resume_spy == [
+        {
+            "id": run.id,
+            "action": "request_changes",
+            "answers": {"note": "mysql", "why": "Because."},
+            "note": "Use a queue.",
+        }
+    ]
+    assert notification.is_acknowledged
+    answer = (
+        '{"action":"request_changes","answers":{"note":"mysql","why":"Because."},'
+        '"note":"Use a queue."}'
+    )
+    click = CLICK_ANSWER_MESSAGE.format(run=run.id, answer=answer)
+    assert await _list_messages(druks_db, notification) == [(click, True, "pending")]
+    started.assert_not_awaited()
+
+
+async def test_a_person_off_the_team_reads_that_before_the_missing_note(druks_db, resume_spy):
+    _, notification = await _account_notification(druks_db, ask=_IN_APP_ASK)
+    await Team.create(druks_db, name="Notes", member_ids=[], apps=["field_notes"])
+
+    with pytest.raises(AnswerNotAllowedError):
+        await respond_to_notification(
+            druks_db,
+            notification.correlation_token,
+            {"control": "request_changes"},
+            user_id="U1",
+            account_id=None,
+            values={"note": ""},
+            has_inputs=True,
+        )
+
+    assert resume_spy == []
+
+
+async def test_a_control_that_needs_a_note_takes_an_answer_when_the_review_takes_no_note(
+    druks_db, resume_spy
+):
+    run, notification = await _account_notification(
+        druks_db, ask={**_IN_APP_ASK, "reply_fields": ["action", "answers"]}
+    )
+
+    await respond_to_notification(
+        druks_db,
+        notification.correlation_token,
+        {"control": "request_changes"},
+        user_id="U1",
+        account_id=None,
+        values={"question:q1": "a"},
+        has_inputs=True,
+    )
+
+    assert resume_spy == [
+        {"id": run.id, "action": "request_changes", "answers": {"q1": "a"}, "note": ""}
+    ]
 
 
 @pytest.mark.parametrize(
-    ("ask", "control", "label"),
+    ("ask", "control", "label", "has_inputs"),
     [
-        ({**_IN_APP_ASK, "questions": []}, "request_changes", "Request changes"),
-        (_IN_APP_ASK, "approve", "Approve"),
+        ({**_IN_APP_ASK, "questions": []}, "request_changes", "Request changes", False),
+        (_IN_APP_ASK, "approve", "Approve", False),
+        # The review takes no answers and no note, so its notification holds no inputs.
+        ({**_IN_APP_ASK, "reply_fields": ["action"]}, "request_changes", "Request changes", True),
     ],
+    ids=["channel-note", "channel-questions", "notification"],
 )
-async def test_a_click_that_needs_more_goes_to_the_chat(
-    druks_db, resume_spy, monkeypatch, ask, control, label
+async def test_a_click_that_needs_more_goes_to_the_chat_when_its_message_shows_no_inputs(
+    druks_db, resume_spy, monkeypatch, ask, control, label, has_inputs
 ):
     started = AsyncMock()
     monkeypatch.setattr(
         "druks.notifications.services.DBOS", SimpleNamespace(start_workflow_async=started)
     )
+    monkeypatch.setattr(SlackChannel, "has_inputs", has_inputs)
     run, notification = await _thread_notification(druks_db, ask=ask)
     await request_approval(druks_db, run)
 
@@ -646,6 +797,21 @@ async def test_respond_route_codes_and_secret_hygiene(tmp_path, druks_db, resume
     assert len(resume_spy) == 1
     for response in (unknown, bad_control, bad_question, blank_answer, empty_changes, again):
         assert token not in response.text
+
+
+async def test_the_respond_route_takes_answers_without_a_note(tmp_path, druks_db, resume_spy):
+    run, notification = await _account_notification(druks_db, ask=_IN_APP_ASK)
+    client = TestClient(configure_app_for_test(settings=make_settings(tmp_path)))
+
+    response = client.post(
+        f"/_external/notifications/{notification.correlation_token}/respond",
+        json={"control": "request_changes", "answers": {"q1": "a"}},
+    )
+
+    assert response.status_code == 204
+    assert resume_spy == [
+        {"id": run.id, "action": "request_changes", "answers": {"q1": "a"}, "note": ""}
+    ]
 
 
 async def test_respond_external_notification_not_answerable(tmp_path, druks_db, resume_spy):

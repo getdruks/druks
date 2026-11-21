@@ -797,7 +797,7 @@ async def test_review_work_ask_renders_a_notification_body(druks_db, monkeypatch
     await workflow._work_gate()
 
     run = Run(input_request=input_requests[0])
-    assert (await get_rendered_ask(druks_db, run, has_chat=False))["body"]
+    assert (await get_rendered_ask(druks_db, run))["body"]
     assert input_requests[0]["url"] == "https://github.com/org/repo/pull/42"
     assert input_requests[0]["label"] == "Review implementation on GitHub: PR #42"
 

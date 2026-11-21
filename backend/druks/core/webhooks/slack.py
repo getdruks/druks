@@ -175,6 +175,7 @@ class SlackInteractivity(SlackWebhook):
                 user_id=user,
                 account_id=account_id,
                 values=values,
+                has_inputs=True,
             )
         except StaleRoundError as error:
             # The round is over, so the clicked message loses its buttons.
@@ -206,15 +207,17 @@ class SlackInteractivity(SlackWebhook):
                 thread_ts=message.get("thread_ts", ""),
             )
             return JSONResponse({"accepted": False})
-        if notification.fields:
-            # Escaped, the person's words cannot mention anyone or link anywhere in the message.
-            answers = get_answer(notification.fields, values)
-            answers = answers.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        # Escaped, the person's words cannot mention anyone or link anywhere in the message.
+        answers = get_answer(notification.fields or [], values)
+        answers = answers.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        if notification.fields and not notification.run_id:
             outcome = ANSWER_MESSAGE.format(user=user, answers=answers)
         else:
             outcome = CHOICE_MESSAGE.format(
                 user=user, choice=notification.get_action(choice_id)["label"]
             )
+            if answers:
+                outcome += f"\n{answers}"
         await DBOS.start_workflow_async(
             replace_buttons,
             notification.id,

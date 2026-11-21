@@ -42,7 +42,7 @@ async def test_a_review_shows_its_facts_and_table_on_the_dashboard_and_in_the_ap
         # What the dashboard and the approval read while the run waits.
         await druks_db.refresh(run)
         shown["ask"] = await run.get_ask()
-        shown["approval"] = await get_rendered_ask(druks_db, run, has_chat=False)
+        shown["approval"] = await get_rendered_ask(druks_db, run)
         return {"action": "approve"}
 
     monkeypatch.setattr(DBOS, "run_step_async", call_through)

@@ -6,7 +6,11 @@ from conftest import FORM_TEXT, bind_ambient_session, install_service
 from druks import ui
 from druks.accounts.models import Account
 from druks.chat.channels.slack.channel import SlackChannel
-from druks.chat.channels.slack.constants import LINK_BUTTON_ACTION_ID, MESSAGE_BLOCKS_LIMIT
+from druks.chat.channels.slack.constants import (
+    LINK_BUTTON_ACTION_ID,
+    MESSAGE_BLOCKS_LIMIT,
+    SECTION_TEXT_LIMIT,
+)
 from druks.chat.enums import ConversationSource
 from druks.chat.exceptions import FormError
 from druks.chat.forms import parse_fields
@@ -16,14 +20,19 @@ from druks.core.webhooks.slack import replace_buttons
 from druks.durable.models import AgentCall, Artifact, Run
 from druks.notifications.buttons import decode_button, encode_button
 from druks.notifications.constants import CLOSED_MESSAGE, MARKDOWN_TEXT_LIMIT
-from druks.notifications.delivery import OMISSION_MESSAGE, cut_markdown, deliver
+from druks.notifications.delivery import OMISSION_MESSAGE, cut_markdown, deliver, get_blocks
 from druks.notifications.exceptions import (
     ChannelUnavailableError,
     DeliveryError,
     MalformedButtonError,
 )
 from druks.notifications.models import Notification
-from druks.notifications.services import create_park_notification, get_rendered_ask
+from druks.notifications.outbox import remove_buttons
+from druks.notifications.services import (
+    create_park_notification,
+    get_rendered_ask,
+    respond_to_notification,
+)
 from druks.settings import configure_settings, get_settings
 from druks.testing import seed_call, seed_run
 from druks_field_notes.models import Note
@@ -520,6 +529,7 @@ async def _parked_review(druks_db, *, document: str = "", subject=None, **ask) -
             "presentation": "in_app",
             "controls": [{"id": "approve", "note_required": False}],
             "questions": [],
+            "reply_fields": ["action", "answers", "note"],
             **ask,
         },
     )
@@ -561,7 +571,7 @@ async def test_an_approval_writes_its_label_context_questions_and_document_in_or
         ],
     )
 
-    rendered = await get_rendered_ask(druks_db, run, has_chat=False)
+    rendered = await get_rendered_ask(druks_db, run)
 
     assert rendered["body"] == (
         "# Review: Plan\n\n"
@@ -587,7 +597,7 @@ async def test_an_approval_whose_document_is_gone_goes_out_without_it(druks_db):
     call = await AgentCall.get(druks_db, artifact.agent_call_id)
     (call.call_dir / artifact.path).unlink()
 
-    rendered = await get_rendered_ask(druks_db, run, has_chat=False)
+    rendered = await get_rendered_ask(druks_db, run)
 
     assert rendered["body"] == "# Review: Plan\n\nCheck the schema."
 
@@ -620,7 +630,7 @@ async def test_an_approval_writes_a_block_context_as_a_list_and_a_table(druks_db
         context=[block.model_dump(mode="json", by_alias=True) for block in context],
     )
 
-    rendered = await get_rendered_ask(druks_db, run, has_chat=False)
+    rendered = await get_rendered_ask(druks_db, run)
     await deliver(SlackClient(token=_BOT_TOKEN), "C1", rendered["body"])
 
     body = (
@@ -966,7 +976,7 @@ async def test_a_link_button_opens_its_page_and_a_link_with_no_address_reads_as_
         ui.Link("Nowhere", page="nowhere"),
     ]
     run = await _parked_review(druks_db, context=_stored(*context))
-    blocks = (await get_rendered_ask(druks_db, run, has_chat=False))["blocks"]
+    blocks = (await get_rendered_ask(druks_db, run))["blocks"]
     client = SlackClient(token=_BOT_TOKEN)
 
     _set_endpoint("https://druks.example")
@@ -988,3 +998,232 @@ async def test_a_link_button_opens_its_page_and_a_link_with_no_address_reads_as_
         _link_button("Docs", "https://docs.example/a"),
         {"type": "markdown", "text": "Nowhere"},
     ]
+
+
+CONTROLS = [
+    {"id": "approve", "note_required": False},
+    {"id": "request_changes", "note_required": True},
+]
+DATABASE = {
+    "id": "database",
+    "prompt": "Which database?",
+    "options": [
+        {"id": "postgres", "label": "Postgres", "recommended": True},
+        {"id": "mysql", "label": "MySQL", "recommended": False},
+    ],
+}
+
+
+async def _approval(druks_db, *, is_in_a_chat: bool = False, **ask) -> Notification:
+    """The notification that a run's park on a review made: for the run's account, or in
+    the thread of a Slack chat with U1."""
+    bind_ambient_session(druks_db)
+    await install_service(
+        "slack",
+        access_token=_BOT_TOKEN,
+        identity={"client_id": "c1"},
+        secrets={"client_secret": "s"},
+    )
+    run = await _parked_review(druks_db, controls=CONTROLS, **ask)
+    destination = {"account_id": run.account_id}
+    if is_in_a_chat:
+        conversation = Conversation(
+            account_id=run.account_id,
+            source=ConversationSource.SLACK,
+            user_id="U1",
+            thread_id="C1:1700000000.000100",
+        )
+        druks_db.add(conversation)
+        await druks_db.flush()
+        destination = {"conversation_id": conversation.id}
+    notification_id = await create_park_notification(
+        druks_db, run, {"type": "note", "id": 1}, **destination
+    )
+    return await druks_db.get(Notification, notification_id)
+
+
+async def test_an_approval_shows_its_inputs_above_every_control_until_its_answer(druks_db, slack):
+    approval = await _approval(druks_db, questions=[DATABASE])
+    token = approval.correlation_token
+    outcome = "<@U1> chose Request changes.\nWhich database?: MySQL\nNote: Keep the queue."
+    outcome += "\nThen retry it." * 400
+
+    await deliver(
+        SlackClient(token=_BOT_TOKEN),
+        "C1",
+        approval.body,
+        actions=approval.actions,
+        fields=approval.fields,
+        token=token,
+    )
+    await replace_buttons(approval.id, channel="C1", message_ts="1.0", outcome=outcome)
+    approval.message_id = "C1:1.0"
+    await remove_buttons(druks_db, approval)
+
+    posted, answered, closed = slack.posts
+    assert posted["blocks"][1:] == [
+        {
+            "type": "input",
+            "block_id": "question:database",
+            "label": _label("Which database?"),
+            "optional": True,
+            "element": {
+                "type": "static_select",
+                "options": [_option("Postgres", "postgres"), _option("MySQL", "mysql")],
+            },
+        },
+        {
+            "type": "input",
+            "block_id": "note",
+            "label": _label("Note"),
+            "optional": True,
+            "element": {"type": "plain_text_input", "multiline": True},
+        },
+        {
+            "type": "actions",
+            "elements": [
+                {
+                    "type": "button",
+                    "text": _label("Approve"),
+                    "action_id": encode_button(token, "approve"),
+                },
+                {
+                    "type": "button",
+                    "text": _label("Request changes"),
+                    "action_id": encode_button(token, "request_changes"),
+                },
+            ],
+        },
+    ]
+    (markdown, section) = answered["blocks"]
+    assert markdown == {"type": "markdown", "text": approval.body}
+    assert len(section["text"]["text"]) <= SECTION_TEXT_LIMIT
+    assert section["text"]["text"].startswith(outcome[:80])
+    assert section["text"]["text"].endswith("Then retry it.\n\n…")
+    assert closed["blocks"] == [
+        {"type": "markdown", "text": approval.body},
+        {"type": "section", "text": {"type": "mrkdwn", "text": CLOSED_MESSAGE}},
+    ]
+
+
+async def test_a_thread_approval_shows_its_inputs_with_every_control_until_it_closes(
+    druks_db, slack
+):
+    approval = await _approval(druks_db, is_in_a_chat=True, questions=[DATABASE])
+    conversation = await druks_db.get(Conversation, approval.conversation_id)
+
+    await SlackChannel.post_buttons(druks_db, conversation, approval)
+    approval.message_id = "C1:1.0"
+    await SlackChannel.remove_buttons(druks_db, conversation, approval)
+    # An answer elsewhere closed the approval before its post.
+    await approval.mark_acknowledged()
+    await SlackChannel.post_buttons(druks_db, conversation, approval)
+
+    posted, *closed = slack.posts
+    assert (posted["channel"], posted["thread_ts"]) == ("C1", "1700000000.000100")
+    assert [block.get("block_id") for block in posted["blocks"]] == [
+        None,
+        "question:database",
+        "note",
+        None,
+    ]
+    assert [button["text"]["text"] for button in posted["blocks"][-1]["elements"]] == [
+        "Approve",
+        "Request changes",
+    ]
+    for post in closed:
+        assert post["blocks"] == [
+            {"type": "markdown", "text": approval.body},
+            {"type": "section", "text": {"type": "mrkdwn", "text": CLOSED_MESSAGE}},
+        ]
+
+
+async def test_an_approval_input_shows_the_start_of_a_long_label_and_keeps_each_id(
+    druks_db, slack, monkeypatch
+):
+    # The longest question and options that a plan takes. The labels differ past the cut.
+    question, first, second = "q" * 64, "a" * 64, "b" * 64
+    prompt, first_label, second_label = "P" * 2048, "O" * 255 + "1", "O" * 255 + "2"
+    approval = await _approval(
+        druks_db,
+        questions=[
+            {
+                "id": question,
+                "prompt": prompt,
+                "options": [
+                    {"id": first, "label": first_label, "recommended": True},
+                    {"id": second, "label": second_label, "recommended": False},
+                ],
+            }
+        ],
+    )
+    replies = []
+
+    async def resume(self, **reply):
+        replies.append(reply)
+
+    monkeypatch.setattr(Run, "resume", resume)
+
+    await deliver(
+        SlackClient(token=_BOT_TOKEN),
+        "C1",
+        approval.body,
+        actions=approval.actions,
+        fields=approval.fields,
+        token=approval.correlation_token,
+    )
+    (post,) = slack.posts
+    markdown, select, _, _ = post["blocks"]
+    # Slack sends back the block's id and the chosen option's value.
+    await respond_to_notification(
+        druks_db,
+        approval.correlation_token,
+        {"control": "approve"},
+        user_id="U1",
+        account_id=None,
+        values={select["block_id"]: select["element"]["options"][1]["value"]},
+        has_inputs=True,
+    )
+
+    assert f"{prompt}\n- {first_label} (recommended)\n- {second_label}" in markdown["text"]
+    assert select["label"] == _label("P" * 1999 + "…")
+    cut = "O" * 74 + "…"
+    assert select["element"]["options"] == [_option(cut, first), _option(cut, second)]
+    assert replies == [{"action": "approve", "answers": {question: second}, "note": ""}]
+
+
+def _question(name: str, *, label: str = "Which?", options: int = 1) -> dict:
+    return ui.SelectField(
+        name=f"question:{name}", label=label, options=_options(options)
+    ).model_dump()
+
+
+_APPROVE = {"id": "approve", "label": "Approve"}
+_NOTE = ui.TextAreaField(name="note", label="Note").model_dump()
+
+
+def test_an_approval_goes_out_without_an_input_that_slack_refuses():
+    fields = [
+        _question("database"),
+        # Slack takes one block of an id, a label of 1 character or more, and 100 options.
+        _question("database", label="Which database again?"),
+        _question("unnamed", label=""),
+        _question("crowded", options=101),
+        _NOTE,
+    ]
+
+    _, *inputs, _ = get_blocks("Review", actions=[_APPROVE], fields=fields, token="t")
+
+    assert [(block["block_id"], block["label"]) for block in inputs] == [
+        ("question:database", _label("Which?")),
+        ("note", _label("Note")),
+    ]
+
+
+def test_an_approval_with_more_inputs_than_a_message_holds_keeps_its_note():
+    fields = [*(_question(str(number)) for number in range(60)), _NOTE]
+
+    blocks = get_blocks("Review", actions=[_APPROVE], fields=fields, token="t")
+
+    assert len(blocks) == 50
+    assert [block["block_id"] for block in blocks[-3:-1]] == ["question:46", "note"]
