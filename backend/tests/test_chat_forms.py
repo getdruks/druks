@@ -35,21 +35,20 @@ def test_the_ticket_s_example_reads_as_its_two_fields():
     ]
 
 
-@pytest.mark.parametrize("prefix", ["", "ui."], ids=["bare", "ui-prefix"])
-def test_a_form_reads_each_field_by_its_bare_name_or_with_the_ui_prefix(prefix):
+def test_a_form_reads_each_field_by_its_bare_name():
     calls = [
         'TextField(name="title", label="Title", placeholder="A short title", is_required=True)',
         'TextAreaField(name="notes", label="Notes", help_text="Markdown is fine.", rows=3)',
         'NumberField(name="budget", label="Budget", minimum=-10, maximum=+10.5, step=0.5, '
         "value=-2)",
-        f'SelectField(name="where", label="Where", options=[{prefix}Option("Staging", value="s")])',
-        f'MultiSelectField(name="tags", label="Tags", options=[{prefix}Option(label="Rack", '
+        'SelectField(name="where", label="Where", options=[Option("Staging", value="s")])',
+        'MultiSelectField(name="tags", label="Tags", options=[Option(label="Rack", '
         'value="rack"), Option("Shelf", value="shelf")], value=["shelf"])',
-        f'RadioField(name="size", label="Size", options=[{prefix}Option("Large", value="l")])',
+        'RadioField(name="size", label="Size", options=[Option("Large", value="l")])',
         'CheckboxField(name="notify", label="Notify the owner", value=True)',
     ]
 
-    fields = parse_fields("[" + ", ".join(prefix + call for call in calls) + "]")
+    fields = parse_fields("[" + ", ".join(calls) + "]")
 
     assert [(field["field"], field["name"]) for field in fields] == [
         ("text", "title"),
@@ -86,16 +85,23 @@ def test_a_form_reads_each_field_by_its_bare_name_or_with_the_ui_prefix(prefix):
         ),
         ('[TextField(name="t", **{"label": "T"})]', "TextField takes no argument **."),
         ('[TextField(*["t"])]', "TextField takes its arguments by name"),
-        ('[*[TextField(name="t", label="T")]]', "Call each field and option by its name"),
+        ('[*[TextField(name="t", label="T")]]', "Call each field and option by its bare name"),
         ('[EmailField(name="e", label="E")]', "EmailField is not one of TextField,"),
         ('[Option("Staging", value="staging")]', "Option is not one of TextField,"),
-        ('[druks.ui.TextField(name="t", label="T")]', "Call each field and option by its name"),
+        ('[ui.TextField(name="t", label="T")]', "Call each field and option by its bare name"),
+        (
+            '[SelectField(name="s", label="S", options=[ui.Option("A", value="a")])]',
+            "Call each field and option by its bare name",
+        ),
         ('[TextField(name="t", label="T", name="u")]', "TextField takes name once."),
         ('[TextField(name="t", label=("T"), value="a" + "b")]', "Replace the BinOp"),
         ('[TextField(name="t", label=title)]', "Replace the Name at line 1, column 28."),
         ('[TextField(name="t", label=f"{1}")]', "Replace the JoinedStr"),
         ('[TextField(name="t", label="T", value={"a": "b"})]', "Replace the Dict"),
-        ('[TextField(name="t", label=(lambda: "T")())]', "Call each field and option by its name"),
+        (
+            '[TextField(name="t", label=(lambda: "T")())]',
+            "Call each field and option by its bare name",
+        ),
         ('[NumberField(name="n", label="N", value=1e999)]', "Replace the Constant"),
     ],
     ids=[
@@ -106,7 +112,8 @@ def test_a_form_reads_each_field_by_its_bare_name_or_with_the_ui_prefix(prefix):
         "list-unpacking",
         "unknown-name",
         "option-as-a-field",
-        "other-qualification",
+        "ui-prefix",
+        "ui-prefix-on-an-option",
         "repeated-argument",
         "expression",
         "name",
@@ -153,8 +160,12 @@ def test_the_fields_run_none_of_their_text(tmp_path):
             '[RadioField(name="r", label="R", options=[Option("A")])]',
             "Option: value: Field required.",
         ),
+        (
+            '[RadioField(name="r", label="R", options=[Option(value="a")])]',
+            "Option: label: Field required.",
+        ),
     ],
-    ids=["missing-label", "wrong-type", "option-without-value"],
+    ids=["missing-label", "wrong-type", "option-without-value", "option-without-label"],
 )
 def test_pydantic_s_reason_reaches_the_agent(text, reason):
     with pytest.raises(FormError, match=re.escape(reason)):
@@ -169,10 +180,9 @@ def test_pydantic_s_reason_reaches_the_agent(text, reason):
         ("MultiUploadField", "Slack shows a file input only in a modal"),
     ],
 )
-@pytest.mark.parametrize("prefix", ["", "ui."], ids=["bare", "ui-prefix"])
-def test_a_form_refuses_a_secret_or_an_upload_with_its_reason(name, reason, prefix):
+def test_a_form_refuses_a_secret_or_an_upload_with_its_reason(name, reason):
     with pytest.raises(FormError) as refused:
-        parse_fields(f'[TextField(name="t", label="T"), {prefix}{name}(name="f", label="F")]')
+        parse_fields(f'[TextField(name="t", label="T"), {name}(name="f", label="F")]')
 
     assert str(refused.value).startswith(f"A form takes no {name}.")
     assert reason in str(refused.value)
@@ -206,6 +216,18 @@ def test_a_form_refuses_a_secret_or_an_upload_with_its_reason(name, reason, pref
         ),
         ('[NumberField(name="n", label="N", step=-1)]', "Field 'n' has the step -1.0."),
         (
+            '[NumberField(name="n", label="N", step="nan", value=5)]',
+            "Field 'n' has the step nan. Give a finite number.",
+        ),
+        (
+            '[NumberField(name="n", label="N", maximum="inf")]',
+            "Field 'n' has the maximum inf. Give a finite number.",
+        ),
+        (
+            '[NumberField(name="n", label="N", minimum=0, step=5, value=10000000002)]',
+            "Field 'n' has the value 10000000002.0, which its minimum, maximum, or step refuses.",
+        ),
+        (
             '[NumberField(name="n", label="N", minimum=5, maximum=1)]',
             "Field 'n' has a minimum above its maximum.",
         ),
@@ -229,6 +251,9 @@ def test_a_form_refuses_a_secret_or_an_upload_with_its_reason(name, reason, pref
         "select-default-not-offered",
         "multi-select-default-not-offered",
         "step-below-zero",
+        "step-not-a-number",
+        "infinite-maximum",
+        "large-default-off-its-step",
         "minimum-above-maximum",
         "default-off-its-step",
         "default-above-its-maximum",
@@ -241,8 +266,9 @@ def test_a_form_refuses_fields_that_a_person_cannot_answer(text, reason):
 
 def test_a_form_takes_a_number_default_on_its_steps_from_its_minimum():
     [field] = parse_fields('[NumberField(name="n", label="N", minimum=0.5, step=1, value=1.5)]')
+    [large] = parse_fields('[NumberField(name="n", label="N", step=0.1, value=15814243.7)]')
 
-    assert field["value"] == 1.5
+    assert (field["value"], large["value"]) == (1.5, 15814243.7)
 
 
 def test_a_form_reads_fields_as_long_as_the_limit_and_refuses_one_character_more():

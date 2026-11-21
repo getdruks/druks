@@ -169,7 +169,7 @@ pages do:
 ```
 
 A form takes `TextField`, `TextAreaField`, `NumberField`, `SelectField`,
-`MultiSelectField`, `RadioField`, and `CheckboxField`, by their bare names or with
+`MultiSelectField`, `RadioField`, and `CheckboxField`, by their bare names, without
 the `ui.` prefix. Each argument has the name that `druks.ui` gives it, such as
 `help_text`. Only the label of an `Option` goes without its name. Druks reads the
 list with Python's `ast` module and runs no code: it takes literals, lists, and

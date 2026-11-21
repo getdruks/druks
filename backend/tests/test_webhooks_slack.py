@@ -411,29 +411,6 @@ async def test_a_submit_that_its_fields_refuse_tells_the_person_why_and_keeps_th
     assert (await ambient_db_session().get(Notification, question.id)).state == "pending"
 
 
-async def test_a_change_in_an_input_of_a_form_submits_nothing(
-    tmp_path, druks_db, slack_card, started
-):
-    question = await _form_question(druks_db)
-    change = {
-        "type": "static_select",
-        "action_id": "a4",
-        "block_id": "where",
-        "selected_option": _option("Production", "production"),
-    }
-    body = _form_body(change, _STATE)
-
-    with _client(tmp_path) as client:
-        response = client.post(
-            "/_external/slack/interactivity/", content=body, headers=_signed_headers(body)
-        )
-
-    assert response.json() == {"accepted": False}
-    started.assert_not_awaited()
-    ambient_db_session().expunge_all()
-    assert (await ambient_db_session().get(Notification, question.id)).state == "pending"
-
-
 async def test_malformed_payloads_400_never_500_never_resume(
     tmp_path, druks_db, resume_spy, slack_card
 ):

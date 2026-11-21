@@ -246,7 +246,7 @@ async def test_tools_list_pins_platform_and_app_tools(app, pat_token, mode):
     assert (reason["minLength"], reason["maxLength"]) == (1, 500)
     ask = tools["chat_ask"]
     choices = ask.input_schema["properties"]["choices"]
-    assert (choices["minItems"], choices["maxItems"]) == (2, 4)
+    assert choices["maxItems"] == 4
     assert ask.input_schema["required"] == ["question"]
     assert ask.input_schema["properties"]["fields"]["type"] == "string"
     assert (
@@ -708,8 +708,8 @@ async def test_every_tool_failure_answers_the_agent_route_shape(app, pat_token):
         "retryable": False,
     }
     assert unasked == {
-        "code": "VALIDATION_ERROR",
-        "message": "choices: List should have at least 2 items after validation, not 1",
+        "code": "HTTP_422",
+        "message": "Give two to four choices.",
         "retryable": False,
     }
     assert unanswerable == {

@@ -304,7 +304,6 @@ async def ask(
         list[Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=75)]],
         Body(
             default_factory=list,
-            min_length=2,
             max_length=4,
             description="Two to four short labels, in the order to show them.",
         ),
@@ -332,6 +331,8 @@ async def ask(
     second call in the turn replaces the question."""
     if bool(choices) == bool(fields):
         raise HTTPException(422, "Give choices or fields. Give only one of them.")
+    if len(choices) == 1:
+        raise HTTPException(422, "Give two to four choices.")
     conversation_id = current_conversation_id.get()
     if not conversation_id:
         raise HTTPException(409, "This tool asks in a conversation. Call it from one.")

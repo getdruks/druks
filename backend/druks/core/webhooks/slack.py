@@ -139,7 +139,6 @@ class SlackInteractivity(SlackWebhook):
 
     async def on_block_actions(self) -> Response:
         try:
-            action_type = self.data["actions"][0]["type"]
             action_id = self.data["actions"][0]["action_id"]
             channel = self.data["channel"]["id"]
             message = self.data["message"]
@@ -148,10 +147,6 @@ class SlackInteractivity(SlackWebhook):
             values = self.get_values()
         except (TypeError, KeyError, IndexError, AttributeError) as error:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "Malformed Slack payload.") from error
-        if action_type != "button":
-            # A change in an input of a form answers nothing. Its Submit button does.
-            self.log_ignored(event="block_actions", reason="input_changed")
-            return JSONResponse({"accepted": False})
         try:
             token, choice_id = decode_button(action_id)
         except MalformedButtonError as error:

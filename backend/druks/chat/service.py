@@ -740,7 +740,8 @@ async def finish_turn(
     ask = {}
     # A turn that the person stopped asks nothing.
     if saved and state == MessageState.REPLIED:
-        ask = json.loads(saved)
+        # A question that the release before forms staged has no fields.
+        ask = {"fields": [], **json.loads(saved)}
     separator = "\n\n" if reply.answer else ""
     channel = conversation.channel
     is_shown = False

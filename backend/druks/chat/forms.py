@@ -3,6 +3,7 @@ text, and the person's answers to them."""
 
 import ast
 import math
+from fractions import Fraction
 
 from pydantic import ValidationError
 
@@ -64,14 +65,15 @@ def parse_fields(text: str) -> list[dict]:
 
 def get_object(node: ast.expr, models: dict, depth: int) -> ui.Option | ui.Field:
     """The field or the option that the call ``node`` makes: one of ``models``, called by
-    its bare name or with the ``ui.`` prefix. Only an option takes a positional argument,
-    its label. Pydantic checks the arguments."""
+    its bare name. Only an option takes a positional argument, its label. Pydantic checks
+    the arguments."""
     match node:
-        case ast.Call(func=ast.Name(id=name) | ast.Attribute(value=ast.Name(id="ui"), attr=name)):
+        case ast.Call(func=ast.Name(id=name)):
             pass
         case _:
             raise FormError(
-                "Call each field and option by its name, such as TextField(...) or ui.Option(...)."
+                "Call each field and option by its bare name, such as TextField(...) or "
+                "Option(...)."
             )
     if name in constants.REFUSED_FIELDS:
         raise FormError(constants.REFUSED_FIELDS[name])
@@ -97,6 +99,10 @@ def get_object(node: ast.expr, models: dict, depth: int) -> ui.Option | ui.Field
         if keyword.arg in arguments:
             raise FormError(f"{name} takes {keyword.arg} once.")
         arguments[keyword.arg] = get_value(keyword.value, depth + 1)
+    # An option takes its label in its own __init__, which raises a TypeError without one,
+    # where Pydantic raises its ValidationError.
+    if model is ui.Option and "label" not in arguments:
+        raise FormError(f"{name}: label: Field required.")
     try:
         return model.model_validate(arguments)
     except ValidationError as error:
@@ -139,8 +145,9 @@ def get_value(node: ast.expr, depth: int):
 
 def check_field(field: dict) -> None:
     """Refuse a field that a person cannot answer as written: a choice with no options or
-    with two options of one value, a default that is not an option, a step of 0 or less, a
-    minimum above the maximum, or a number default that the field refuses."""
+    with two options of one value, a default that is not an option, a minimum, maximum, or
+    step that is not finite, a step of 0 or less, a minimum above the maximum, or a number
+    default that the field refuses."""
     name = field["name"]
     match field:
         case {"options": []}:
@@ -159,6 +166,12 @@ def check_field(field: dict) -> None:
             if not chosen <= offered:
                 raise FormError(f"Field {name!r} has a value that is not one of its options.")
         case {"field": "number", "minimum": minimum, "step": step, "value": value}:
+            # Pydantic reads the text "inf" or "nan" as a number.
+            for limit in ("minimum", "maximum", "step"):
+                if not math.isfinite(field[limit] or 0):
+                    raise FormError(
+                        f"Field {name!r} has the {limit} {field[limit]}. Give a finite number."
+                    )
             if step is not None and step <= 0:  # ast-grep-ignore: rule-2
                 raise FormError(f"Field {name!r} has the step {step}. Give a step above 0.")
             # A field takes its minimum, unless the minimum is above the maximum.
@@ -184,8 +197,8 @@ def is_number_taken(field: dict, number: float) -> bool:
     if maximum is not None and number > maximum:  # ast-grep-ignore: rule-2
         return False
     if step:
-        steps = (number - (minimum or 0)) / step
-        return math.isclose(steps, round(steps), abs_tol=1e-9)
+        # Exact on the decimals as written, where a float's quotient drifts off a whole number.
+        return (Fraction(str(number)) - Fraction(str(minimum or 0))) % Fraction(str(step)) == 0
     return True
 
 

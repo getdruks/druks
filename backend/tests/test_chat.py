@@ -666,6 +666,20 @@ async def test_a_form_waits_on_the_turn_as_the_fields_that_druks_read(
     assert json.loads(saved) == FORM
 
 
+async def test_a_form_takes_an_empty_list_of_choices(druks_db, conversation, tmp_path):
+    message = await start_turn(druks_db, conversation)
+
+    response = await put_question(
+        tmp_path,
+        {"question": "Where does it ship?", "choices": [], "fields": FORM_TEXT},
+        conversation.id,
+    )
+
+    assert response.status_code == 204
+    saved = await get_client().get(service.question_key(conversation.id, message.id))
+    assert json.loads(saved) == FORM
+
+
 @pytest.mark.parametrize(
     "body",
     [
@@ -833,6 +847,23 @@ async def test_a_web_reply_ends_with_the_question_and_its_numbered_choices(
     )
 
     assert (await list_messages(druks_db, conversation))[-1].body == saved
+
+
+async def test_a_question_that_the_release_before_forms_staged_still_ends_its_turn(
+    druks_db, conversation, monkeypatch
+):
+    monkeypatch.setattr(Bridge, "reply", AsyncMock(return_value=("Let me check.", [])))
+    message = await conversation.get_unanswered_message(druks_db)
+    message.state = MessageState.DELIVERED
+    await record_question(conversation, message, CHOICES_CALL)
+
+    await service.finish_turn(
+        druks_db, conversation, message, Bridge(None), {"status": "replied", "archivePath": ""}
+    )
+
+    assert (await list_messages(druks_db, conversation))[-1].body == (
+        "Let me check.\n\nWhich database?\n1. Postgres\n2. MySQL\n3. SQLite"
+    )
 
 
 @pytest.mark.parametrize("has_channel", [False, True], ids=["web", "buttons-without-inputs"])
