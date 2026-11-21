@@ -13,16 +13,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from druks.database import create_async_engine_from_url, session_scope
 from druks.db import AutocommitSession, db_session
-from druks.durable.constants import (
-    NOTIFICATIONS_QUEUE,
-    PAUSE_QUEUE,
-    RUN_QUEUE,
-    RUN_SCHEDULE_WORKFLOW,
-    TASK_QUEUE,
-)
+from druks.durable.constants import NOTIFICATIONS_QUEUE, PAUSE_QUEUE, RUN_QUEUE, TASK_QUEUE
 from druks.durable.dbos_state import DBOS_SYSTEM_SCHEMA, workflow_status
 from druks.durable.exceptions import FatalError, ScheduleUnavailable
 from druks.harnesses.exceptions import HarnessError
+from druks.schedules.constants import RUN_SCHEDULE_WORKFLOW
 from druks.settings import get_settings
 from druks.tracing import is_tracing
 from druks.user_settings.models import InstallationSettings

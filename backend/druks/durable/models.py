@@ -1,12 +1,10 @@
-from collections.abc import Collection, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
-from zoneinfo import ZoneInfo
 
 import sqlalchemy
-from croniter import croniter
 from dbos import DBOS, EnqueueOptions
 from sqlalchemy import (
     CheckConstraint,
@@ -28,12 +26,7 @@ from druks.accounts.models import Account
 from druks.chat.constants import POST_CANCEL_WORKFLOW
 from druks.core.models import Uuid7Pk
 from druks.database import get_session
-from druks.durable.constants import (
-    NOTIFICATIONS_QUEUE,
-    RUN_QUEUE,
-    SCHEDULE_NAME_PREFIX,
-    TASK_QUEUE,
-)
+from druks.durable.constants import NOTIFICATIONS_QUEUE, RUN_QUEUE, TASK_QUEUE
 from druks.durable.dbos_state import (
     retry_chain,
     retry_from_expression,
@@ -51,9 +44,8 @@ from druks.durable.enums import (
     RunState,
     WorkflowEvent,
 )
-from druks.durable.exceptions import AgentCallNotFound, ArtifactContentMissing, ScheduleError
+from druks.durable.exceptions import AgentCallNotFound, ArtifactContentMissing
 from druks.events.models import Event
-from druks.exceptions import PermissionDenied
 from druks.harnesses.artifacts import normalize_token_usage
 from druks.models import Base
 from druks.notifications.constants import CLOSE_WORKFLOW
@@ -260,11 +252,9 @@ class Run(Base):
         *,
         kinds: Sequence[str],
         limit: int,
-        since: datetime | None = None,
     ) -> list["Run"]:
         """The runs that the agent's conversations started, newest first, each with its
-        agent calls. ``kinds`` keeps the runs of those workflows, and ``since`` the runs
-        that started at or after it."""
+        agent calls. ``kinds`` keeps the runs of those workflows."""
         # The chat models import the durable package, so this import cannot be at the top.
         from druks.chat.models import Conversation  # noqa: PLC0415
 
@@ -276,8 +266,6 @@ class Run(Base):
             .limit(limit)
             .options(selectinload(cls.agent_calls))
         )
-        if since:
-            stmt = stmt.where(cls.created_at >= since)
         return list(await session.scalars(stmt))
 
     @classmethod
@@ -805,6 +793,22 @@ class AgentCall(Base, Uuid7Pk):
         return await session.scalar(stmt) or 0.0
 
     @classmethod
+    async def get_cost_for_agent(
+        cls, session: AsyncSession, agent_id: str, *, kinds: Sequence[str], since: datetime
+    ) -> float:
+        """The cost of the agent's runs of ``kinds`` that started at or after ``since``."""
+        # The chat models import the durable package, so this import cannot be at the top.
+        from druks.chat.models import Conversation  # noqa: PLC0415
+
+        stmt = (
+            select(func.sum(cls.cost_usd))
+            .join(Run, Run.id == cls.run_id)
+            .join(Conversation, Conversation.id == Run.conversation_id)
+            .where(Conversation.agent_id == agent_id, Run.kind.in_(kinds), Run.created_at >= since)
+        )
+        return await session.scalar(stmt) or 0.0
+
+    @classmethod
     async def list_for_run(cls, session: AsyncSession, run_id: str) -> list["AgentCall"]:
         # Execution order — the same order Run.agent_calls loads.
         stmt = select(cls).where(cls.run_id == run_id).order_by(cls.created_at, cls.id)
@@ -914,105 +918,3 @@ class Artifact(Base, Uuid7Pk):
         if not path:
             raise ArtifactContentMissing(self.id)
         return path.read_text()
-
-
-class Schedule(Base, Uuid7Pk):
-    """A tool call that a person asked an agent to make on a cron. DBOS fires each due
-    time, and Druks makes the call as the person, from the conversation it was set in."""
-
-    __tablename__ = "schedules"
-    __table_args__ = (Index("schedules_account_idx", "account_id", "created_at"),)
-
-    # The account that asked for the schedule. Each call runs as this account. Only it
-    # changes the schedule, and only it or an admin stops it.
-    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id", ondelete="RESTRICT"))
-    conversation_id: Mapped[str] = mapped_column(
-        ForeignKey("chat_conversations.id", ondelete="CASCADE")
-    )
-    # The tool's name and arguments, as the agent calls it.
-    tool: Mapped[str]
-    arguments: Mapped[dict[str, Any]] = mapped_column(JSONB)
-    # A cron in the installation timezone.
-    cron: Mapped[str]
-    created_at: Mapped[datetime] = mapped_column(default=Base.utc_now)
-
-    @classmethod
-    async def create(
-        cls,
-        session: AsyncSession,
-        *,
-        account_id: str,
-        conversation_id: str,
-        tool: str,
-        arguments: dict[str, Any],
-        cron: str,
-        tool_names: Collection[str],
-    ) -> "Schedule":
-        schedule = cls(account_id=account_id, conversation_id=conversation_id)
-        schedule.change(tool=tool, arguments=arguments, cron=cron, tool_names=tool_names)
-        session.add(schedule)
-        await session.flush()
-        return schedule
-
-    def change(
-        self, *, tool: str, arguments: dict[str, Any], cron: str, tool_names: Collection[str]
-    ) -> None:
-        """Save the call, after checking that ``tool_names`` holds the tool and that the
-        cron has five fields."""
-        if tool not in tool_names:
-            raise ScheduleError(f"No tool is named '{tool}'. Choose one of your tools.")
-        # DBOS reads a sixth field as seconds at the start, croniter as seconds at the end.
-        if len(cron.split()) != 5 or not croniter.is_valid(cron):
-            raise ScheduleError(f"'{cron}' is not a cron. Write five fields, such as '0 9 * * 1'.")
-        self.tool = tool
-        self.arguments = arguments
-        self.cron = cron
-
-    @classmethod
-    async def list_for_account(cls, session: AsyncSession, account_id: str) -> list["Schedule"]:
-        return list(
-            await session.scalars(
-                select(cls)
-                .where(cls.account_id == account_id)
-                .order_by(cls.created_at.desc(), cls.id.desc())
-            )
-        )
-
-    @classmethod
-    async def get_for_account(
-        cls, session: AsyncSession, schedule_id: str, account_id: str
-    ) -> "Schedule | None":
-        return await session.scalar(
-            select(cls).where(cls.id == schedule_id, cls.account_id == account_id)
-        )
-
-    @classmethod
-    async def list_for_agent(cls, session: AsyncSession, agent_id: str) -> list["Schedule"]:
-        """The schedules set in the agent's conversations, newest first."""
-        # The chat models import the durable package, so this import cannot be at the top.
-        from druks.chat.models import Conversation  # noqa: PLC0415
-
-        return list(
-            await session.scalars(
-                select(cls)
-                .join(Conversation, Conversation.id == cls.conversation_id)
-                .where(Conversation.agent_id == agent_id)
-                .order_by(cls.created_at.desc(), cls.id.desc())
-            )
-        )
-
-    def check_stopper(self, account: Account) -> None:
-        """Only the owner or an admin stops a schedule."""
-        if account.id != self.account_id and not account.is_admin:
-            raise PermissionDenied("Only the schedule's owner or an admin can stop it.")
-
-    @property
-    def schedule_name(self) -> str:
-        """The name of the DBOS schedule that fires this schedule's due times."""
-        return f"{SCHEDULE_NAME_PREFIX}{self.id}"
-
-    @property
-    def next_run_at(self) -> datetime:
-        """When the schedule calls its tool next, in the installation timezone."""
-        local = Base.utc_now().astimezone(ZoneInfo(get_settings().timezone))
-        return croniter(self.cron, local).get_next(datetime)

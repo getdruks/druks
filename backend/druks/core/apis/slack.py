@@ -11,10 +11,11 @@ SLACK_CREATE_APP_URL = "https://api.slack.com/apps"
 # The authority of a Slack grant: the workspace that a Slack user id belongs to.
 SLACK_AUTHORITY = "https://slack.com/{team_id}"
 # What the bot does in the workspace. The manifest asks for these.
+# With this scope, a reply carries its agent's own name and picture.
+SLACK_CUSTOMIZE_SCOPE = "chat:write.customize"
 SLACK_BOT_SCOPES = (
     "chat:write",
-    # An agent's replies carry its own name and picture.
-    "chat:write.customize",
+    SLACK_CUSTOMIZE_SCOPE,
     "channels:history",
     "channels:read",
     "groups:history",

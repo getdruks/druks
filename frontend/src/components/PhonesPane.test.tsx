@@ -13,7 +13,7 @@ function appSettings(name: string, botAccess: AppSettings['botAccess']): AppSett
     builtin: false,
     bot: botAccess && `${name}-bot`,
     botAccess,
-    agents: [],
+    instructions: [],
     workflows: [],
     settings: [],
   }

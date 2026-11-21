@@ -28,7 +28,7 @@ AUTHOR_SURFACE = {
         "auth",
     },
     "druks.sandbox": {"Sandbox", "SandboxMcpServer", "SandboxSecret"},
-    "druks.instructions": {"Instruction", "InstructionOutput", "Bot", "BotUser"},
+    "druks.chat": {"Bot", "BotUser"},
     "druks.workflows": {
         "AgentCall",
         "AgentCallResponse",
@@ -36,6 +36,8 @@ AUTHOR_SURFACE = {
         "FatalError",
         "Gate",
         "GateTimeout",
+        "Instruction",
+        "InstructionOutput",
         "Journal",
         "OperatorReply",
         "RunResponse",

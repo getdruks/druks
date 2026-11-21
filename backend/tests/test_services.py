@@ -14,7 +14,6 @@ from druks.core.apis.github import GitHubAppClient
 from druks.core.services import Github
 from druks.core.webhooks.github import GitHubEvents
 from druks.db import db_session
-from druks.instructions import Instruction, InstructionOutput
 from druks.redis import close_client
 from druks.registry import service_registry
 from druks.secrets.datastructures import Audience
@@ -26,6 +25,7 @@ from druks.services.exceptions import ServiceNotConnectedError
 from druks.services.oauth import OauthClient
 from druks.settings import configure_settings
 from druks.testing import configure_app_for_test, make_settings
+from druks.workflows import Instruction, InstructionOutput
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, SecretStr

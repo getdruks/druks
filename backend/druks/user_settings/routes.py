@@ -9,7 +9,6 @@ from druks.harnesses.base import Harness
 from druks.harnesses.config import check_config
 from druks.harnesses.exceptions import AgentConfigError
 from druks.harnesses.registry import get_harnesses
-from druks.instructions import Instruction
 from druks.notifications.services import list_notification_channels
 from druks.registry import (
     channel_registry,
@@ -21,16 +20,17 @@ from druks.registry import (
     iter_instructions,
 )
 from druks.teams.dependencies import require_named_app_access
+from druks.workflows import Instruction
 
 from . import reads
 from .datastructures import ALLOWED_EFFORTS
 from .models import InstallationSettings, SettingsOverride
 from .schemas import (
-    AgentsAppResponse,
-    AgentsResponse,
     AppsSettingsResponse,
     AppsSettingsUpdate,
     HarnessResponse,
+    InstructionsAppResponse,
+    InstructionsResponse,
     PersonalSettingsResponse,
     SettingsResponse,
     UpdatePersonalSettingsRequest,
@@ -55,22 +55,22 @@ async def list_harnesses() -> tuple[type[Harness], ...]:
     return get_harnesses()
 
 
-@instructions_router.get("", response_model=AgentsResponse, response_model_by_alias=True)
+@instructions_router.get("", response_model=InstructionsResponse, response_model_by_alias=True)
 async def list_instructions(
     session: SessionDep, account: Account = Depends(current_account)
-) -> AgentsResponse:
+) -> InstructionsResponse:
     settings = await InstallationSettings.get_or_create(session)
     overrides = await SettingsOverride.list_by_key(session)
     projected = [
-        AgentsAppResponse(
+        InstructionsAppResponse(
             name=app.name,
-            agents=await reads.list_agent_settings(
+            instructions=await reads.list_instruction_settings(
                 session, app, settings=settings, overrides=overrides
             ),
         )
         for app in await account.list_usable_apps()
     ]
-    return AgentsResponse(apps=[app for app in projected if app.agents])
+    return InstructionsResponse(apps=[app for app in projected if app.instructions])
 
 
 @router.get("", response_model=SettingsResponse, response_model_by_alias=True)
@@ -150,7 +150,7 @@ async def get_app_settings(
     ]
     return AppsSettingsResponse(
         allowed_efforts=list(ALLOWED_EFFORTS),
-        apps=[out for out in projected if out.agents or out.workflows or out.settings],
+        apps=[out for out in projected if out.instructions or out.workflows or out.settings],
         channels=[
             channel.name
             for channel in channel_registry.all()
@@ -186,7 +186,7 @@ async def update_app_settings(
     # the stored triple; a rejection rolls the writes back.
     for name in {*body.agent_harnesses, *body.agent_models, *body.agent_billings}:
         if not get_instruction(name) and not get_bot(name):
-            raise HTTPException(status_code=422, detail=f"Unknown agent {name!r}")
+            raise HTTPException(status_code=422, detail=f"Unknown instruction or bot {name!r}")
     if body.agent_harnesses or body.agent_models or body.agent_billings:
         installation = await InstallationSettings.get_or_create(session)
         await check_agent_configs(session, installation)

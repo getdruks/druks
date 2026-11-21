@@ -5,9 +5,9 @@ from .models import AgentCall, Run
 from .schemas import AgentCallResponse, SubjectSummary
 
 # The durable-execution engine. Internal — authors never import druks.durable; the
-# doors are druks.workflows (Workflow, Gate, step + these records) and druks.instructions
-# (Instruction). This re-exports the engine's own records for first-party use. GateTimeout
-# stays in .exceptions (raised by Gate.wait, not a documented catch target).
+# door is druks.workflows (Workflow, Gate, step, Instruction + these records). This
+# re-exports the engine's own records for first-party use. GateTimeout stays in
+# .exceptions (raised by Gate.wait, not a documented catch target).
 __all__ = [
     "AgentCall",
     "AgentCallResponse",

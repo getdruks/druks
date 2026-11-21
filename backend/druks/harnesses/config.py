@@ -106,11 +106,11 @@ async def check_config(
 
 
 async def get_config(session: AsyncSession, agent_name: str, account_id: str | None) -> AgentConfig:
-    """Resolve an agent's shared execution settings and the supplied or default account's
-    credential. A missing credential raises."""
+    """Resolve an instruction's or a Bot's shared execution settings and the supplied or
+    default account's credential. A missing credential raises."""
     agent = get_instruction(agent_name) or get_bot(agent_name)
     if not agent:
-        raise KeyError(f"no agent is registered as {agent_name!r}")
+        raise KeyError(f"no instruction or bot is registered as {agent_name!r}")
     settings = await InstallationSettings.get_or_create(session)
     harness = await SettingsOverride.agent_harness(session, agent_name, settings=settings)
     model = await SettingsOverride.agent_model(session, agent_name, settings=settings)

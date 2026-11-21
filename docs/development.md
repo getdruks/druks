@@ -67,8 +67,7 @@ contains the built SPA and serves it from FastAPI.
 
 | Path | Responsibility |
 | --- | --- |
-| `backend/druks/workflows.py` | Public workflow, step, gate, scheduling, and start API |
-| `backend/druks/instructions.py` | Public instruction descriptor and output contract |
+| `backend/druks/workflows.py` | Public workflow, step, gate, scheduling, and start API, and the instruction descriptor with its output contract |
 | `backend/druks/durable/` | DBOS integration, run projection, lifecycle internals |
 | `backend/druks/apps/` | Entry-point loading, discovery, author settings |
 | `backend/druks/ui/` | Page declarations, the block/value/field catalog, the page API |
@@ -78,6 +77,7 @@ contains the built SPA and serves it from FastAPI.
 | `backend/druks/sandbox/` | Drukbox lifecycle, SSH execution, workspace delivery |
 | `backend/druks/api/` | FastAPI composition and platform routes |
 | `backend/druks/{mcp,skills,notifications,user_settings}/` | Shared operator services |
+| `backend/druks/{agents,schedules}/` | The agents that people configure, and the schedules that they ask an agent for |
 | `backend/druks/contrib/software_factory/` | Bundled reference app, not framework core |
 | `frontend/src/` | Shared dashboard shell and bundled app UI |
 | `frontend/src/druksui/` | The renderer for an app's Python pages |

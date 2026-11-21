@@ -21,8 +21,8 @@ from druks.contrib.software_factory.ticketing.jira import Jira
 from druks.contrib.software_factory.ticketing.linear import Linear
 from druks.core import services
 from druks.doctor import CheckResult
-from druks.instructions import Instruction
 from druks.services import OauthRefreshError, ServiceNotConnectedError
+from druks.workflows import Instruction
 
 from .services import GithubReviewer
 
@@ -192,7 +192,8 @@ class SoftwareFactory(App):
             logger.warning("Could not get a Linear token for the tracker.", exc_info=True)
             return
 
-    # Any workflow of the app can run these agents. An agent id is ``software_factory.<name>``.
+    # Any workflow of the app can run these instructions. An instruction id is
+    # ``software_factory.<name>``.
     generate_plan = Instruction(
         description="ticket → implementation plan",
         prompt="software_factory/build/generate_plan.md",

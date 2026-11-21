@@ -11,7 +11,7 @@ from conftest import (
     make_jwt,
 )
 from drukbox_sdk import Secret
-from druks import instructions
+from druks import workflows
 from druks.accounts.models import Account
 from druks.apps import App
 from druks.db import db_session
@@ -44,8 +44,8 @@ from sqlalchemy.exc import IntegrityError
 
 class Timeouts(App):
     name = "timeouts"
-    declared = instructions.Instruction(prompt="probe.md", contract=ConfigOutput, timeout=900)
-    oversized = instructions.Instruction(
+    declared = workflows.Instruction(prompt="probe.md", contract=ConfigOutput, timeout=900)
+    oversized = workflows.Instruction(
         prompt="probe.md",
         contract=ConfigOutput,
         timeout=MAX_AGENT_TIMEOUT_SECONDS * 2,
@@ -442,18 +442,18 @@ async def test_an_agent_reads_its_own_config(druks_db):
 
 
 async def test_an_unregistered_agent_is_named(druks_db):
-    with pytest.raises(KeyError, match="no agent is registered as 'ghost'"):
+    with pytest.raises(KeyError, match="no instruction or bot is registered as 'ghost'"):
         await get_config(druks_db, "ghost", None)
 
 
 async def test_two_apps_declare_the_same_agent_name(druks_db, declared_apps):
     class Ticketing(App):
         name = "ticketing"
-        file_tickets = instructions.Instruction(prompt="probe.md", contract=ConfigOutput)
+        file_tickets = workflows.Instruction(prompt="probe.md", contract=ConfigOutput)
 
     class BugHunter(App):
         name = "bug_hunter"
-        file_tickets = instructions.Instruction(
+        file_tickets = workflows.Instruction(
             name="File tickets", prompt="probe.md", contract=ConfigOutput, timeout=300
         )
 
@@ -463,7 +463,7 @@ async def test_two_apps_declare_the_same_agent_name(druks_db, declared_apps):
     ticketing = await get_config(druks_db, Ticketing.file_tickets.id, None)
     bug_hunter = await get_config(druks_db, BugHunter.file_tickets.id, None)
     settings = [
-        await reads.get_agent_setting(
+        await reads.get_instruction_setting(
             druks_db,
             agent,
             settings=await InstallationSettings.get_or_create(druks_db),

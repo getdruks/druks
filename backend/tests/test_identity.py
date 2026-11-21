@@ -13,11 +13,11 @@ from druks.accounts.exceptions import AuthConfigurationError
 from druks.accounts.models import Account, PersonalAccessToken
 from druks.harnesses import providers
 from druks.harnesses.providers import AnthropicProvider, OpenAiProvider
-from druks.instructions import Instruction
 from druks.secrets.datastructures import Audience
 from druks.secrets.enums import SecretKind
 from druks.secrets.models import VaultSecret
 from druks.testing import configure_app_for_test, make_settings
+from druks.workflows import Instruction
 from fastapi.testclient import TestClient
 
 

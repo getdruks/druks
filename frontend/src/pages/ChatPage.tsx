@@ -35,6 +35,7 @@ export function ChatPage({ id, account }: { id?: string; account: Account }) {
   const [, navigate] = useLocation()
   const queryClient = useQueryClient()
   const [drafts, setDrafts] = useState<Record<string, string>>({})
+  const [agentId, setAgentId] = useState('')
   const [search, setSearch] = useState('')
   const [now, setNow] = useState(() => new Date())
   const list = useQuery({ queryKey: conversationListKey, queryFn: chatApi.list, refetchInterval: 10_000 })
@@ -138,11 +139,14 @@ export function ChatPage({ id, account }: { id?: string; account: Account }) {
         pinPending={pin.isPending}
         draft={drafts[draftKey] ?? ''}
         onDraft={(draft) => setDrafts((current) => ({ ...current, [draftKey]: draft }))}
+        agentId={agentId}
+        onAgent={setAgentId}
         onCreated={(conversation, submitted) => {
           setDrafts((current) => ({ ...current,
             [conversation.id]: current[draftKey] === submitted ? '' : current[draftKey] ?? '',
             [draftKey]: '',
           }))
+          setAgentId('')
           navigate(`/chat/${conversation.id}`)
         }}
       />
@@ -161,7 +165,7 @@ function PinButton({ conversation, onPin, disabled }: {
   </button>
 }
 
-function ConversationThread({ id, account, summary, onPin, pinPending, draft, onDraft, onCreated }: {
+function ConversationThread({ id, account, summary, onPin, pinPending, draft, onDraft, agentId, onAgent, onCreated }: {
   id?: string
   account: Account
   summary?: ConversationSummary
@@ -169,6 +173,8 @@ function ConversationThread({ id, account, summary, onPin, pinPending, draft, on
   pinPending: boolean
   draft: string
   onDraft: (draft: string) => void
+  agentId: string
+  onAgent: (agentId: string) => void
   onCreated: (conversation: Conversation, submitted: string) => void
 }) {
   const queryClient = useQueryClient()
@@ -182,10 +188,9 @@ function ConversationThread({ id, account, summary, onPin, pinPending, draft, on
   const composer = useRef<HTMLTextAreaElement>(null)
   const format = useFormatters()
   const apps = useQuery({ queryKey: ['apps'], queryFn: api.listApps, enabled: !id, staleTime: 60_000 })
-  const agents = useQuery({ queryKey: ['configuredAgents'], queryFn: api.configuredAgents, enabled: !id })
+  const agents = useQuery({ queryKey: ['agents'], queryFn: api.agents, enabled: !id })
   // An admin sees every agent, but only its owner talks to a private agent.
   const talkableAgents = (agents.data ?? []).filter((agent) => !agent.isPrivate || agent.ownerId === account.id)
-  const [agentId, setAgentId] = useState('')
   const chosenAgent = talkableAgents.find((agent) => agent.id === agentId)
   // A run's state sends no events, so the page reads its active runs again.
   const activeRuns = useQuery({ queryKey: ['chat', 'active-runs', id], queryFn: () => chatApi.listActiveRuns(id!), enabled: Boolean(id), refetchInterval: 2_000 })
@@ -332,7 +337,7 @@ function ConversationThread({ id, account, summary, onPin, pinPending, draft, on
       <h1>What should Druks do?</h1>
       <p>Ask about activity, usage, or schedules. Tell Druks what to do next.</p>
       {talkableAgents.length > 0 && <label className="chat-agent-picker">Talk to
-        <Select value={agentId} onChange={(event) => setAgentId(event.target.value)}>
+        <Select value={agentId} onChange={(event) => onAgent(event.target.value)}>
           <option value="">Druks</option>
           {talkableAgents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}
         </Select>
@@ -347,7 +352,7 @@ function ConversationThread({ id, account, summary, onPin, pinPending, draft, on
             // A reply shows in the turn of the message it answers. A reminder answers none.
             return !message.replyTo && <article className="chat-turn" key={message.id} aria-label="Agent message">
               <div className="chat-reply">
-                <div className="chat-message-meta chat-agent-meta">Agent
+                <div className="chat-message-meta chat-agent-meta">{conversation?.agentName ?? 'Agent'}
                   <time dateTime={message.createdAt} title={format.absTime(message.createdAt)}>{format.absTimeCompact(message.createdAt)}</time>
                 </div>
                 <Reply rows={savedReplyRows(message)} />
@@ -369,12 +374,12 @@ function ConversationThread({ id, account, summary, onPin, pinPending, draft, on
               {isQueued && <span className="chat-queued">Queued</span>}
             </div>
             <div className="chat-reply">
-              {(rows.length > 0 || isWaiting || reply?.question) && <div className="chat-message-meta chat-agent-meta">Agent
+              {(rows.length > 0 || isWaiting || reply?.question) && <div className="chat-message-meta chat-agent-meta">{conversation?.agentName ?? 'Agent'}
                 {reply && <time dateTime={reply.createdAt} title={format.absTime(reply.createdAt)}>{format.absTimeCompact(reply.createdAt)}</time>}
               </div>}
               <Reply rows={rows} />
               {reply?.question && <ReplyQuestion question={reply.question} answer={questionAnswer(messages, reply)} sending={sending} onAnswer={(body) => void send(body)} />}
-              {isWaiting && <p className="chat-waiting" role="status"><span className="chat-activity-dot" />{message.state === 'delivered' ? 'Agent is replying…' : 'Connecting…'}</p>}
+              {isWaiting && <p className="chat-waiting" role="status"><span className="chat-activity-dot" />{message.state === 'delivered' ? `${conversation?.agentName ?? 'Agent'} is replying…` : 'Connecting…'}</p>}
               {stoppedTurn && <div className="chat-interrupted" role="status">
                 <strong>{stoppedTurn.title}</strong>
                 <p>{stoppedTurn.detail}</p>
@@ -403,7 +408,7 @@ function ConversationThread({ id, account, summary, onPin, pinPending, draft, on
           ref={composer}
           aria-label="Message"
           aria-describedby="chat-send-help"
-          placeholder={id ? 'Reply, or ask Druks to do something…' : `Message ${chosenAgent?.name ?? 'Druks'}…`}
+          placeholder={id ? `Reply, or ask ${conversation?.agentName ?? 'Druks'} to do something…` : `Message ${chosenAgent?.name ?? 'Druks'}…`}
           rows={1}
           value={draft}
           onChange={(event) => { draftRef.current = event.target.value; onDraft(event.target.value) }}

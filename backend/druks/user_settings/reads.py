@@ -7,40 +7,40 @@ from druks.apps.settings import field_kind, field_live_choices
 
 from .models import InstallationSettings, SettingsOverride
 from .schemas import (
-    AgentSettingResponse,
     AppSettingsResponse,
+    InstructionSettingResponse,
     SettingsFieldResponse,
     WorkflowSettingsResponse,
 )
 
 if TYPE_CHECKING:
     from druks.apps import App
-    from druks.instructions import Bot, Instruction
-    from druks.workflows import Workflow
+    from druks.chat.bots.base import Bot
+    from druks.workflows import Instruction, Workflow
 
 
-async def list_agent_settings(
+async def list_instruction_settings(
     session: AsyncSession,
     app: "type[App]",
     *,
     settings: InstallationSettings,
     overrides: dict[str, SettingsOverride],
-) -> list[AgentSettingResponse]:
+) -> list[InstructionSettingResponse]:
     """The rows of the app's Instructions tab: its instructions, and then its Bot."""
     declared = [*app.instructions.all(), app.bot] if app.bot else app.instructions.all()
     return [
-        await get_agent_setting(session, agent, settings=settings, overrides=overrides)
+        await get_instruction_setting(session, agent, settings=settings, overrides=overrides)
         for agent in declared
     ]
 
 
-async def get_agent_setting(
+async def get_instruction_setting(
     session: AsyncSession,
     agent: "Instruction | Bot",
     *,
     settings: InstallationSettings,
     overrides: dict[str, SettingsOverride],
-) -> AgentSettingResponse:
+) -> InstructionSettingResponse:
     harness = await SettingsOverride.agent_harness(
         session, agent.id, settings=settings, overrides=overrides
     )
@@ -56,7 +56,7 @@ async def get_agent_setting(
     timeout = await SettingsOverride.agent_timeout(
         session, agent.id, agent.timeout, settings=settings, overrides=overrides
     )
-    return AgentSettingResponse(
+    return InstructionSettingResponse(
         name=agent.id,
         label=agent.name or agent.id.rsplit(".", 1)[-1],
         description=agent.description,
@@ -158,7 +158,9 @@ async def get_app_settings(
         builtin=app.builtin,
         bot=app.bot.id if app.bot else None,
         bot_access=app.bot.access if app.bot else None,
-        agents=await list_agent_settings(session, app, settings=settings, overrides=overrides),
+        instructions=await list_instruction_settings(
+            session, app, settings=settings, overrides=overrides
+        ),
         # Surface only the workflows with operator knobs: tunable settings or a
         # schedule to retune.
         workflows=[

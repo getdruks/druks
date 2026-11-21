@@ -9,8 +9,8 @@ from druks.exceptions import AppsNotRegisteredError
 if TYPE_CHECKING:
     from druks.apps import App
     from druks.browser.sessions import BrowserSession
-    from druks.instructions import Bot, Instruction
-    from druks.workflows import Workflow
+    from druks.chat.bots.base import Bot
+    from druks.workflows import Instruction, Workflow
 
 # Leaf-module names that carry self-registering capabilities. ``autodiscover``
 # imports exactly these (``routes`` defines routers the loader mounts, ``pages``

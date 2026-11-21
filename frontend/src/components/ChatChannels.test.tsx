@@ -38,10 +38,10 @@ beforeEach(() => {
     if (url === '/api/settings/apps') response = {
       allowedEfforts: [], channels, apps: [{
         name: 'chat', description: 'Live agent conversations.', icon: 'messages-square',
-        builtin: true, bot: 'chat.bot', botAccess: 'private', agents: [], workflows: [], settings: [],
+        builtin: true, bot: 'chat.bot', botAccess: 'private', instructions: [], workflows: [], settings: [],
       }, {
         name: 'helpdesk', description: 'Helpdesk.', icon: 'messages-square',
-        builtin: false, bot: 'helpdesk.bot', botAccess: 'private', agents: [], workflows: [], settings: [],
+        builtin: false, bot: 'helpdesk.bot', botAccess: 'private', instructions: [], workflows: [], settings: [],
       }],
     }
     if (url === '/api/settings/apps/choices?app=chat') response = {}

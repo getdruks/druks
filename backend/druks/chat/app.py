@@ -1,6 +1,7 @@
 from druks.apps import App
-from druks.instructions import Bot, Instruction
+from druks.workflows import Instruction
 
+from .bots.base import Bot
 from .contracts import AnswerOutput
 from .enums import BotAccess
 

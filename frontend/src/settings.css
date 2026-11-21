@@ -20,15 +20,15 @@
 .settings-pane .set-pane-sub { font-size: 15px; }
 .settings-pane .mcp-pane-title { font-size: 18px; }
 .settings-pane .set-field-help { font-size: 13px; }
-.settings-pane :is(.set-group-label, .set-field-label, .set-thead, .agents-app, .agents-legend, .agent-name, .menu-group, .menu-opt) { font-family: var(--font-sans); letter-spacing: 0; text-transform: none; }
-.settings-pane :is(.set-group-label, .set-field-label, .agents-app, .agent-name, .menu-opt) { font-size: 15px; }
-.settings-pane :is(.set-thead, .agents-legend, .menu-group, .set-field-error) { font-size: 13px; }
+.settings-pane :is(.set-group-label, .set-field-label, .set-thead, .instructions-app, .instructions-legend, .agent-name, .menu-group, .menu-opt) { font-family: var(--font-sans); letter-spacing: 0; text-transform: none; }
+.settings-pane :is(.set-group-label, .set-field-label, .instructions-app, .agent-name, .menu-opt) { font-size: 15px; }
+.settings-pane :is(.set-thead, .instructions-legend, .menu-group, .set-field-error) { font-size: 13px; }
 .settings-pane .set-group-label { font-weight: 500; }
 .settings-pane .set-select { min-height: 40px; font-family: var(--font-sans); font-size: 15px; }
 .settings-pane .set-table { overflow-x: auto; }
 @media (min-width: 721px) {
   .settings-pane :is(.set-thead, .set-trow) { display: grid; min-width: 760px; grid-template-columns: minmax(150px, 1.4fr) 100px minmax(140px, 1.2fr) 104px 86px 86px; gap: 8px; padding: 8px 12px; }
-  .settings-pane .agents-app { min-width: 760px; }
+  .settings-pane .instructions-app { min-width: 760px; }
 }
 .settings-context .set-btn { font-family: var(--font-sans); font-size: 15px; min-height: 40px; }
 .settings-context .hr-conn-btn { font-family: var(--font-sans); font-size: 15px; min-height: 40px; }
@@ -67,9 +67,9 @@
 .settings-pane .set-thead { height: auto; min-height: 40px; }
 .settings-pane :is(.mcp-label, .set-app-toggle .mt-name) { font-family: var(--font-sans); font-size: 15px; }
 .settings-pane :is(.agent-desc, .model-chooser-warning, .set-app-toggle .mt-desc) { font-family: var(--font-sans); font-size: 13px; }
-.settings-pane :is(.agents-cell, .set-cell) { font-size: 13px; }
+.settings-pane :is(.instructions-cell, .set-cell) { font-size: 13px; }
 .settings-pane .set-trow > div { min-width: 0; }
-.settings-pane .agents-cell { display: block; max-width: 100%; }
+.settings-pane .instructions-cell { display: block; max-width: 100%; }
 .settings-pane .model-chooser-trigger .cell-val { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 
 @media (max-width: 649px) {
@@ -113,6 +113,9 @@
 .teams-table thead th:nth-child(3) { width: 20%; }
 .teams-table thead th:last-child { width: 180px; }
 .teams-table td span { display: block; }
+.agents-table thead th:first-child { width: 22%; }
+.agents-table thead th:nth-child(2) { width: auto; }
+.agents-table thead th:last-child { width: 180px; }
 .connection-name { display: block; color: var(--druks-color-text-primary); font-weight: 500; }
 .connection-context { display: block; margin-top: 6px; color: var(--druks-color-text-tertiary); font-size: 13px; }
 .connection-actions .set-btn { white-space: nowrap; }

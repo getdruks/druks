@@ -9,15 +9,15 @@ from slack_sdk.errors import SlackApiError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from druks.accounts.models import Account
+from druks.agents.constants import PRIVATE_AGENT_MESSAGE
+from druks.agents.models import Agent
 from druks.chat.channels.base import Channel
 from druks.chat.enums import ConversationSource
 from druks.chat.exceptions import ChannelHasNoThreadsError, FileNotInThreadError, FormError
 from druks.chat.models import Automation, Conversation, Message
 from druks.chat.service import deliver
-from druks.configured_agents.models import ConfiguredAgent
-from druks.core.apis.slack import SlackClient
+from druks.core.apis.slack import SLACK_CUSTOMIZE_SCOPE, SlackClient
 from druks.core.services import Slack
-from druks.exceptions import PermissionDenied
 from druks.files.datastructures import File
 from druks.models import Base
 from druks.notifications.constants import CLOSED_MESSAGE
@@ -110,7 +110,7 @@ class SlackChannel(Channel):
             if is_tagged:
                 # "@Druks, Security engineer" and "@Druks: Security engineer" name it too.
                 text = message["text"].partition(mention)[2].lstrip(",: \n")
-                agent = await ConfiguredAgent.get_for_text(session, text)
+                agent = await Agent.lookup(session, text)
                 if not agent and thread_id:
                     latest = await Conversation.get_for_user(
                         session, row, user_id=message["user"], thread_id=thread_id
@@ -118,19 +118,14 @@ class SlackChannel(Channel):
                     if latest:
                         agent = latest.agent
                     else:
-                        agent = await ConfiguredAgent.get_for_slack_channel(
-                            session, message["channel"]
-                        )
-            if agent:
-                try:
-                    agent.check_talker(linked_account)
-                except PermissionDenied as error:
-                    room, _, thread_ts = thread_id.partition(":")
-                    client = SlackClient(token=await Slack.get_bot_token())
-                    await client.post_markdown(
-                        room or message["user"], str(error), thread_ts=thread_ts
-                    )
-                    return
+                        agent = await Agent.get_for_channel(session, message["channel"])
+            if agent and not linked_account.can_talk_to(agent):
+                room, _, thread_ts = thread_id.partition(":")
+                client = SlackClient(token=await Slack.get_bot_token())
+                await client.post_markdown(
+                    room or message["user"], PRIVATE_AGENT_MESSAGE, thread_ts=thread_ts
+                )
+                return
             await cls.save_message(
                 session, row, linked_account, message, agent_id=agent.id if agent else None
             )
@@ -275,8 +270,9 @@ class SlackChannel(Channel):
         room, _, thread_ts = conversation.thread_id.partition(":")
         # Slack takes a custom name only with the scope. A workspace that has not
         # approved the app again gets the reply under the app's own name.
-        grant = await Slack.get_grant()
-        agent = conversation.agent if "chat:write.customize" in grant.scopes else None
+        agent = None
+        if SLACK_CUSTOMIZE_SCOPE in (await Slack.get_grant()).scopes:
+            agent = conversation.agent
         posted = [
             await client.post_markdown(
                 room or conversation.user_id,

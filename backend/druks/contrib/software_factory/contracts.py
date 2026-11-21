@@ -2,20 +2,19 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 from pydantic import BaseModel, Field, model_validator
 
+from druks import workflows
 from druks.contrib.software_factory.constants import (
     CI_GREEN_CONCLUSIONS,
     CI_REGISTER_SECONDS,
     CI_TTL_SECONDS,
 )
 from druks.contrib.software_factory.enums import HumanFeedbackAction, ReviewDecision
-from druks.instructions import InstructionOutput
-from druks.workflows import Gate, OperatorReply, Workflow
 
 if TYPE_CHECKING:
     from druks.contrib.software_factory.workflows import Build
 
 
-class ReviewWork(Gate):
+class ReviewWork(workflows.Gate):
     """The verdict on the built work: approve/request_changes (PR review webhook),
     revise_contract (UI), or merged (pr.closed webhook)."""
 
@@ -25,7 +24,7 @@ class ReviewWork(Gate):
     body: str | None = None
 
     @classmethod
-    async def on_wait(cls, workflow: Workflow) -> None:
+    async def on_wait(cls, workflow: workflows.Workflow) -> None:
         build = cast("Build", workflow)
         # A round parks for a person even when its CI is not green or its review requested
         # changes, but its PR is not ready to merge.
@@ -34,12 +33,12 @@ class ReviewWork(Gate):
         await build.request_assignee_review()
 
 
-class VerificationCommandOutput(InstructionOutput):
+class VerificationCommandOutput(workflows.InstructionOutput):
     command: str
     ci_check: str | None
 
 
-class RepoProfilerOutput(InstructionOutput):
+class RepoProfilerOutput(workflows.InstructionOutput):
     languages: list[str]
     frameworks: list[str]
     package_managers: list[str]
@@ -80,7 +79,7 @@ class RepoProfilerOutput(InstructionOutput):
         }
 
 
-class QuestionOptionOutput(InstructionOutput):
+class QuestionOptionOutput(workflows.InstructionOutput):
     # Identity and cardinality are contract-capped at the agent boundary so a
     # parked ask (and the gate view built from it) is bounded by construction —
     # an oversized answer fails parse loudly instead of being clipped later.
@@ -89,7 +88,7 @@ class QuestionOptionOutput(InstructionOutput):
     recommended: bool
 
 
-class QuestionOutput(InstructionOutput):
+class QuestionOutput(workflows.InstructionOutput):
     id: str = Field(max_length=64)
     prompt: str = Field(max_length=2048)
     options: list[QuestionOptionOutput] = Field(max_length=16)
@@ -98,13 +97,13 @@ class QuestionOutput(InstructionOutput):
         return any(option.recommended and option.id == pick for option in self.options)
 
 
-class AcceptanceCriterionOutput(InstructionOutput):
+class AcceptanceCriterionOutput(workflows.InstructionOutput):
     id: str
     description: str
     verification: str
 
 
-class TicketOutput(InstructionOutput):
+class TicketOutput(workflows.InstructionOutput):
     repo: str
     title: str
     description: str
@@ -137,7 +136,7 @@ class PlanData(BaseModel):
     def uses_recommended_answers(self, picks: dict[str, str]) -> bool:
         return all(question.is_recommended(picks.get(question.id)) for question in self.questions)
 
-    def is_confirmed_by(self, reply: OperatorReply) -> bool:
+    def is_confirmed_by(self, reply: workflows.OperatorReply) -> bool:
         """A plan carrying acceptance criteria or a split that the operator approved as it
         stands."""
         return bool(
@@ -161,7 +160,7 @@ class PlanData(BaseModel):
         return pairs
 
 
-class PlanOutput(InstructionOutput):
+class PlanOutput(workflows.InstructionOutput):
     plan_markdown: str
     acceptance_criteria: list[AcceptanceCriterionOutput]
     questions: list[QuestionOutput] = Field(max_length=8)
@@ -213,7 +212,7 @@ class PlanOutput(InstructionOutput):
         )
 
 
-class ContractRevisionOutput(InstructionOutput):
+class ContractRevisionOutput(workflows.InstructionOutput):
     plan_markdown: str
     acceptance_criteria: list[AcceptanceCriterionOutput]
     implementation_instructions: str
@@ -234,7 +233,7 @@ class ContractRevisionOutput(InstructionOutput):
         )
 
 
-class ReviewOutput(InstructionOutput):
+class ReviewOutput(workflows.InstructionOutput):
     # No to_artifact: the plan must stay the parked ask's resolved document.
     decision: Literal[ReviewDecision.APPROVE, ReviewDecision.REQUEST_CHANGES]
     body: str
@@ -248,27 +247,27 @@ class ReviewOutput(InstructionOutput):
         return self
 
 
-class TriageOutput(InstructionOutput):
+class TriageOutput(workflows.InstructionOutput):
     action: HumanFeedbackAction
     body: str
     question: str
     implementation_instructions: str
 
 
-class AcceptanceEvidenceOutput(InstructionOutput):
+class AcceptanceEvidenceOutput(workflows.InstructionOutput):
     id: str
     status: Literal["implemented", "partial", "not_implemented"]
     evidence: str
 
 
-class CommandCheckOutput(InstructionOutput):
+class CommandCheckOutput(workflows.InstructionOutput):
     command: str
     status: Literal["pass", "fail", "not_run"]
     exit_code: int | None
     reason: str
 
 
-class ImplementationOutput(InstructionOutput):
+class ImplementationOutput(workflows.InstructionOutput):
     type: Literal["result"]
     # ``needs_clarification`` = the implementer found a contradiction in the binding
     # requirements and bailed; ``summary`` carries the reason. The workflow turns
@@ -308,7 +307,7 @@ class ImplementationOutput(InstructionOutput):
         return self
 
 
-class FindingOutput(InstructionOutput):
+class FindingOutput(workflows.InstructionOutput):
     severity: Literal["high", "medium", "low"]
     summary: str
     evidence: str
@@ -328,7 +327,7 @@ class FindingOutput(InstructionOutput):
         return sections
 
 
-class ReviewReport(InstructionOutput):
+class ReviewReport(workflows.InstructionOutput):
     decision: Literal["approve", "request_changes", "comment"]
     summary: str
     findings: list[FindingOutput]

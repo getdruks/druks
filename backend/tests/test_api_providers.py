@@ -7,11 +7,11 @@ from druks.accounts.models import Account
 from druks.harnesses import directory
 from druks.harnesses.models import ProviderCatalog
 from druks.harnesses.providers import AnthropicProvider
-from druks.instructions import Instruction
 from druks.secrets.datastructures import Audience
 from druks.secrets.enums import SecretKind
 from druks.secrets.models import VaultSecret
 from druks.testing import configure_app_for_test, make_settings
+from druks.workflows import Instruction
 from fastapi.testclient import TestClient
 
 

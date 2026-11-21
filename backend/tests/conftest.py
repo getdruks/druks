@@ -8,7 +8,7 @@ from unittest.mock import patch
 import jwt as pyjwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
-from druks import instructions, tracing
+from druks import tracing, workflows
 from druks.accounts import jwt as assertion
 from druks.accounts.models import Account
 from druks.api.server import app
@@ -73,13 +73,13 @@ _MANAGER_JWKS = {
 }
 
 
-class ConfigOutput(instructions.InstructionOutput):
+class ConfigOutput(workflows.InstructionOutput):
     ok: bool
 
 
 class Probes(App):
     name = "probes"
-    config_probe = instructions.Instruction(prompt="probe.md", contract=ConfigOutput)
+    config_probe = workflows.Instruction(prompt="probe.md", contract=ConfigOutput)
 
 
 CONFIG_PROBE = Probes.config_probe
@@ -222,7 +222,7 @@ def _no_durable_dispatch(request, monkeypatch):
     # monkeypatch, not mock.patch: when a test patches one of these too, monkeypatch
     # undoes both in reverse order and puts the real attribute back.
     monkeypatch.setattr(Workflow, "start", classmethod(_noop))
-    monkeypatch.setattr("druks.instructions.set_run_phase", _phase_noop)
+    monkeypatch.setattr("druks.workflows.set_run_phase", _phase_noop)
     monkeypatch.setattr("druks.durable.reads.get_run_phase", _phase_noop)
     monkeypatch.setattr("druks.durable.reads.get_run_phase_ends_at", _phase_noop)
     monkeypatch.setattr("dbos.DBOS.cancel_workflow_async", _dbos_cancel)

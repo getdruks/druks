@@ -10,11 +10,11 @@ from druks.files import File, FileField
 from druks.files.exceptions import FileTooLargeError, FileUnavailableError
 from druks.files.models import FileRecord
 from druks.files.storage import LocalFileStorage, reap_deleted_file_bytes
-from druks.instructions import InstructionOutput
 from druks.models import Base
 from druks.sandbox.exceptions import SandboxDownloadError
 from druks.sandbox.host import Host
 from druks.testing import seed_call, seed_run
+from druks.workflows import InstructionOutput
 from sqlalchemy import Integer, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, mapped_column

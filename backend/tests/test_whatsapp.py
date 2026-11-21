@@ -18,7 +18,7 @@ from druks.accounts.models import Account, PersonalAccessToken
 from druks.api.dependencies import request_session
 from druks.apps import App
 from druks.apps.exceptions import AppBotError
-from druks.chat import service
+from druks.chat import Bot, BotUser, service
 from druks.chat.app import Chat
 from druks.chat.bots import routes as bot_routes
 from druks.chat.bots import service as bot_service
@@ -49,7 +49,6 @@ from druks.chat.routes import create_reminder, start_conversation
 from druks.chat.schemas import ConversationResponse, ReminderResponse
 from druks.chat.tasks import send_due_reminders
 from druks.harnesses.claude import ClaudeHarness
-from druks.instructions import Bot, BotUser
 from druks.mcp.enums import Toolkit
 from druks.mcp.server import _is_visible, _validate_agent_tools
 from druks.models import Base
@@ -320,7 +319,7 @@ async def test_chat_links_a_number_without_an_admin_account(
     assert chat["builtin"]
     assert chat["bot"] == "chat.bot"
     assert chat["botAccess"] == "private"
-    assert [agent["name"] for agent in chat["agents"]] == ["chat.run_instruction", "chat.bot"]
+    assert [agent["name"] for agent in chat["instructions"]] == ["chat.run_instruction", "chat.bot"]
 
 
 async def test_a_session_that_stops_working_is_no_longer_linked(druks_db):
@@ -823,7 +822,7 @@ async def test_the_bot_row_saves_and_resolves_like_an_agent_row(druks_db, druks_
 
     assert response.status_code == 200
     settings = await InstallationSettings.get_or_create(druks_db)
-    row = await reads.get_agent_setting(
+    row = await reads.get_instruction_setting(
         druks_db,
         helpdesk.bot,
         settings=settings,
