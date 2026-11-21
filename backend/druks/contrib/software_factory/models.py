@@ -10,7 +10,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship, selectinload
 from druks.accounts import Account
 from druks.contrib.software_factory.contracts import ReviewWork
 from druks.contrib.software_factory.enums import Priority, Resolution, Status
-from druks.contrib.software_factory.exceptions import PrefixTakenError
+from druks.contrib.software_factory.exceptions import PrefixTakenError, TicketBlocksItself
 from druks.contrib.software_factory.policy import RepoPolicy
 from druks.contrib.software_factory.schemas import ProjectRepoSummary, WorkItemSummary
 from druks.contrib.software_factory.ticketing.enums import TicketStatus
@@ -366,39 +366,36 @@ class WorkItem(StoredSubject):
         # Import cycle: the app imports this module through ticketing/druks.py.
         import druks.contrib.software_factory.app as software_factory_app
 
-        tracker = await software_factory_app.SoftwareFactory.get_tracker(self.source)
-        if not tracker:
-            return
-
-        async with tracker:
-            try:
-                await tracker.release(self.ticket_key)
-            except (ValueError, *tracker.known_exceptions):
-                logger.warning(
-                    "Could not release %s ticket %s.", self.source, self.ticket_key, exc_info=True
-                )
+        if tracker := await software_factory_app.SoftwareFactory.get_tracker(self.source):
+            async with tracker:
+                try:
+                    await tracker.release(self.ticket_key)
+                except (ValueError, *tracker.known_exceptions):
+                    logger.warning(
+                        "Could not release %s ticket %s.",
+                        self.source,
+                        self.ticket_key,
+                        exc_info=True,
+                    )
 
     async def set_ticket_status(self, status: TicketStatus) -> None:
         # Import cycle: the app imports this module through ticketing/druks.py.
         import druks.contrib.software_factory.app as software_factory_app
 
-        tracker = await software_factory_app.SoftwareFactory.get_tracker(self.source)
         # A github item, a source that is no longer selected, or missing credentials
         # has no tracker, so nothing syncs.
-        if not tracker:
-            return
-
-        async with tracker:
-            try:
-                await tracker.set_status(self.ticket_key, status)
-            except (ValueError, *tracker.known_exceptions):
-                logger.warning(
-                    "Could not sync %s ticket %s to %s.",
-                    self.source,
-                    self.ticket_key,
-                    status.value,
-                    exc_info=True,
-                )
+        if tracker := await software_factory_app.SoftwareFactory.get_tracker(self.source):
+            async with tracker:
+                try:
+                    await tracker.set_status(self.ticket_key, status)
+                except (ValueError, *tracker.known_exceptions):
+                    logger.warning(
+                        "Could not sync %s ticket %s to %s.",
+                        self.source,
+                        self.ticket_key,
+                        status.value,
+                        exc_info=True,
+                    )
 
     async def update(
         self,
@@ -433,6 +430,15 @@ class Comment(Base):
     created_at: Mapped[datetime] = mapped_column(default=Base.utc_now)
 
 
+# Each row says that the blocker must be done before the ticket can build.
+ticket_blockers = sa.Table(
+    "ticket_blockers",
+    Base.metadata,
+    sa.Column("ticket_id", ForeignKey("tickets.id", ondelete="CASCADE"), primary_key=True),
+    sa.Column("blocker_id", ForeignKey("tickets.id", ondelete="CASCADE"), primary_key=True),
+)
+
+
 class Ticket(Base):
     __tablename__ = "tickets"
 
@@ -452,6 +458,22 @@ class Ticket(Base):
     comments: Mapped[list[Comment]] = relationship(
         order_by=[Comment.created_at, Comment.id], lazy="raise"
     )
+    blocked_by: Mapped[list["Ticket"]] = relationship(
+        secondary=ticket_blockers,
+        primaryjoin=id == ticket_blockers.c.ticket_id,
+        secondaryjoin=id == ticket_blockers.c.blocker_id,
+        back_populates="blocking",
+        order_by=id,
+        lazy="raise",
+    )
+    blocking: Mapped[list["Ticket"]] = relationship(
+        secondary=ticket_blockers,
+        primaryjoin=id == ticket_blockers.c.blocker_id,
+        secondaryjoin=id == ticket_blockers.c.ticket_id,
+        back_populates="blocked_by",
+        order_by=id,
+        lazy="raise",
+    )
 
     @classmethod
     async def create(
@@ -466,7 +488,7 @@ class Ticket(Base):
         creator_id: str | None = None,
     ) -> "Ticket":
         async with atomic():
-            # comments=[] loads the collection empty. A read after flush needs no query.
+            # Empty collections load empty. A read after flush needs no query.
             ticket = cls(
                 identifier=await Project.mint_identifier(project_repo.project_id),
                 project_repo=project_repo,
@@ -477,6 +499,8 @@ class Ticket(Base):
                 assignee_id=assignee_id,
                 creator_id=creator_id,
                 comments=[],
+                blocked_by=[],
+                blocking=[],
             )
             session = db_session()
             session.add(ticket)
@@ -489,7 +513,13 @@ class Ticket(Base):
     @classmethod
     async def get_for_identifier(cls, identifier: str) -> "Ticket | None":
         statement = (
-            select(cls).where(cls.identifier == identifier).options(selectinload(cls.comments))
+            select(cls)
+            .where(cls.identifier == identifier)
+            .options(
+                selectinload(cls.comments),
+                selectinload(cls.blocked_by),
+                selectinload(cls.blocking),
+            )
         )
         return (await db_session().scalars(statement)).first()
 
@@ -538,6 +568,17 @@ class Ticket(Base):
             async with atomic():
                 self.status = status
                 await self.save()
+                await self._emit_transitioned()
+
+    async def replace_blockers(self, blockers: list["Ticket"]) -> None:
+        """Write the blockers and tell the funnel. A ticket that waits at Ready for Agent
+        builds when the edit leaves it no open blocker."""
+        if self in blockers:
+            raise TicketBlocksItself(self.identifier)
+        async with atomic():
+            self.blocked_by = sorted(blockers, key=lambda blocker: blocker.id)
+            await self.save()
+            if self.status == Status.READY_FOR_AGENT:
                 await self._emit_transitioned()
 
     async def _emit_transitioned(self) -> None:
