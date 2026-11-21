@@ -101,6 +101,7 @@ from druks.secrets.models import VaultSecret
 from druks.settings import get_settings
 from druks.signals import publish
 from druks.teams.models import Team
+from druks.ui.blocks import Block, list_context_blocks
 from druks.user_settings.models import SettingsOverride
 from druks.workspaces import Workspace
 
@@ -403,10 +404,19 @@ async def _park(
         # The dashboard shows a note box only for a gate whose reply fields
         # include note.
         input_request = {"questions": [], **input_request, "reply_fields": list(gate.model_fields)}
+        context = input_request.get("context", "")
+        if blocks := list_context_blocks(context):
+            # An approval writes the blocks as text. A part with no text form fails here,
+            # before the run parks.
+            for block in blocks:
+                block.to_markdown()
+            input_request["context"] = [
+                block.model_dump(mode="json", by_alias=True) for block in blocks
+            ]
         if action := gate.model_fields.get("action"):
             # A request for changes needs a note to guide the next pass, unless the ask
             # carries its own context. Every place that takes an answer reads this.
-            is_guided = bool((input_request.get("context") or "").strip())
+            is_guided = bool(blocks or context and context.strip())
             input_request["controls"] = [
                 {"id": control, "note_required": control == "request_changes" and not is_guided}
                 for control in input_request.get("controls", get_args(action.annotation))
@@ -1032,7 +1042,7 @@ class Workflow:
         )
 
     async def review(
-        self, *, questions: list[BaseModel] | None = None, context: str = ""
+        self, *, questions: list[BaseModel] | None = None, context: str | list[Block] = ""
     ) -> OperatorReply:
         # Park for an in-app decision: the ask carries the controls, any
         # questions, and optional context (rendered beside the reviewed

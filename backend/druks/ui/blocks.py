@@ -1,4 +1,9 @@
-from typing import Annotated, Any, Literal
+import re
+from collections.abc import Iterable, Iterator, Sequence
+from datetime import UTC, datetime
+from decimal import Decimal
+from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeVar
+from urllib.parse import quote
 
 from pydantic import (
     AfterValidator,
@@ -16,8 +21,24 @@ from pydantic import (
 )
 
 from druks.schemas import Schema
+from druks.settings import get_settings
 
+from .exceptions import NoTextFormError
 from .fields import Field as FormField
+
+if TYPE_CHECKING:
+    from .page import PageRoute
+
+Part = TypeVar("Part", bound=Schema)
+
+# An address that names its own host, and a path from the root of the dashboard.
+_ABSOLUTE_URL = re.compile(r"https?://", re.IGNORECASE)
+_DASHBOARD_PATH = re.compile(r"/(?!/)")
+# What an address keeps as written: its delimiters, and the octets it already encodes.
+_ADDRESS_MARKS = ":/?#[]@!$&'*+,;=%"
+
+# The rule under the header of a table, for the alignment of each column.
+_ALIGNMENT_RULE = {"start": "---", "end": "---:"}
 
 
 def _subject_identity(value):
@@ -66,8 +87,7 @@ Subject = Annotated[Follows, BeforeValidator(_subject_identity), AfterValidator(
 
 
 def _get_status(subject: Follows, info: SerializationInfo) -> dict[str, Any]:
-    # The page endpoint reads where the work on every subject of the page stands,
-    # and hands it to the serialization of the page.
+    # A read of a page or of an ask hands in where the work on each subject stands.
     status = info.context["statuses"][(subject.subject_type, subject.subject_id)]
     return status.model_dump(mode=info.mode, by_alias=info.by_alias)
 
@@ -88,9 +108,94 @@ def _check_field_names(*, owner: str, fields: list[FormField], arguments: dict[s
         )
 
 
+def iter_parts(parts: Iterable[Schema], *kinds: type[Part]) -> Iterator[Part]:
+    """Every block, value, and control of ``kinds`` among ``parts`` and inside
+    them, however deep, in the order they hold them."""
+    for part in parts:
+        if isinstance(part, kinds):
+            yield part
+        for _, value in part:
+            children = [value]
+            if isinstance(value, list):
+                children = value
+            yield from iter_parts(
+                [child for child in children if isinstance(child, Schema)], *kinds
+            )
+
+
+def _join(parts: Iterable[str]) -> str:
+    return "\n\n".join(part for part in parts if part)
+
+
+def _heading(title: str) -> str:
+    if title:
+        return f"### {title}"
+    return ""
+
+
+def _titled(title: str, body: str) -> str:
+    # An empty block writes nothing, not even its title, as the dashboard shows nothing.
+    if body:
+        return _join([_heading(title), body])
+    return ""
+
+
+def _bullets(items: Iterable[str]) -> str:
+    # The lines of an item keep its indent, so an item of two paragraphs stays one item.
+    return "\n".join("- " + item.replace("\n", "\n  ") for item in items)
+
+
+def _quote(text: str) -> str:
+    return "\n".join(f"> {line}".rstrip() for line in text.split("\n"))
+
+
+def _number(number: float) -> str:
+    # Grouped, in full, and never in exponent form, as the dashboard shows it.
+    return f"{Decimal(str(number)).normalize():,f}"
+
+
+def _time(when: datetime) -> str:
+    return when.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _table(header: list[str], rows: Iterable[list[str]], aligns: Sequence[str]) -> str:
+    rule = [_ALIGNMENT_RULE[align] for align in aligns]
+    # A pipe would end a cell and a line break its row, so a cell keeps neither.
+    return "\n".join(
+        "| " + " | ".join(" ".join(cell.replace("|", "\\|").splitlines()) for cell in line) + " |"
+        for line in [header, rule, *rows]
+    )
+
+
+def _link(words: str, path: str) -> str:
+    endpoint = get_settings().urls.endpoint.rstrip("/")
+    address = ""
+    if _ABSOLUTE_URL.match(path):
+        address = path
+    elif _DASHBOARD_PATH.match(path) and endpoint:
+        address = f"{endpoint}{path}"
+    if address:
+        # A bracket would end the words, and a space or a parenthesis the address.
+        words = words.replace("[", "\\[").replace("]", "\\]")
+        return f"[{words}]({quote(address, safe=_ADDRESS_MARKS)})"
+    return words
+
+
+def _controls(controls: "Sequence[Action | Link]") -> str:
+    return " · ".join(control.to_markdown() for control in controls)
+
+
+def _linked(words: str, link: "Link | None") -> str:
+    # A link on a value or a card takes the words it sits on.
+    if link and words:
+        return link.model_copy(update={"label": words}).to_markdown()
+    return words
+
+
 class PageBlock(Schema):
-    """What every block shares. ``block`` names its kind on the wire, and
-    ``check_placement`` is how a block refuses a spot it cannot work in."""
+    """What every block shares. ``block`` names its kind on the wire,
+    ``check_placement`` is how a block refuses a spot it cannot work in, and
+    ``to_markdown`` is how it reads as text."""
 
     block: str
 
@@ -98,6 +203,12 @@ class PageBlock(Schema):
         """Raise when this block cannot sit where the page put it. ``followed``
         says whether any ancestor watches a subject, ``region`` names the nearest
         one around it, and ``regions`` collects the region names already taken."""
+
+    def to_markdown(self) -> str:
+        """The block as markdown that names no channel. A link is a link when its
+        ``url`` holds its address, and reads as its words when it does not. A block
+        that sends what the operator does has no text form, and defines none."""
+        raise NoTextFormError(type(self).__name__)
 
 
 class BlockParent(PageBlock):
@@ -108,6 +219,9 @@ class BlockParent(PageBlock):
     def check_placement(self, *, followed: bool, regions: set[str], region: str = "") -> None:
         for block in self.blocks:
             block.check_placement(followed=followed, regions=regions, region=region)
+
+    def to_markdown(self) -> str:
+        return _join(block.to_markdown() for block in self.blocks)
 
 
 class Link(PageBlock):
@@ -143,6 +257,28 @@ class Link(PageBlock):
         if [bool(self.page), bool(self.url), bool(self.subject)].count(True) == 1:
             return self
         raise ValueError(f"Link {self.label!r} must set exactly one of page, url, or subject")
+
+    def get_address(self, app: str, pages: Sequence["PageRoute"]) -> str:
+        """Where the link opens: its ``url``, or the path on the dashboard of its page
+        or its subject, as ``app`` routes it with ``pages``. A subject opens the page
+        that the app declares for it, else its own page. Empty for a page that is not
+        in ``pages``."""
+        address = self.url
+        if self.subject:
+            subject_type, subject_id = self.subject.subject_type, self.subject.subject_id
+            address = f"/{app}/{quote(subject_type, safe='')}/{quote(subject_id, safe='')}"
+            for page in pages:
+                if page.subject and page.subject.subject_type == subject_type:
+                    address = f"/{app}{page.get_path(dict.fromkeys(page.parameters, subject_id))}"
+        elif self.page:
+            for page in pages:
+                # A link that lacks an argument of its page's route has no address.
+                if page.name == self.page and set(page.parameters) <= set(self.arguments):
+                    address = f"/{app}{page.get_path(self.arguments)}".rstrip("/")
+        return address
+
+    def to_markdown(self) -> str:
+        return _link(self.label, self.url)
 
 
 class Action(PageBlock):
@@ -264,6 +400,9 @@ class Text(PageBlock):
     def __init__(self, text: str, **data):
         super().__init__(text=text, **data)
 
+    def to_markdown(self) -> str:
+        return self.text
+
 
 class Markdown(PageBlock):
     block: Literal["markdown"] = "markdown"
@@ -271,6 +410,9 @@ class Markdown(PageBlock):
 
     def __init__(self, text: str, **data):
         super().__init__(text=text, **data)
+
+    def to_markdown(self) -> str:
+        return self.text
 
 
 class Quote(PageBlock):
@@ -282,6 +424,9 @@ class Quote(PageBlock):
 
     def __init__(self, text: str, **data):
         super().__init__(text=text, **data)
+
+    def to_markdown(self) -> str:
+        return _quote(self.text)
 
 
 class Callout(PageBlock):
@@ -302,9 +447,26 @@ class Callout(PageBlock):
     def __init__(self, text: str, **data):
         super().__init__(text=text, **data)
 
+    def to_markdown(self) -> str:
+        title = ""
+        if self.title:
+            title = f"**{self.title}**"
+        return _quote(
+            _join(
+                [
+                    title,
+                    self.text,
+                    _controls(self.controls),
+                ]
+            )
+        )
+
 
 class Divider(PageBlock):
     block: Literal["divider"] = "divider"
+
+    def to_markdown(self) -> str:
+        return "---"
 
 
 class EmptyState(PageBlock):
@@ -322,12 +484,26 @@ class EmptyState(PageBlock):
     def __init__(self, title: str, **data):
         super().__init__(title=title, **data)
 
+    def to_markdown(self) -> str:
+        return _join(
+            [
+                self.title,
+                self.description,
+                _controls(self.controls),
+            ]
+        )
+
 
 class PageValue(Schema):
     """What every value shares."""
 
     def check_placement(self, *, followed: bool, regions: set[str], region: str = "") -> None:
         """Raise when this value cannot sit where the page put it."""
+
+    def to_markdown(self) -> str:
+        """The value as markdown, the way a fact, a list item, or a table cell
+        writes it."""
+        raise NotImplementedError(f"{type(self).__name__} has no to_markdown()")
 
 
 class TextValue(PageValue):
@@ -342,6 +518,9 @@ class TextValue(PageValue):
     description: str = ""
     link: Link | None = None
 
+    def to_markdown(self) -> str:
+        return _linked(self.text, self.link)
+
 
 class NumberValue(PageValue):
     value: Literal["number"] = "number"
@@ -351,6 +530,11 @@ class NumberValue(PageValue):
 
     def __init__(self, number, **data):
         super().__init__(number=number, **data)
+
+    def to_markdown(self) -> str:
+        if self.unit:
+            return f"{_number(self.number)} {self.unit}"
+        return _number(self.number)
 
 
 class StatusValue(PageValue):
@@ -365,15 +549,20 @@ class StatusValue(PageValue):
     def __init__(self, label: str, **data):
         super().__init__(label=label, **data)
 
+    def to_markdown(self) -> str:
+        return _linked(self.label, self.link)
+
 
 class SubjectStatus(PageValue):
     """Where the work on one subject stands. The shell shows "needs you" when
     the subject waits on the operator, ``working`` while Druks works on it, what
-    stopped it, or "idle"."""
+    stopped it, or "idle". Druks reads ``status`` each time it serves the value,
+    so a stored value keeps none."""
 
     value: Literal["subject_status"] = "subject_status"
     subject: Subject
     working: str = "working"
+    status: dict | None = Field(default=None, exclude_if=lambda status: not status)
 
     def __init__(self, subject, **data):
         super().__init__(subject=subject, **data)
@@ -382,7 +571,21 @@ class SubjectStatus(PageValue):
     def _with_status(
         self, serialize: SerializerFunctionWrapHandler, info: SerializationInfo
     ) -> dict[str, Any]:
-        return {**serialize(self), "status": _get_status(self.subject, info)}
+        if info.context:
+            return {**serialize(self), "status": _get_status(self.subject, info)}
+        return serialize(self)
+
+    def to_markdown(self) -> str:
+        # The word that the dashboard writes. A stored value has no status to read.
+        if not self.status:
+            return ""
+        if self.status["gate"]:
+            return "needs you"
+        if self.status["state"] in ("failed", "cancelled", "orphaned"):
+            return self.status["state"]
+        if self.status["state"] in ("scheduled", "running"):
+            return self.working
+        return "idle"
 
 
 class GateControls(PageBlock):
@@ -421,6 +624,11 @@ class TimeValue(PageValue):
     def __init__(self, when, **data):
         super().__init__(when=when, **data)
 
+    def to_markdown(self) -> str:
+        if self.when:
+            return _time(self.when)
+        return self.empty
+
 
 class ControlsValue(PageValue):
     """Actions and links in a cell, a fact, or a list item."""
@@ -434,6 +642,9 @@ class ControlsValue(PageValue):
     def check_placement(self, *, followed: bool, regions: set[str], region: str = "") -> None:
         for control in self.controls:
             control.check_placement(followed=followed, regions=regions, region=region)
+
+    def to_markdown(self) -> str:
+        return _controls(self.controls)
 
 
 def _typed_value(value):
@@ -483,6 +694,11 @@ class Timeline(PageBlock):
     def __init__(self, items=(), **data):
         super().__init__(items=items, **data)
 
+    def to_markdown(self) -> str:
+        return _titled(
+            self.title, _bullets(f"{_time(item.when)}: {item.title}" for item in self.items)
+        )
+
 
 class ProgressStep(Schema):
     label: str
@@ -517,6 +733,14 @@ class Progress(PageBlock):
             )
         return self
 
+    def to_markdown(self) -> str:
+        if self.steps:
+            steps = ((step.label, step.status.to_markdown()) for step in self.steps)
+            return _join([self.label, _bullets(f"{label}: {status}" for label, status in steps)])
+        if self.completed is None:
+            return f"{self.label}: still running"
+        return f"{self.label}: {_number(self.completed)} of {_number(self.total)}"
+
 
 class Image(PageBlock):
     """One image. ``alternative_text`` is what a reader gets in place of it, so
@@ -526,6 +750,9 @@ class Image(PageBlock):
     url: str
     alternative_text: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
     caption: str = ""
+
+    def to_markdown(self) -> str:
+        return _link(self.alternative_text, self.url)
 
 
 class FileSummary(Schema):
@@ -557,6 +784,9 @@ class Files(PageBlock):
     def __init__(self, files=(), **data):
         super().__init__(files=files, **data)
 
+    def to_markdown(self) -> str:
+        return _titled(self.title, _bullets(_link(file.name, file.url) for file in self.files))
+
 
 class ChartSeries(Schema):
     label: str
@@ -585,6 +815,14 @@ class Chart(PageBlock):
             )
         return self
 
+    def to_markdown(self) -> str:
+        # The same table that the dashboard gives a reader who gets no picture.
+        title = " — ".join(part for part in [self.title, self.value_label] if part)
+        header = [self.category_label or "category", *(one.label for one in self.series)]
+        points = zip(self.categories, *(one.points for one in self.series), strict=True)
+        rows = [[category, *map(_number, values)] for category, *values in points]
+        return _join([_heading(title), _table(header, rows, ["start"] * len(header))])
+
 
 class ImageGallery(PageBlock):
     block: Literal["image_gallery"] = "image_gallery"
@@ -593,6 +831,12 @@ class ImageGallery(PageBlock):
 
     def __init__(self, images=(), **data):
         super().__init__(images=images, **data)
+
+    def to_markdown(self) -> str:
+        return _titled(
+            self.title,
+            _bullets(image.to_markdown() for image in self.images),
+        )
 
 
 class Metric(Schema):
@@ -616,6 +860,10 @@ class Metrics(PageBlock):
         for metric in self.metrics:
             metric.value.check_placement(followed=followed, regions=regions, region=region)
 
+    def to_markdown(self) -> str:
+        metrics = ((metric.label, metric.value.to_markdown()) for metric in self.metrics)
+        return _titled(self.title, _bullets(f"**{label}**: {value}" for label, value in metrics))
+
 
 class Fact(Schema):
     label: str
@@ -638,6 +886,10 @@ class Facts(PageBlock):
     def check_placement(self, *, followed: bool, regions: set[str], region: str = "") -> None:
         for fact in self.facts:
             fact.value.check_placement(followed=followed, regions=regions, region=region)
+
+    def to_markdown(self) -> str:
+        facts = ((fact.label, fact.value.to_markdown()) for fact in self.facts)
+        return _titled(self.title, _bullets(f"**{label}**: {value}" for label, value in facts))
 
 
 class TableColumn(Schema):
@@ -730,6 +982,21 @@ class Table(PageBlock):
         if self.empty:
             self.empty.check_placement(followed=followed, regions=regions, region=region)
 
+    def to_markdown(self) -> str:
+        # An action has no text form, so a table that selects rows has none either.
+        actions = _controls(self.actions)
+        body = ""
+        if self.rows:
+            cells = [[cell.to_markdown() for cell in row.cells] for row in self.rows]
+            body = _table(
+                [column.label for column in self.columns],
+                cells,
+                [column.align for column in self.columns],
+            )
+        elif self.empty:
+            body = self.empty.to_markdown()
+        return _titled(self.title, _join([actions, body]))
+
 
 class List(PageBlock):
     block: Literal["list"] = "list"
@@ -742,6 +1009,12 @@ class List(PageBlock):
     def check_placement(self, *, followed: bool, regions: set[str], region: str = "") -> None:
         for item in self.items:
             item.check_placement(followed=followed, regions=regions, region=region)
+
+    def to_markdown(self) -> str:
+        return _titled(
+            self.title,
+            _bullets(item.to_markdown() for item in self.items),
+        )
 
 
 class Stack(BlockParent):
@@ -791,6 +1064,16 @@ class Card(BlockParent):
         for control in self.controls:
             control.check_placement(followed=followed, regions=regions, region=region)
 
+    def to_markdown(self) -> str:
+        return _join(
+            [
+                _heading(_linked(self.title, self.link)),
+                self.description,
+                super().to_markdown(),
+                _controls(self.controls),
+            ]
+        )
+
 
 class Cards(PageBlock):
     """One card for each of a set of things. ``wrap`` lets the shell fit as
@@ -818,6 +1101,18 @@ class Cards(PageBlock):
             card.check_placement(followed=followed, regions=regions, region=region)
         if self.empty:
             self.empty.check_placement(followed=followed, regions=regions, region=region)
+
+    def to_markdown(self) -> str:
+        # A dragged card runs the drop, and an action has no text form.
+        drop = ""
+        if self.drop:
+            drop = self.drop.to_markdown()
+        body = ""
+        if self.cards:
+            body = _join(card.to_markdown() for card in self.cards)
+        elif self.empty:
+            body = self.empty.to_markdown()
+        return _titled(self.title, _join([drop, body]))
 
 
 class Section(BlockParent):
@@ -859,6 +1154,18 @@ class Section(BlockParent):
             )
         return self
 
+    def to_markdown(self) -> str:
+        heading = ""
+        if self.title:
+            heading = f"## {self.title}"
+        return _join(
+            [
+                heading,
+                _controls(self.controls),
+                super().to_markdown(),
+            ]
+        )
+
 
 Block = Annotated[
     Text
@@ -895,3 +1202,12 @@ Section.model_rebuild()
 Stack.model_rebuild()
 Columns.model_rebuild()
 BlockParent.model_rebuild()
+
+
+def list_context_blocks(context: str | list[Block] | list[dict]) -> list[Block]:
+    """The blocks of a review's context, as the app gives them or as the ask stores
+    them. A context of text holds none. Raises ``ValidationError`` for a part that is
+    not a block."""
+    if isinstance(context, str):
+        return []
+    return Stack(context).blocks
