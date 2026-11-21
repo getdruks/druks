@@ -70,6 +70,14 @@ class TicketBlocked(AgentApiError):
         )
 
 
+class TicketBlocksItself(AgentApiError):
+    status_code = 409
+    code = "TICKET_BLOCKS_ITSELF"
+
+    def __init__(self, ticket: str) -> None:
+        super().__init__(f"{ticket} cannot block itself. Remove {ticket} from blocked_by.")
+
+
 class TeamSetupMissing(DruksError):
     def __init__(self, team: str, missing: str) -> None:
         super().__init__(
