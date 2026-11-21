@@ -10,6 +10,7 @@ from urllib.parse import urlencode
 import pytest
 from conftest import FORM_TEXT, bind_ambient_session, install_service
 from druks.accounts.models import Account
+from druks.chat.channels.slack.constants import LINK_BUTTON_ACTION_ID
 from druks.chat.enums import ConversationSource
 from druks.chat.forms import parse_fields
 from druks.chat.models import Conversation, Message
@@ -250,6 +251,23 @@ async def test_dead_round_click_is_acknowledged_without_resume(
         call(explain_reason, "C1", user="U7", reason=reason, thread_ts=_THREAD_TS)
         for reason in ("This notification was already acknowledged.", "Unknown respond token.")
     ]
+
+
+async def test_a_click_on_a_link_button_answers_nothing(
+    tmp_path, druks_db, resume_spy, slack_card, started
+):
+    _, notification = await _parked_notification(druks_db)
+    body = _interactivity_body(LINK_BUTTON_ACTION_ID)
+    with _client(tmp_path) as client:
+        response = client.post(
+            "/_external/slack/interactivity/", content=body, headers=_signed_headers(body)
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"accepted": True}
+    assert resume_spy == []
+    started.assert_not_awaited()
+    assert (await ambient_db_session().get(Notification, notification.id)).state == "pending"
 
 
 async def test_click_on_a_finished_round_takes_the_buttons_off_the_message(

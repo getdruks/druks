@@ -13,6 +13,7 @@ from druks.database import session_scope
 from druks.durable.activity import get_run_phase, get_run_phase_ends_at
 from druks.durable.exceptions import AgentCallNotFound
 from druks.durable.live import keepalive_comment, serialize_model_event
+from druks.registry import get_app
 
 from .enums import RunState
 from .models import AgentCall, Artifact, Run
@@ -180,9 +181,20 @@ async def _timeline(runs: list[Run]) -> list[RunResponse]:
     return [await get_run_response(run) for run in ordered]
 
 
+async def read_ask(session: AsyncSession, run: Run) -> dict:
+    """The ask that ``run`` is parked on, as Druks shows it. The run's app reads an ask
+    whose context holds blocks, so that each status in them holds where the work on its
+    subject stands at this read."""
+    match run.input_request:
+        # A context of text holds no blocks, and an ask with no blocks needs no app.
+        case {"presentation": "in_app", "context": [_, *_]}:
+            return await get_app(run.app).read_ask(session, run)
+    return await run.get_ask()
+
+
 async def get_run_response(run: Run) -> RunResponse:
     return RunResponse.from_run(
-        run, input_request=await run.get_ask() if run.input_request else None
+        run, input_request=await read_ask(run.session, run) if run.input_request else None
     )
 
 

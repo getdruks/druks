@@ -42,3 +42,8 @@ class Page(Schema):
         """Every block, value, and control of ``kinds`` on the page, however deep,
         in the order the page holds them."""
         return iter_parts([self], *kinds)
+
+    def subjects(self) -> list[tuple[str, str]]:
+        """The ``(subject_type, subject_id)`` of every status and gate on the page,
+        however deep. A read gets where the work on each of them stands."""
+        return [subject for block in self.blocks for subject in block.subjects()]

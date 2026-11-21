@@ -1185,10 +1185,12 @@ reply = await self.review(
 )
 ```
 
-The dashboard draws the blocks as a page draws them. An approval in Slack shows
-their [text forms](druks-ui.md#text-forms). `review` refuses a `Form`, an
-`Action`, or a `GateControls` anywhere in the blocks, because the operator acts
-through them and an approval is text. The `context` of a gate's in-app ask
+The dashboard draws the blocks as a page draws them. An approval in Slack draws
+facts, metrics, dividers, and links with Slack's own blocks, and shows the other
+blocks as their [text forms](druks-ui.md#text-forms). See
+[Approvals in Slack](druks-ui.md#approvals-in-slack). `review` refuses a `Form`,
+an `Action`, or a `GateControls` anywhere in the blocks, because the operator
+acts through them, so they have no text form. The `context` of a gate's in-app ask
 obeys the same rules. A `SubjectStatus` in the blocks shows where the work
 stands each time Druks reads the ask. The ask that Druks stores holds no status.
 

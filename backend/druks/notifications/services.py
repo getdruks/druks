@@ -1,6 +1,9 @@
+from contextlib import suppress
+
 from dbos import DBOS
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from druks import ui
 from druks.accounts.models import Account
 from druks.chat.constants import CLICK_ANSWER_MESSAGE
 from druks.chat.forms import get_answer
@@ -8,7 +11,9 @@ from druks.chat.models import Conversation
 from druks.chat.service import deliver
 from druks.core.services import Slack
 from druks.durable.enums import RunState
-from druks.durable.models import Run
+from druks.durable.exceptions import ArtifactContentMissing
+from druks.durable.models import Artifact, Run
+from druks.durable.reads import read_ask
 from druks.exceptions import ObjectNotFound
 from druks.notifications.constants import TEAM_ONLY_MESSAGE
 from druks.notifications.exceptions import (
@@ -22,6 +27,7 @@ from druks.notifications.models import Notification
 from druks.registry import get_app
 from druks.settings import get_settings
 from druks.teams.models import Team
+from druks.ui.blocks import iter_parts
 
 
 async def list_notification_channels() -> list[dict]:
@@ -29,6 +35,85 @@ async def list_notification_channels() -> list[dict]:
     in a channel that it is a member of."""
     client = await Slack.get_client()
     return sorted(await client.list_member_channels(), key=lambda channel: channel["name"])
+
+
+async def get_rendered_ask(session: AsyncSession, run: Run, *, has_chat: bool) -> dict:
+    """The ask that ``run`` is parked on, as the content of its notification. The blocks
+    are the ask in order, and the body is their text form. Each action is a control that a
+    click can send, and delivery makes its button. A control that needs a note is an action
+    only with ``has_chat``, because the chat's agent asks for the note."""
+    ask = await read_ask(session, run)
+    # An external ask has no questions, controls or artifact, so only this branch reads them.
+    if ask["presentation"] == "in_app":
+        blocks = [ui.Markdown(f"# {ask['label']}")]
+        context = ask.get("context", "")
+        if stack := ui.Stack.from_context(context):
+            app = get_app(run.app)
+            pages = app.pages()
+            # A link names a page or a subject of the run's app, and a channel needs its
+            # address. The address takes the place of the page or the subject, so the
+            # stored link names one destination.
+            for link in iter_parts(stack.blocks, ui.Link):
+                if address := link.get_address(app.name, pages):
+                    link.url, link.page, link.arguments, link.subject = address, "", {}, None
+            blocks += stack.blocks
+        elif context:
+            blocks.append(ui.Markdown(context))
+        for question in ask["questions"]:
+            lines = [question["prompt"]]
+            for option in question["options"]:
+                mark = " (recommended)" if option.get("recommended") else ""
+                lines.append(f"- {option['label']}{mark}")
+            blocks.append(ui.Markdown("\n".join(lines)))
+        if ask["artifact_id"]:
+            artifact = await session.get(Artifact, ask["artifact_id"])
+            with suppress(ArtifactContentMissing):
+                blocks.append(ui.Markdown(await artifact.read_content()))
+        actions = [
+            {"id": control["id"], "label": control["id"].replace("_", " ").capitalize()}
+            for control in ask["controls"]
+            if has_chat or not control["note_required"]
+        ]
+        return {
+            "body": ui.Stack(blocks).to_markdown(),
+            # Each subject status keeps the status that the ask read, as the body does.
+            "blocks": [block.model_dump(mode="json", by_alias=True) for block in blocks],
+            "actions": actions,
+            "deep_link": None,
+        }
+    # A person answers an external ask on its source, so it has no actions. Its link is the
+    # one that the author of its gate declares.
+    return {"body": ask["label"], "blocks": None, "actions": None, "deep_link": ask.get("url")}
+
+
+async def create_park_notification(
+    session: AsyncSession,
+    run: Run,
+    subject: dict,
+    *,
+    account_id: str | None = None,
+    conversation_id: str | None = None,
+    deep_link: str | None = None,
+) -> str:
+    """Create the notification of the question that ``run`` just parked on, for the account
+    or in the conversation, and return its id. The caller queues its delivery. The
+    notification keeps the run and the time that it parked, so Druks refuses a click on an
+    old button after the run parks again."""
+    rendered = await get_rendered_ask(session, run, has_chat=bool(conversation_id))
+    notification = await Notification.create(
+        session,
+        account_id=account_id,
+        conversation_id=conversation_id,
+        reason="gate.parked",
+        body=rendered["body"],
+        blocks=rendered["blocks"],
+        subject=subject,
+        actions=rendered["actions"],
+        run_id=run.id,
+        run_parked_at=run.input_requested_at,
+        deep_link=rendered["deep_link"] or deep_link,
+    )
+    return notification.id
 
 
 async def get_offered_control(ask: dict, control: str) -> dict:

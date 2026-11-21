@@ -8,6 +8,7 @@ from dbos import DBOS
 from fastapi import HTTPException, status
 from fastapi.responses import JSONResponse, Response
 
+from druks.chat.channels.slack.constants import LINK_BUTTON_ACTION_ID
 from druks.chat.forms import get_answer
 from druks.core.services import Slack
 from druks.db import db_session
@@ -147,6 +148,10 @@ class SlackInteractivity(SlackWebhook):
             values = self.get_values()
         except (TypeError, KeyError, IndexError, AttributeError) as error:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "Malformed Slack payload.") from error
+        if action_id == LINK_BUTTON_ACTION_ID:
+            # Slack opened the link of the button, and still tells Druks of the click. A link
+            # answers nothing.
+            return JSONResponse({"accepted": True})
         try:
             token, choice_id = decode_button(action_id)
         except MalformedButtonError as error:
@@ -235,6 +240,7 @@ async def replace_buttons(
         client,
         channel,
         notification.body,
+        blocks=notification.blocks,
         message_ts=message_ts,
         deep_link=notification.deep_link,
         outcome=outcome,

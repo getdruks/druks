@@ -245,6 +245,7 @@ class _DeliverSpy:
         channel,
         body,
         *,
+        blocks=None,
         thread_ts="",
         message_ts="",
         user="",
@@ -263,6 +264,7 @@ class _DeliverSpy:
                 "message_ts": message_ts,
                 "user": user,
                 "body": body,
+                "blocks": blocks,
                 "actions": actions,
                 "fields": fields,
                 "token": token,
@@ -680,6 +682,7 @@ async def test_in_app_park_notifies_with_actions(rt, deliver_spy):
     assert notification.run_parked_at == parked.input_requested_at
 
     (call,) = deliver_spy.calls
+    assert call["blocks"] == notification.blocks
     assert call["actions"] == notification.actions
     assert call["token"] == notification.correlation_token
     assert call["deep_link"] == notification.deep_link
@@ -913,6 +916,8 @@ async def test_an_answer_from_elsewhere_closes_the_question_s_message(rt, delive
     (edit,) = [call for call in deliver_spy.calls if call["outcome"]]
     assert f"{edit['channel']}:{edit['message_ts']}" == posted.message_id
     assert edit["outcome"] == CLOSED_MESSAGE
+    # The edit draws the blocks again, so the closed message keeps them.
+    assert edit["blocks"] == posted.blocks
 
 
 async def test_a_cancelled_run_closes_the_question_s_message(rt, deliver_spy):

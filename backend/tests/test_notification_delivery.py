@@ -6,6 +6,7 @@ from conftest import FORM_TEXT, bind_ambient_session, install_service
 from druks import ui
 from druks.accounts.models import Account
 from druks.chat.channels.slack.channel import SlackChannel
+from druks.chat.channels.slack.constants import LINK_BUTTON_ACTION_ID, MESSAGE_BLOCKS_LIMIT
 from druks.chat.enums import ConversationSource
 from druks.chat.exceptions import FormError
 from druks.chat.forms import parse_fields
@@ -15,13 +16,14 @@ from druks.core.webhooks.slack import replace_buttons
 from druks.durable.models import AgentCall, Artifact, Run
 from druks.notifications.buttons import decode_button, encode_button
 from druks.notifications.constants import CLOSED_MESSAGE, MARKDOWN_TEXT_LIMIT
-from druks.notifications.delivery import cut_markdown, deliver
+from druks.notifications.delivery import OMISSION_MESSAGE, cut_markdown, deliver
 from druks.notifications.exceptions import (
     ChannelUnavailableError,
     DeliveryError,
     MalformedButtonError,
 )
 from druks.notifications.models import Notification
+from druks.notifications.services import create_park_notification, get_rendered_ask
 from druks.settings import configure_settings, get_settings
 from druks.testing import seed_call, seed_run
 from druks_field_notes.models import Note
@@ -33,13 +35,14 @@ _BOT_TOKEN = "xoxb-delivery"
 
 @pytest.fixture
 def slack(monkeypatch):
-    """Slack's Web API, answered locally. Records each post. ``error`` makes Slack refuse."""
-    fake = SimpleNamespace(posts=[], error="")
+    """Slack's Web API, answered locally. Records each post. ``error`` makes Slack refuse
+    every post, and each of ``refusals`` refuses one next post."""
+    fake = SimpleNamespace(posts=[], error="", refusals=[])
 
     async def api_call(client, api_method, *, params=None, json=None, **request):
         fake.posts.append({"bot_token": client.token, "method": api_method, **(json or {})})
-        if fake.error:
-            raise SlackApiError("refused", {"ok": False, "error": fake.error})
+        if error := fake.refusals.pop(0) if fake.refusals else fake.error:
+            raise SlackApiError("refused", {"ok": False, "error": error})
         # The SDK answers with a response object whose data is the parsed body.
         return SimpleNamespace(data={"ok": True, "channel": "C1", "ts": "1.0"})
 
@@ -118,8 +121,8 @@ async def test_a_long_reply_before_a_question_loses_its_end_and_the_question_sta
         ]
 
 
-async def _form_question(druks_db) -> tuple[Conversation, Notification]:
-    """A Slack chat, and the form of FORM_TEXT that its agent asked."""
+async def _slack_chat(druks_db) -> Conversation:
+    """A chat with U1 in a thread of Slack room C1."""
     bind_ambient_session(druks_db)
     await install_service(
         "slack",
@@ -136,6 +139,12 @@ async def _form_question(druks_db) -> tuple[Conversation, Notification]:
     )
     druks_db.add(conversation)
     await druks_db.flush()
+    return conversation
+
+
+async def _form_question(druks_db) -> tuple[Conversation, Notification]:
+    """A Slack chat, and the form of FORM_TEXT that its agent asked."""
+    conversation = await _slack_chat(druks_db)
     question = await Notification.create(
         druks_db,
         conversation_id=conversation.id,
@@ -360,6 +369,10 @@ def test_a_cut_closes_a_fence_only_as_markdown_closes_it(text, ending):
     assert cut_markdown(text, 300).endswith(ending)
 
 
+def test_a_cut_with_no_room_to_close_a_fence_leaves_the_fence_out():
+    assert cut_markdown("```bash\n" + "make test\n" * 100, 6) == "\n\n…"
+
+
 async def test_button_delivery_posts_one_button_per_action(slack):
     actions = [{"id": "approve", "label": "Approve"}, {"id": "reject", "label": "Reject"}]
 
@@ -548,7 +561,7 @@ async def test_an_approval_writes_its_label_context_questions_and_document_in_or
         ],
     )
 
-    rendered = await run.get_rendered_ask(has_chat=False)
+    rendered = await get_rendered_ask(druks_db, run, has_chat=False)
 
     assert rendered["body"] == (
         "# Review: Plan\n\n"
@@ -557,6 +570,14 @@ async def test_an_approval_writes_its_label_context_questions_and_document_in_or
         "Which cache?\n- Redis\n\n"
         "## Steps\nShip it."
     )
+    # A context of text is one block of its own.
+    assert rendered["blocks"] == [
+        {"block": "markdown", "text": "# Review: Plan"},
+        {"block": "markdown", "text": "The plan changes the schema."},
+        {"block": "markdown", "text": "Which database?\n- Postgres (recommended)\n- MySQL"},
+        {"block": "markdown", "text": "Which cache?\n- Redis"},
+        {"block": "markdown", "text": "## Steps\nShip it."},
+    ]
 
 
 @pytest.mark.usefixtures("tmp_data_dir")
@@ -566,15 +587,19 @@ async def test_an_approval_whose_document_is_gone_goes_out_without_it(druks_db):
     call = await AgentCall.get(druks_db, artifact.agent_call_id)
     (call.call_dir / artifact.path).unlink()
 
-    rendered = await run.get_rendered_ask(has_chat=False)
+    rendered = await get_rendered_ask(druks_db, run, has_chat=False)
 
     assert rendered["body"] == "# Review: Plan\n\nCheck the schema."
 
 
-async def test_an_approval_writes_a_block_context_as_a_list_and_a_table(druks_db, slack):
+def _set_endpoint(endpoint: str) -> None:
     settings = get_settings()
-    urls = settings.urls.model_copy(update={"endpoint": "https://druks.example"})
+    urls = settings.urls.model_copy(update={"endpoint": endpoint})
     configure_settings(settings.model_copy(update={"urls": urls}))
+
+
+async def test_an_approval_writes_a_block_context_as_a_list_and_a_table(druks_db, slack):
+    _set_endpoint("https://druks.example")
     note = await Note.create(body="Fan noise on rack 3.")
     context = [
         ui.Facts(
@@ -595,7 +620,7 @@ async def test_an_approval_writes_a_block_context_as_a_list_and_a_table(druks_db
         context=[block.model_dump(mode="json", by_alias=True) for block in context],
     )
 
-    rendered = await run.get_rendered_ask(has_chat=False)
+    rendered = await get_rendered_ask(druks_db, run, has_chat=False)
     await deliver(SlackClient(token=_BOT_TOKEN), "C1", rendered["body"])
 
     body = (
@@ -607,3 +632,359 @@ async def test_an_approval_writes_a_block_context_as_a_list_and_a_table(druks_db
     assert rendered["body"] == body
     (post,) = slack.posts
     assert post["blocks"] == [{"type": "markdown", "text": body}]
+
+
+def _stored(*blocks) -> list[dict]:
+    """The blocks as a notification stores them."""
+    return [block.model_dump(mode="json", by_alias=True) for block in blocks]
+
+
+def _mrkdwn(text: str) -> dict:
+    return {"type": "mrkdwn", "text": text}
+
+
+def _link_button(label: str, url: str) -> dict:
+    """The actions block of a button that opens ``url``."""
+    button = {
+        "type": "button",
+        "text": _label(label),
+        "url": url,
+        "action_id": LINK_BUTTON_ACTION_ID,
+    }
+    return {"type": "actions", "elements": [button]}
+
+
+@pytest.mark.usefixtures("tmp_data_dir")
+async def test_an_approval_keeps_its_blocks_beside_their_text_form(druks_db):
+    _set_endpoint("https://druks.example")
+    note = await Note.create(body="Fan noise on rack 3.")
+    context = [
+        ui.Facts(
+            [
+                ui.Fact("Note", ui.TextValue("Rack 3", link=ui.Link(subject=note))),
+                ui.Fact("Work", ui.SubjectStatus(note)),
+            ]
+        ),
+        ui.Link("All notes", page="notes"),
+        ui.Link("Nowhere", page="nowhere"),
+    ]
+    run = await _parked_review(
+        druks_db,
+        document="## Steps\nShip it.",
+        subject=note,
+        context=_stored(*context),
+        questions=[
+            {"id": "rack", "prompt": "Which rack?", "options": [{"id": "3", "label": "Rack 3"}]}
+        ],
+    )
+
+    notification_id = await create_park_notification(
+        druks_db, run, note.identity, account_id=run.account_id
+    )
+    notification = await druks_db.get(Notification, notification_id)
+    await druks_db.refresh(notification)
+
+    assert notification.body == (
+        "# Review: Plan\n\n"
+        f"- **Note**: [Rack 3](https://druks.example/field_notes/notes/{note.id})\n"
+        "- **Work**: needs you\n\n"
+        "[All notes](https://druks.example/field_notes)\n\n"
+        "Nowhere\n\n"
+        "Which rack?\n- Rack 3\n\n"
+        "## Steps\nShip it."
+    )
+    assert ui.Stack(notification.blocks).to_markdown() == notification.body
+    label, facts, notes, nowhere, question, document = notification.blocks
+    assert (label["text"], question["text"], document["text"]) == (
+        "# Review: Plan",
+        "Which rack?\n- Rack 3",
+        "## Steps\nShip it.",
+    )
+    # A link keeps only the address it resolved to, and a link with none keeps its page.
+    rack, _ = facts["facts"]
+    destinations = [
+        (link["url"], link["page"], link["subject"])
+        for link in (rack["value"]["link"], notes, nowhere)
+    ]
+    assert destinations == [
+        (f"/field_notes/notes/{note.id}", "", None),
+        ("/field_notes", "", None),
+        ("", "nowhere", None),
+    ]
+
+
+async def test_facts_metrics_a_divider_and_a_link_go_out_as_slack_s_own_blocks(slack):
+    facts = [ui.Fact(f"Fan {number}", ui.NumberValue(number, unit="rpm")) for number in range(12)]
+    facts += [
+        ui.Fact("State", ui.StatusValue("Stalled", tone="danger")),
+        ui.Fact(
+            "Rack", ui.TextValue("Rack <3>", link=ui.Link(url="https://racks.example/3?a=1&b=2"))
+        ),
+    ]
+    blocks = _stored(
+        ui.Markdown("# Review"),
+        ui.Facts(facts, title="Fans"),
+        ui.Divider(),
+        ui.Metrics([ui.Metric("Noise", ui.NumberValue(72, unit="dB"))]),
+        ui.Link("Pull request", url="https://github.com/acme/app/pull/7"),
+        ui.Table(columns=[ui.TableColumn("Fan")], rows=[ui.TableRow(["front"])]),
+    )
+
+    await deliver(SlackClient(token=_BOT_TOKEN), "C1", "the text form", blocks=blocks)
+
+    (post,) = slack.posts
+    fields = [_mrkdwn(f"*Fan {number}*\n{number} rpm") for number in range(12)]
+    fields += [
+        _mrkdwn("*State*\nStalled"),
+        _mrkdwn("*Rack*\n<https://racks.example/3?a=1&amp;b=2|Rack &lt;3&gt;>"),
+    ]
+    assert post["text"] == "the text form"
+    assert post["blocks"] == [
+        {"type": "markdown", "text": "# Review"},
+        {"type": "section", "text": _mrkdwn("*Fans*"), "fields": fields[:10]},
+        {"type": "section", "fields": fields[10:]},
+        {"type": "divider"},
+        {"type": "section", "fields": [_mrkdwn("*Noise*\n72 dB")]},
+        _link_button("Pull request", "https://github.com/acme/app/pull/7"),
+        {"type": "markdown", "text": "| Fan |\n| --- |\n| front |"},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("make", "limit"),
+    [
+        # The field writes the label in bold on a line of its own: "*Log*\n".
+        (lambda size: ui.Facts([ui.Fact("Log", "x" * (size - 6))]), 2000),
+        # The section writes the title in bold: "*" around it.
+        (lambda size: ui.Facts([ui.Fact("Log", "x")], title="T" * (size - 2)), 3000),
+        (lambda size: ui.Link("L" * size, url="https://docs.example/a"), 75),
+        (lambda size: ui.Link("Docs", url="https://docs.example/" + "a" * (size - 21)), 3000),
+    ],
+    ids=["field", "section-text", "button-text", "button-address"],
+)
+async def test_a_block_takes_slack_s_blocks_up_to_a_limit_and_its_text_form_past_it(
+    slack, make, limit
+):
+    client = SlackClient(token=_BOT_TOKEN)
+    past = make(limit + 1)
+
+    await deliver(client, "C1", "text", blocks=_stored(make(limit)))
+    await deliver(client, "C1", "text", blocks=_stored(past))
+
+    drawn, written = slack.posts
+    assert drawn["blocks"][0]["type"] in ("section", "actions")
+    assert written["blocks"] == [{"type": "markdown", "text": past.to_markdown()}]
+
+
+async def test_blocks_past_the_room_of_a_message_go_out_as_text_in_its_last_block(slack):
+    links = [
+        ui.Link(f"Link {number}", url=f"https://docs.example/{number}") for number in range(60)
+    ]
+    page = "https://druks.example/runs/run-1"
+
+    await deliver(
+        SlackClient(token=_BOT_TOKEN),
+        "C1",
+        "text",
+        blocks=_stored(*links),
+        actions=[{"id": "approve", "label": "Approve"}],
+        token="t",
+        deep_link=page,
+    )
+
+    (post,) = slack.posts
+    *buttons, rest, approve = post["blocks"]
+    # The Approve button takes a block of the room, and one more block stays for the link.
+    assert len(post["blocks"]) == MESSAGE_BLOCKS_LIMIT
+    assert buttons == [
+        _link_button(f"Link {number}", f"https://docs.example/{number}") for number in range(48)
+    ]
+    assert rest == {
+        "type": "markdown",
+        "text": "\n\n".join(link.to_markdown() for link in links[48:]) + f"\n{page}",
+    }
+    assert approve["elements"][0]["text"] == _label("Approve")
+
+
+@pytest.mark.parametrize(
+    ("deep_link", "line"),
+    [
+        (
+            "https://druks.example/runs/run-1",
+            f"{OMISSION_MESSAGE} Read all of it in Druks: https://druks.example/runs/run-1",
+        ),
+        (None, OMISSION_MESSAGE),
+    ],
+    ids=["endpoint", "no-endpoint"],
+)
+async def test_markdown_past_slack_s_limit_loses_its_end_to_a_line_that_says_so(
+    slack, deep_link, line
+):
+    document = "Run this:\n```bash\n" + "make test\n" * 2_000
+    blocks = _stored(
+        ui.Markdown("# Review"),
+        ui.Divider(),
+        ui.Markdown(document),
+        ui.Link("Docs", url="https://docs.example/a"),
+    )
+
+    await deliver(
+        SlackClient(token=_BOT_TOKEN),
+        "C1",
+        "text",
+        blocks=blocks,
+        actions=[{"id": "approve", "label": "Approve"}],
+        token="t",
+        deep_link=deep_link,
+    )
+
+    (post,) = slack.posts
+    # The cut takes the end of the document and the link after it.
+    label, divider, cut, approve = post["blocks"]
+    assert (label, divider) == ({"type": "markdown", "text": "# Review"}, {"type": "divider"})
+    assert cut["text"].endswith(f"make test\n```\n\n…\n{line}")
+    assert len(label["text"]) + len(cut["text"]) <= MARKDOWN_TEXT_LIMIT
+    assert approve["type"] == "actions"
+
+
+async def test_markdown_at_slack_s_limit_with_no_link_goes_out_whole(slack):
+    text = "x" * MARKDOWN_TEXT_LIMIT
+
+    await deliver(SlackClient(token=_BOT_TOKEN), "C1", "text", blocks=_stored(ui.Markdown(text)))
+
+    (post,) = slack.posts
+    assert post["blocks"] == [{"type": "markdown", "text": text}]
+
+
+@pytest.mark.parametrize(
+    ("where", "place"),
+    [
+        (
+            {"thread_ts": "1700000000.000100", "actions": [{"id": "approve", "label": "Approve"}]},
+            ("chat.postMessage", "C1", "1700000000.000100", None),
+        ),
+        (
+            {"message_ts": "1700000000.000200", "outcome": "<@U1> chose Approve."},
+            ("chat.update", "C1", None, "1700000000.000200"),
+        ),
+    ],
+    ids=["post", "edit"],
+)
+async def test_a_refusal_of_the_blocks_sends_their_text_form_in_the_same_place(slack, where, place):
+    slack.refusals = ["invalid_blocks"]
+    blocks = _stored(
+        ui.Facts([ui.Fact("Fan", "front")]), ui.Link("Docs", url="https://docs.example/a")
+    )
+
+    answer = await deliver(
+        SlackClient(token=_BOT_TOKEN),
+        "C1",
+        "the text form",
+        blocks=blocks,
+        token="t",
+        deep_link="https://druks.example/runs/run-1",
+        **where,
+    )
+
+    refused, sent = slack.posts
+    assert refused["blocks"][:2] == [
+        {"type": "section", "fields": [_mrkdwn("*Fan*\nfront")]},
+        _link_button("Docs", "https://docs.example/a"),
+    ]
+    # The text form keeps the buttons, or the outcome in their place.
+    assert sent["blocks"] == [
+        {"type": "markdown", "text": "the text form\nhttps://druks.example/runs/run-1"},
+        refused["blocks"][-1],
+    ]
+    for post in (refused, sent):
+        assert (post["method"], post["channel"], post.get("thread_ts"), post.get("ts")) == place
+    assert answer == {"ok": True, "channel": "C1", "ts": "1.0"}
+
+
+@pytest.mark.parametrize(
+    ("reason", "error", "attempts"),
+    [
+        ("invalid_blocks", DeliveryError, ["divider", "markdown"]),
+        ("not_in_channel", ChannelUnavailableError, ["divider"]),
+        ("invalid_auth", DeliveryError, ["divider"]),
+    ],
+    ids=["refused-text-form", "channel", "authentication"],
+)
+async def test_a_failed_post_of_blocks_tries_their_text_form_once_and_only_on_a_refusal(
+    slack, reason, error, attempts
+):
+    slack.error = reason
+
+    with pytest.raises(error):
+        await deliver(SlackClient(token=_BOT_TOKEN), "C1", "text", blocks=_stored(ui.Divider()))
+
+    assert [post["blocks"][0]["type"] for post in slack.posts] == attempts
+
+
+async def test_an_answer_or_a_close_keeps_the_facts_and_the_links_of_an_approval(druks_db, slack):
+    conversation = await _slack_chat(druks_db)
+    approval = await Notification.create(
+        druks_db,
+        conversation_id=conversation.id,
+        reason="gate.parked",
+        body="# Review\n\n- **Fan**: front\n\n[Docs](https://docs.example/a)",
+        blocks=_stored(
+            ui.Markdown("# Review"),
+            ui.Facts([ui.Fact("Fan", "front")]),
+            ui.Link("Docs", url="https://docs.example/a"),
+        ),
+        actions=[{"id": "approve", "label": "Approve"}],
+    )
+
+    await SlackChannel.post_buttons(druks_db, conversation, approval)
+    await replace_buttons(
+        approval.id, channel="C1", message_ts="1.0", outcome="<@U1> chose Approve."
+    )
+    approval.message_id = "C1:1.0"
+    await SlackChannel.remove_buttons(druks_db, conversation, approval)
+
+    posted, clicked, closed = slack.posts
+    drawn = [
+        {"type": "markdown", "text": "# Review"},
+        {"type": "section", "fields": [_mrkdwn("*Fan*\nfront")]},
+        _link_button("Docs", "https://docs.example/a"),
+    ]
+    assert posted["blocks"][:-1] == drawn
+    assert posted["blocks"][-1]["elements"][0]["text"] == _label("Approve")
+    for edit, outcome in ((clicked, "<@U1> chose Approve."), (closed, CLOSED_MESSAGE)):
+        assert edit["blocks"] == [*drawn, {"type": "section", "text": _mrkdwn(outcome)}]
+
+
+async def test_a_link_button_opens_its_page_and_a_link_with_no_address_reads_as_words(
+    druks_db, slack
+):
+    note = await Note.create(body="Fan noise on rack 3.")
+    context = [
+        ui.Link("All notes", page="notes"),
+        ui.Link("The note", subject=note),
+        ui.Link("Docs", url="https://docs.example/a"),
+        ui.Link("Nowhere", page="nowhere"),
+    ]
+    run = await _parked_review(druks_db, context=_stored(*context))
+    blocks = (await get_rendered_ask(druks_db, run, has_chat=False))["blocks"]
+    client = SlackClient(token=_BOT_TOKEN)
+
+    _set_endpoint("https://druks.example")
+    await deliver(client, "C1", "text", blocks=blocks)
+    _set_endpoint("")
+    await deliver(client, "C1", "text", blocks=blocks)
+
+    with_endpoint, without_endpoint = slack.posts
+    assert with_endpoint["blocks"] == [
+        {"type": "markdown", "text": "# Review"},
+        _link_button("All notes", "https://druks.example/field_notes"),
+        _link_button("The note", f"https://druks.example/field_notes/notes/{note.id}"),
+        _link_button("Docs", "https://docs.example/a"),
+        {"type": "markdown", "text": "Nowhere"},
+    ]
+    # An installation with no endpoint has no address for a page of the dashboard.
+    assert without_endpoint["blocks"] == [
+        {"type": "markdown", "text": "# Review\n\nAll notes\n\nThe note"},
+        _link_button("Docs", "https://docs.example/a"),
+        {"type": "markdown", "text": "Nowhere"},
+    ]

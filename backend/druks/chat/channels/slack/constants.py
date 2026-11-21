@@ -34,3 +34,11 @@ OPTIONS_LIMITS = {
     "radio_buttons": 10,
     "checkboxes": 10,
 }
+# Slack's limits for the blocks of a notification, from the Block Kit reference.
+SECTION_TEXT_LIMIT = 3000
+SECTION_FIELDS_LIMIT = 10
+FIELD_TEXT_LIMIT = 2000
+BUTTON_TEXT_LIMIT = 75
+BUTTON_URL_LIMIT = 3000
+# What a button that opens a link sends as its action, so that a click on it answers nothing.
+LINK_BUTTON_ACTION_ID = "link"

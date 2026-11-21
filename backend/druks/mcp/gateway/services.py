@@ -8,7 +8,7 @@ from druks.core.utils.time import operator_local_day
 from druks.durable.enums import RunState
 from druks.durable.exceptions import AgentCallNotFound
 from druks.durable.models import AgentCall, Artifact, Run
-from druks.durable.reads import read_slice
+from druks.durable.reads import read_ask, read_slice
 from druks.durable.schemas import AgentCallResponse
 from druks.harnesses.artifacts import normalize_token_usage
 from druks.harnesses.providers import get_providers
@@ -40,7 +40,7 @@ async def get_gate(session: AsyncSession, run_id: str) -> schemas.GateResponse:
         run=run.id,
         gate=run.input_gate,  # type: ignore[arg-type]
         parked_at=run.input_requested_at,  # type: ignore[arg-type]
-        ask=await run.get_ask(),
+        ask=await read_ask(session, run),
         artifact=await _artifact_content(
             session, await Artifact.get_latest_for_run(session, run.id)
         ),

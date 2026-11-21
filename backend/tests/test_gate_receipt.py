@@ -7,6 +7,7 @@ from druks import ui
 from druks.contrib.software_factory.workflows import PullRequestReview
 from druks.durable.exceptions import GateTimeout
 from druks.durable.models import Run
+from druks.durable.reads import read_ask
 from druks.events.models import Event
 from druks.testing import seed_run
 from druks.ui.exceptions import NoTextFormError
@@ -184,12 +185,12 @@ async def test_a_block_context_reads_where_the_work_stands_each_time(
 
     async def answer(*args, **kwargs):
         parked = await druks_db.get(Run, summarize.workflow_id, populate_existing=True)
-        asks.append(await parked.get_ask())
+        asks.append(await read_ask(druks_db, parked))
         # Another app works on the other note, and its run is not this app's work.
         await seed_run(druks_db, kind=PullRequestReview.kind, subject=other, state="running")
-        asks.append(await parked.get_ask())
+        asks.append(await read_ask(druks_db, parked))
         await seed_run(druks_db, kind=Summarize.kind, subject=other, state="failed")
-        asks.append(await parked.get_ask())
+        asks.append(await read_ask(druks_db, parked))
         stored.append(parked.input_request)
         return {"action": "approve"}
 

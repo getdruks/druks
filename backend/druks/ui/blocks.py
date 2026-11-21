@@ -167,17 +167,25 @@ def _table(header: list[str], rows: Iterable[list[str]], aligns: Sequence[str]) 
     )
 
 
-def _link(words: str, path: str) -> str:
+def get_absolute_url(path: str) -> str:
+    """``path`` as an address that opens outside the dashboard: an outside http(s)
+    address as written, or a path on the dashboard at ``urls.endpoint``. A space or a
+    parenthesis in it is encoded, so it ends no link. Empty for any other address, and
+    for a path on an installation with no endpoint."""
     endpoint = get_settings().urls.endpoint.rstrip("/")
     address = ""
     if _ABSOLUTE_URL.match(path):
         address = path
     elif _DASHBOARD_PATH.match(path) and endpoint:
         address = f"{endpoint}{path}"
-    if address:
-        # A bracket would end the words, and a space or a parenthesis the address.
+    return quote(address, safe=_ADDRESS_MARKS)
+
+
+def _link(words: str, path: str) -> str:
+    if address := get_absolute_url(path):
+        # A bracket would end the words.
         words = words.replace("[", "\\[").replace("]", "\\]")
-        return f"[{words}]({quote(address, safe=_ADDRESS_MARKS)})"
+        return f"[{words}]({address})"
     return words
 
 
@@ -209,6 +217,14 @@ class PageBlock(Schema):
         ``url`` holds its address, and reads as its words when it does not. A block
         that sends what the operator does has no text form, and defines none."""
         raise NoTextFormError(type(self).__name__)
+
+    def subjects(self) -> list[tuple[str, str]]:
+        """The ``(subject_type, subject_id)`` of every status and gate in this block,
+        however deep. A read gets where the work on each of them stands."""
+        return [
+            (part.subject.subject_type, part.subject.subject_id)
+            for part in iter_parts([self], SubjectStatus, GateControls)
+        ]
 
 
 class BlockParent(PageBlock):
@@ -1018,13 +1034,25 @@ class List(PageBlock):
 
 
 class Stack(BlockParent):
-    """Blocks down the page."""
+    """Blocks down the page. A stack that holds no block is false."""
 
     block: Literal["stack"] = "stack"
     gap: Literal["small", "medium", "large"] = "medium"
 
     def __init__(self, blocks=(), **data):
         super().__init__(blocks=blocks, **data)
+
+    def __bool__(self) -> bool:
+        return bool(self.blocks)
+
+    @classmethod
+    def from_context(cls, context: "str | list[Block] | list[dict]") -> "Stack":
+        """The blocks of a review's context, as the app gives them or as the ask stores
+        them. A context of text holds none. Raises ``ValidationError`` for a part that is
+        not a block."""
+        if isinstance(context, str):
+            return cls()
+        return cls(context)
 
 
 class Columns(BlockParent):
@@ -1202,12 +1230,3 @@ Section.model_rebuild()
 Stack.model_rebuild()
 Columns.model_rebuild()
 BlockParent.model_rebuild()
-
-
-def list_context_blocks(context: str | list[Block] | list[dict]) -> list[Block]:
-    """The blocks of a review's context, as the app gives them or as the ask stores
-    them. A context of text holds none. Raises ``ValidationError`` for a part that is
-    not a block."""
-    if isinstance(context, str):
-        return []
-    return Stack(context).blocks

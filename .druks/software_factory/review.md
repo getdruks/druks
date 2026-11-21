@@ -129,9 +129,10 @@ files hold no channel code: `backend/druks/durable/models.py`,
 `backend/druks/chat/service.py` and `backend/druks/chat/channels/base.py`. Examples:
 
 - Slack's 12,000-character limit for markdown, and the cut that keeps a message under
-  it, go in `notifications/delivery.py`, not in `Run.get_rendered_ask`.
+  it, go in `notifications/delivery.py`, not in `get_rendered_ask`.
 - Slack puts a notice's link on a line of its own after the text. That is the layout
-  of `deliver()`, so a run writes only the ask and does not budget for the link.
+  of `deliver()`, so `get_rendered_ask` writes only the ask and does not budget for the
+  link.
 - A Slack block type (`markdown`, `section`, `actions`) and Slack's mrkdwn syntax
   appear only in Slack's files.
 

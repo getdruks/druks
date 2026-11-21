@@ -433,6 +433,10 @@ the word:
 - the `working` word while Druks works on the subject,
 - "idle" otherwise.
 
+`subjects()` on a block or a page gives the `(subject_type, subject_id)` of every
+`SubjectStatus` and `GateControls` inside it, however deep. Druks gets the status
+of each one in that read.
+
 Druks reads a `SubjectStatus` in a review's
 [context of blocks](writing-an-app.md#wait-for-input) in the same way, from the
 runs of the app that asks. It reads the status each time it reads the ask: for
@@ -443,9 +447,11 @@ none.
 
 ## Text forms
 
-An approval in Slack is text, so every block and value but three has a text
-form. `to_markdown()` writes it as markdown that names no channel, and takes no
-arguments. Druks writes the blocks of a review's context this way.
+Every block and value but three has a text form. `to_markdown()` writes it as
+markdown that names no channel, and takes no arguments. An approval keeps the
+blocks of a review's context beside their text form. A channel that draws no
+blocks sends the text. Slack draws some of the blocks with its own blocks: see
+[Approvals in Slack](#approvals-in-slack).
 
 | Block or value | Text form |
 | --- | --- |
@@ -487,6 +493,34 @@ acts through them. Their `to_markdown()` raises `NoTextFormError`, which names
 the block. A table that selects rows, a board that takes drops, and a block with
 an action in its controls have no text form either. `review` refuses a context
 that holds one of the three blocks anywhere, before the run parks.
+
+## Approvals in Slack
+
+Slack draws these blocks of an approval with its own blocks:
+
+| Block | In Slack |
+| --- | --- |
+| `Facts`, `Metrics` | A grid of two columns: each label in bold above its value, under the title in bold. A section of Slack holds 10 of them, so more start a new section. |
+| `Divider` | A divider. |
+| `Link` | A button that opens the address of the link. |
+
+Every other block shows its text form. A value in a fact or a metric shows its
+text form, and a value with a link stays a link. Slack has no coloured label,
+so a `StatusValue` shows its words without its tone. A click on a link button
+opens the address and answers nothing.
+
+A block that breaks a limit of Slack shows its text form: a fact or a metric
+whose label and value pass 2,000 characters, a link label of more than 75
+characters, or a link address of more than 3,000 characters. A link with no
+address shows its words, as in text. A message holds 50 blocks with its
+buttons. When the blocks run out, the blocks that are left show their text forms
+in the last block. The markdown of a message holds 12,000 characters. When there
+is more, Druks cuts its end. The last line then says that Druks left out the
+end, and links to the run's page when the installation has an endpoint.
+
+When Slack refuses the blocks, Druks sends the text of the approval in the same
+place, with the same buttons. An answer or a close edits the message. The edit
+draws the blocks again, with the outcome in place of the buttons.
 
 ## Actions and links
 
@@ -1435,6 +1469,9 @@ class Stack:
 ```json
 {"block": "stack", "gap": "medium", "blocks": []}
 ```
+
+A `Stack` that holds no block is false, so `if stack:` asks whether it shows
+anything. Every other block is always true.
 
 ### Columns
 
