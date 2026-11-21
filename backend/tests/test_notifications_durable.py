@@ -6,9 +6,10 @@ import psycopg
 import pytest
 from conftest import FORM_TEXT, install_service
 from dbos import DBOS
+from druks import registry
 from druks.accounts.context import current_conversation_id
 from druks.accounts.models import Account
-from druks.apps.registry import workflows
+from druks.apps import App
 from druks.chat.channels.slack import channel as slack_channel
 from druks.chat.enums import ConversationSource, MessageRole, MessageState
 from druks.chat.forms import parse_fields
@@ -66,6 +67,11 @@ class _Question(BaseModel):
     id: str
     prompt: str
     options: list[dict] = Field(default_factory=list)
+
+
+class NotificationsDurable(App):
+    name = "notifications_durable"
+    package = __name__
 
 
 class NotificationProbe(StoredSubject):
@@ -199,6 +205,11 @@ async def rt():
     # before launch(), which is the wiring this whole module runs through.
     init_dbos()
     await launch()
+    # A run starts as an account that can use the workflow's app, so the app
+    # answers by name. It is not installed: it has no package for the loader.
+    installed = registry.iter_apps()
+    apps = pytest.MonkeyPatch()
+    apps.setattr(registry, "iter_apps", lambda: [*installed, NotificationsDurable])
     try:
         yield SimpleNamespace(
             engine=engine,
@@ -214,15 +225,8 @@ async def rt():
         shutdown()
         await engine.dispose()
         schema_engine.dispose()
-        for kind in (
-            "in_app_flow",
-            "external_flow",
-            "subjectless_flow",
-            "external_url_flow",
-            "double_park_flow",
-            "failing_flow",
-        ):
-            workflows._items.pop(kind, None)
+        apps.undo()
+        NotificationsDurable.workflows.clear()
         configure_settings(original_settings)
 
 

@@ -19,13 +19,13 @@ from druks.api.schemas import (
     DashboardSection,
     ScheduledRun,
 )
-from druks.apps.registry import workflows
 from druks.durable.dbos_state import latest_invocations
 from druks.durable.engine import trigger_schedule
 from druks.durable.enums import RunState
 from druks.durable.exceptions import ScheduleUnavailable
 from druks.durable.models import Artifact, Run
 from druks.events.models import Event
+from druks.registry import get_workflow
 from druks.settings import get_settings
 from druks.teams.dependencies import require_schedule_access
 
@@ -49,7 +49,7 @@ async def get_overview(
             )
         apps = {app: apps[app]}
     owners = {
-        workflow.kind: owner.name for owner in apps.values() for workflow in owner.workflows()
+        workflow.kind: owner.name for owner in apps.values() for workflow in owner.workflows.all()
     }
     current_runs = (
         Run.get_open_subjects(
@@ -160,7 +160,7 @@ async def list_current_schedules(
     declared = [
         (owner.name, workflow)
         for owner in await account.list_usable_apps()
-        for workflow in owner.workflows()
+        for workflow in owner.workflows.all()
         if workflow.every
     ]
     history = await session.execute(
@@ -200,7 +200,7 @@ async def list_current_schedules(
     dependencies=[Depends(require_schedule_access)],
 )
 async def run_schedule(kind: str) -> dict[str, str]:
-    workflow = workflows.get(kind)
+    workflow = get_workflow(kind)
     if not workflow or not workflow.every:
         raise HTTPException(404, "Schedule not found. Select a declared schedule.")
     try:

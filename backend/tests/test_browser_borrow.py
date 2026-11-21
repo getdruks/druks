@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock
 
 import httpx
 import pytest
+from druks.apps import App
 from druks.browser import sessions as sessions_module
 from druks.browser.enums import BrowserSessionPayloadFormat, BrowserSessionStatus
 from druks.browser.exceptions import (
@@ -30,8 +31,8 @@ from druks.testing import make_settings
 
 
 @pytest.fixture
-def notebook(browser_session_declarations):
-    class Notebook:
+def notebook(declared_apps):
+    class Notebook(App):
         name = "notebook"
         archive = BrowserSession(site="archive.example", persist=True)
         journal = BrowserSession(site="journal.example")

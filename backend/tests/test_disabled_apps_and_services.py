@@ -4,7 +4,7 @@ import pytest
 from conftest import bind_ambient_session
 from druks.apps import loader
 from druks.apps.exceptions import AppNotFound
-from druks.apps.registry import services
+from druks.registry import iter_apps, service_registry
 from druks.services import Service
 from druks.services.exceptions import ServiceDisabledError
 from druks.settings import Settings, configure_settings
@@ -25,7 +25,7 @@ async def test_a_disabled_app_is_not_installed(configuration, druks_db, tmp_path
     configuration.write_text("[apps.software_factory]\nenabled = false\n")
     settings = Settings(data_dir=tmp_path)
     configure_settings(settings)
-    loader.register_apps()
+    loader.load_installed_apps()
     api = configure_app_for_test(settings=settings)
     async with asgi_client(api) as client:
         names = [app["name"] for app in (await client.get("/api/apps")).json()]
@@ -46,8 +46,8 @@ def test_a_disabled_app_never_loads(configuration, monkeypatch, registered_apps)
     monkeypatch.setattr(loader, "entry_points", lambda group: EntryPoints([*installed, broken]))
 
     configure_settings(Settings())
-    loader.register_apps()
-    assert "broken" not in {app.name for app in loader.iter_apps()}
+    loader.load_installed_apps()
+    assert "broken" not in {app.name for app in iter_apps()}
 
 
 def test_an_app_that_no_package_provides_refuses_to_start(configuration):
@@ -55,7 +55,7 @@ def test_an_app_that_no_package_provides_refuses_to_start(configuration):
     configure_settings(Settings())
 
     with pytest.raises(AppNotFound, match="apps.unknown"):
-        loader.register_apps()
+        loader.load_installed_apps()
 
 
 def test_a_service_registers_before_druks_toml_is_read(
@@ -68,7 +68,7 @@ def test_a_service_registers_before_druks_toml_is_read(
             url: str
 
     monkeypatch.setenv("DRUKS_CONFIG", str(configuration))
-    assert "acme" in services
+    assert "acme" in service_registry
 
 
 async def test_a_disabled_service_is_not_installed(

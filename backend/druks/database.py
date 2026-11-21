@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy_encrypted_field import configure
 
 from druks.db import db_session
+from druks.registry import get_app, iter_apps
 from druks.settings import get_settings
 from druks.tracing import instrument_engine
 
@@ -47,7 +48,7 @@ def make_app_migration(app_name: str, message: str, database_url: str) -> None:
     from alembic.config import Config
     from sqlalchemy import MetaData
 
-    from druks.apps.loader import get_app, import_app_models
+    from druks.apps.loader import import_app_models
     from druks.files import models  # noqa: F401  # the files table joins Base.metadata
     from druks.models import Base
 
@@ -84,8 +85,6 @@ def make_app_migration(app_name: str, message: str, database_url: str) -> None:
 
 
 def _app_migration_dirs() -> list[tuple[str, Path]]:
-    from druks.apps.loader import iter_apps
-
     found: list[tuple[str, Path]] = []
     for app in iter_apps():
         package_dir = app.package_dir()

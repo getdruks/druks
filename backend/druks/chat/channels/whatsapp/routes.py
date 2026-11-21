@@ -6,8 +6,8 @@ from druks.accounts.dependencies import current_admin_account, current_session_a
 from druks.accounts.enums import AccountKind
 from druks.accounts.models import Account
 from druks.api.dependencies import SessionDep
-from druks.apps.loader import get_app
 from druks.chat.enums import BotAccess
+from druks.registry import get_app
 from druks.secrets.models import VaultSecret
 from druks.teams.dependencies import require_named_app_access
 

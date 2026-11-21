@@ -23,6 +23,7 @@ from sqlalchemy.types import TypeDecorator
 
 from druks.core.utils.time import ensure_utc
 from druks.exceptions import DetachedRowError, ObjectNotFound
+from druks.registry import get_app_by_module, get_app_name
 
 if TYPE_CHECKING:
     from druks.durable.schemas import SubjectStatus, SubjectSummary
@@ -93,10 +94,7 @@ class Model(Base):
             cls._ordering = ordering
         # A table is named for its app and its class unless the class names it.
         if "__tablename__" not in cls.__dict__ and not cls.__dict__.get("__abstract__"):
-            # Cycle: the loader is built on this module's Base.
-            from druks.apps.loader import resolve_workflow_app
-
-            app = resolve_workflow_app(cls.__module__)
+            app = get_app_name(cls.__module__)
             cls.__tablename__ = f"{app}_{snake_name(cls.__name__)}"
         super().__init_subclass__(**kwargs)
 
@@ -252,12 +250,7 @@ class StoredSubject(Model):
     def _list_app_workflows(cls) -> "list[type[Workflow]]":
         """The workflows of the app this class belongs to. Its reads count their runs,
         so another app's run on the same subject does not show."""
-        # Cycle: the loader and its registry are built on this module's Base.
-        from druks.apps.loader import resolve_workflow_app
-        from druks.apps.registry import workflows as workflow_registry
-
-        app_name = resolve_workflow_app(cls.__module__)
-        return [workflow for workflow in workflow_registry.all() if workflow.app == app_name]
+        return get_app_by_module(cls.__module__).workflows.all()
 
     async def get_status(self, *, workflow: "type[Workflow] | None" = None) -> "SubjectStatus":
         from druks.db import db_session

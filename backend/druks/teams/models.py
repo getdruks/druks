@@ -1,3 +1,5 @@
+from typing import TYPE_CHECKING
+
 import sqlalchemy
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -5,11 +7,13 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from druks.accounts.enums import AccountKind
 from druks.accounts.models import Account
-from druks.apps import App
-from druks.apps.loader import iter_apps
 from druks.core.models import Uuid7Pk
 from druks.exceptions import ValidationError
 from druks.models import Base, Model
+from druks.registry import iter_apps
+
+if TYPE_CHECKING:
+    from druks.apps import App
 
 team_members = sqlalchemy.Table(
     "team_members",
@@ -43,7 +47,7 @@ class Team(Model, Uuid7Pk, ordering=("name",)):
         return list(await session.scalars(sqlalchemy.select(cls).order_by(cls.name)))
 
     @classmethod
-    async def exists_for_app(cls, session: AsyncSession, app: type[App]) -> bool:
+    async def exists_for_app(cls, session: AsyncSession, app: "type[App]") -> bool:
         """Whether a team lists the app. A built-in app is never a team's app."""
         if app.builtin:
             return False

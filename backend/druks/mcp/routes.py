@@ -9,9 +9,9 @@ from druks.accounts.context import current_account_id
 from druks.accounts.dependencies import current_admin_account, current_session_account
 from druks.accounts.models import Account
 from druks.api.dependencies import SessionDep
-from druks.apps.registry import mcp_servers
 from druks.core.templates import render_page
 from druks.mcp import oauth
+from druks.mcp.catalog import mcp_server_registry
 from druks.mcp.constants import HEADER_NAME_PATTERN, SCOPE_PATTERN
 from druks.mcp.datastructures import McpServerAccess
 from druks.mcp.enums import Credential, IdentityMode
@@ -71,7 +71,7 @@ async def list_mcp_server_directory() -> list[dict]:
 
 @router.post("", response_model=McpServerResponse, dependencies=[Depends(current_admin_account)])
 async def add_mcp_server(session: SessionDep, body: CreateMcpServerRequest) -> McpServerResponse:
-    if body.name in mcp_servers:
+    if body.name in mcp_server_registry:
         raise HTTPException(
             status_code=409,
             detail=f"MCP server {body.name!r} is built-in; configure it instead of adding it.",
@@ -106,7 +106,7 @@ async def add_mcp_server(session: SessionDep, body: CreateMcpServerRequest) -> M
 async def add_directory_mcp_server(
     session: SessionDep, name: str = Body(embed=True)
 ) -> McpServerResponse:
-    if name in mcp_servers:
+    if name in mcp_server_registry:
         raise HTTPException(
             status_code=409,
             detail=f"MCP server {name!r} is built-in; configure it instead of adding it.",
@@ -208,7 +208,7 @@ async def list_mcp_server_connections(session: SessionDep, name: str) -> list[Va
 
 @router.delete("/{name}", status_code=204, dependencies=[Depends(current_admin_account)])
 async def remove_mcp_server(session: SessionDep, name: str) -> None:
-    if name in mcp_servers:
+    if name in mcp_server_registry:
         # A built-in is druks-owned — removing it would silently drop it from
         # every agent VM; disable it instead if unwanted.
         raise HTTPException(

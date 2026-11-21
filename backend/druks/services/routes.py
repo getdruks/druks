@@ -5,8 +5,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from druks.accounts.context import current_account_id
 from druks.accounts.dependencies import current_admin_account, current_session_account
 from druks.api.dependencies import SessionDep
-from druks.apps.registry import services
 from druks.core.templates import render_page
+from druks.registry import service_registry
 from druks.secrets.datastructures import Audience
 from druks.secrets.enums import SecretKind
 from druks.secrets.models import VaultSecret
@@ -31,7 +31,7 @@ async def list_services(session: SessionDep) -> list[ServiceResponse]:
     entries = []
     managed_by = get_settings().manager.name
     account_connections = await VaultSecret.list_owned_by(session, current_account_id.get())
-    for service in services.all():
+    for service in service_registry.all():
         audience = Audience.service(service.slug)
         row = await VaultSecret.lookup(session, service.secret_kind, audience)
         connections = [
@@ -62,7 +62,7 @@ async def list_services(session: SessionDep) -> list[ServiceResponse]:
     dependencies=[Depends(current_admin_account)],
 )
 async def connect_service(slug: str, payload: dict[str, str]) -> ServiceResponse:
-    service = services.get(slug)
+    service = service_registry.get(slug)
     if not service:
         raise HTTPException(status_code=404, detail=f"No service {slug!r}.")
     try:
@@ -74,7 +74,7 @@ async def connect_service(slug: str, payload: dict[str, str]) -> ServiceResponse
 
 @router.delete("/{slug}", status_code=204, dependencies=[Depends(current_admin_account)])
 async def disconnect_service(session: SessionDep, slug: str) -> None:
-    service = services.get(slug)
+    service = service_registry.get(slug)
     if not service:
         raise HTTPException(status_code=404, detail=f"No service {slug!r}.")
     if service.is_configured():
@@ -102,7 +102,7 @@ async def connect_oauth_service(
 async def _start_oauth_service(
     session: AsyncSession, slug: str, *, connection: str = "", next: str = "", install: bool = False
 ) -> RedirectResponse:
-    service = services.get(slug)
+    service = service_registry.get(slug)
     if not service or not service.Authentication.get_client():
         raise OauthPageError(f"No OAuth service {slug!r}.", status_code=404)
     authorization_endpoint = await service.Authentication.get_install_endpoint() if install else ""
@@ -173,7 +173,7 @@ async def oauth_callback(
     except OauthExchangeError as exchange_error:
         raise OauthPageError(str(exchange_error), status_code=400) from exchange_error
     provider = pending["provider"]
-    service = services.get(provider)
+    service = service_registry.get(provider)
     if not service:
         # A state begun by another door (an MCP connect) finishes at its own callback.
         raise OauthPageError(f"No OAuth service {provider!r}.", status_code=400)

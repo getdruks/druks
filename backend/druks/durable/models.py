@@ -25,8 +25,6 @@ from sqlalchemy.orm import Mapped, column_property, mapped_column, relationship,
 
 from druks import ui
 from druks.accounts.models import Account
-from druks.apps.loader import get_app
-from druks.apps.registry import workflows
 from druks.chat.constants import POST_CANCEL_WORKFLOW
 from druks.core.models import Uuid7Pk
 from druks.database import get_session
@@ -54,6 +52,7 @@ from druks.harnesses.artifacts import normalize_token_usage
 from druks.models import Base
 from druks.notifications.constants import CLOSE_WORKFLOW
 from druks.notifications.models import Notification
+from druks.registry import get_app, get_workflow
 from druks.secrets.models import VaultSecret
 from druks.settings import get_settings
 from druks.signals import publish
@@ -62,6 +61,7 @@ from druks.ui.blocks import iter_parts, list_context_blocks
 
 if TYPE_CHECKING:
     from druks.sandbox.datastructures import AgentResult
+    from druks.workflows import Workflow
 
 
 class Run(Base):
@@ -144,6 +144,16 @@ class Run(Base):
     @property
     def is_running(self) -> bool:
         return self.state == RunState.RUNNING.value
+
+    @property
+    def workflow(self) -> "type[Workflow] | None":
+        """The workflow this run is of, or None when no loaded app declares its kind."""
+        return get_workflow(self.kind)
+
+    @property
+    def app(self) -> str:
+        """The name of the app that declares this run's workflow."""
+        return self.workflow.app
 
     def failure_message(self) -> str | None:
         # A crash leaves failure None by design; the terminal call's captured
@@ -437,7 +447,7 @@ class Run(Base):
                 (part.subject.subject_type, part.subject.subject_id)
                 for part in iter_parts(blocks, ui.SubjectStatus)
             ]
-            app = get_app(workflows.get(self.kind).app)
+            app = get_app(self.app)
             statuses = await app.get_statuses_for_subjects(self.session, subjects)
             resolved_ask["context"] = [
                 block.model_dump(mode="json", by_alias=True, context={"statuses": statuses})
@@ -456,7 +466,7 @@ class Run(Base):
             sections = [f"# {ask['label']}"]
             context = ask.get("context", "")
             if blocks := list_context_blocks(context):
-                app = get_app(workflows.get(self.kind).app)
+                app = get_app(self.app)
                 pages = app.pages()
                 # A link names a page or a subject of the run's app, and text needs its address.
                 for link in iter_parts(blocks, ui.Link):
@@ -920,7 +930,7 @@ class Artifact(Base, Uuid7Pk):
                 run=run.id,
                 kind=run.kind,
                 facts=facts,
-                app=workflows.get(run.kind).app,
+                app=run.app,
             )
         await session.flush()
 

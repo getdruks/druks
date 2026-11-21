@@ -18,8 +18,6 @@ from pydantic_core import to_json
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from druks.accounts.enums import AccountKind
-from druks.apps.loader import get_app
-from druks.apps.registry import services
 from druks.durable.engine import step_session
 from druks.durable.models import Run
 from druks.files.constants import MAX_UPLOAD_BYTES
@@ -39,6 +37,7 @@ from druks.notifications.models import Notification
 from druks.notifications.outbox import close_questions, queue_send
 from druks.prompts import render_prompt
 from druks.redis import get_client
+from druks.registry import get_app, service_registry
 from druks.sandbox.client import sandbox_client
 from druks.sandbox.constants import SANDBOX_HOST_LEASE_SECONDS
 from druks.sandbox.datastructures import McpServer
@@ -168,14 +167,18 @@ async def list_sign_ins(session: AsyncSession, account_id: str) -> list[dict]:
     sign_ins = {}
     for access in await mcp_models.McpServer.list_access(session, account_id):
         if access.is_enabled:
+            if access.service:
+                title = service_registry.get(access.service).title
+            else:
+                title = access.name
             sign_ins[access.service or access.name] = {
-                "title": services.get(access.service).title if access.service else access.name,
+                "title": title,
                 "host": "",
                 "credential": access.credential,
                 "connected": access.has_token,
                 "profile": {},
             }
-    for service in services.all():
+    for service in service_registry.all():
         if service.host and service.Authentication.has_sign_in():
             rows = await VaultSecret.list_account_connections(
                 session, Audience.service(service.slug), account_id
@@ -395,7 +398,7 @@ async def deliver_pending(session: AsyncSession, conversation: Conversation) -> 
                 mcp_servers, secret_refs = await Workspace.get_all_mcp_servers(
                     session, None, conversation.account_id, skip_unauthenticated=True
                 )
-                for service in services.all():
+                for service in service_registry.all():
                     if service.host and service.Authentication.has_sign_in():
                         sign_in_rows = await VaultSecret.list_account_connections(
                             session, Audience.service(service.slug), conversation.account_id

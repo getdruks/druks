@@ -4,11 +4,10 @@ from types import SimpleNamespace
 import pytest
 from conftest import IDENTITY_HEADER, connect_service
 from druks.accounts.models import Account, PersonalAccessToken
-from druks.apps.registry import mcp_servers
 from druks.db import db_session
 from druks.harnesses.claude import ClaudeHarness
 from druks.harnesses.codex import CodexHarness
-from druks.mcp.catalog import load_mcp_catalog
+from druks.mcp.catalog import load_mcp_catalog, mcp_server_registry
 from druks.mcp.constants import BEARER_HEADER, BROWSER_SERVER_NAME, DRUKS_SERVER_NAME
 from druks.mcp.exceptions import (
     InvalidCatalogError,
@@ -649,12 +648,12 @@ def test_load_catalog_tolerates_wrapper_and_is_idempotent(tmp_path, registry_sta
     # are skipped, not collided.
     load_mcp_catalog(path)
 
-    assert mcp_servers.get("stripe_test")["url"] == "https://mcp.stripe.test/"
+    assert mcp_server_registry.get("stripe_test")["url"] == "https://mcp.stripe.test/"
 
 
 def test_load_catalog_accepts_a_bare_map(tmp_path, registry_state):
     load_mcp_catalog(_write_catalog(tmp_path, {"bare_test": _static_entry("https://x/")}))
-    assert "bare_test" in mcp_servers
+    assert "bare_test" in mcp_server_registry
 
 
 def test_load_catalog_collides_on_a_changed_definition_and_mounts_nothing(tmp_path, registry_state):
@@ -669,8 +668,8 @@ def test_load_catalog_collides_on_a_changed_definition_and_mounts_nothing(tmp_pa
 
     # The failed load is atomic: the original definition survives and the valid
     # sibling entry (listed before the colliding one) was not registered.
-    assert mcp_servers.get("dup_test")["url"] == "https://a/"
-    assert "other_test" not in mcp_servers
+    assert mcp_server_registry.get("dup_test")["url"] == "https://a/"
+    assert "other_test" not in mcp_server_registry
 
 
 def test_load_catalog_fails_loudly_on_bad_content(tmp_path, registry_state):

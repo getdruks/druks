@@ -19,7 +19,6 @@ from druks.api.schemas import (
     RetryRunResponse,
     RunDetailResponse,
 )
-from druks.apps.registry import workflows
 from druks.durable.enums import RunState, WorkflowEvent
 from druks.durable.models import Run
 from druks.durable.reads import get_run_response
@@ -127,7 +126,7 @@ async def cancel_run(
             run=run.id,
             kind=run.kind,
             facts={"failure": reason},
-            app=workflows.get(run.kind).app,
+            app=run.app,
         )
     return CancelRunResponse(run=run.id, result="cancelled")
 

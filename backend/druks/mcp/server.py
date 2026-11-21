@@ -23,10 +23,9 @@ from druks.accounts.exceptions import InvalidPatError
 from druks.accounts.models import Account, PersonalAccessToken
 from druks.api.exceptions import AgentApiError, InvalidToolArguments, ToolNotAvailable
 from druks.apps.exceptions import AppBotError
-from druks.apps.loader import get_app, iter_apps
-from druks.apps.registry import bots
 from druks.database import session_scope
 from druks.mcp.exceptions import InvalidAgentToolError
+from druks.registry import get_app, iter_apps, iter_bots
 
 _INSTRUCTIONS = """\
 Druks coordinates durable agent runs over shared work items. Start with
@@ -178,7 +177,7 @@ def _validate_agent_tools(api: FastAPI) -> None:
                 bot_operations[tag].add(route.operation_id)
     # The loader tags every route of an app with its name, so a Bot's app is mounted
     # exactly when its name is among the tags.
-    for bot in bots.all():
+    for bot in iter_bots():
         unknown_tools = sorted({*bot.user_tools, *bot.admin_tools} - bot_operations[bot.app])
         if bot.app in mounted_tags and unknown_tools:
             raise AppBotError(

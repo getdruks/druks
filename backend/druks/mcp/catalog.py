@@ -3,10 +3,15 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from druks.apps.registry import mcp_servers
 from druks.mcp.constants import NAME_PATTERN
 from druks.mcp.exceptions import InvalidCatalogError
 from druks.mcp.schemas import CatalogEntry
+from druks.registry import Registry
+
+# The MCP server definitions of the deployment's catalog. A startup step loads
+# them, and an operator's row in the database enables each one and holds its
+# token. They are dicts, not classes that register themselves.
+mcp_server_registry = Registry("mcp_servers", key=lambda server: server["name"])
 
 
 def load_mcp_catalog(path: Path) -> None:
@@ -53,11 +58,11 @@ def load_mcp_catalog(path: Path) -> None:
                 "enabled": parsed.enabled,
             }
         )
-    to_register = [d for d in definitions if mcp_servers.get(d["name"]) != d]
-    collisions = sorted(d["name"] for d in to_register if d["name"] in mcp_servers)
+    to_register = [d for d in definitions if mcp_server_registry.get(d["name"]) != d]
+    collisions = sorted(d["name"] for d in to_register if d["name"] in mcp_server_registry)
     if collisions:
         raise InvalidCatalogError(
             path, f"already registered with a different definition: {', '.join(collisions)}"
         )
     for definition in to_register:
-        mcp_servers.register(definition)
+        mcp_server_registry.register(definition)

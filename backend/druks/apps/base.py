@@ -11,18 +11,15 @@ from typing import TYPE_CHECKING, Annotated, Any, ClassVar
 from pydantic import BaseModel, Field, SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from druks.db import db_session
+# Every layer imports druks.apps, so this module loads no models. A method that
+# reads the database imports what it needs when it runs.
 from druks.exceptions import ObjectNotFound
-from druks.models import StoredSubject
 from druks.redis import get_client
+from druks.registry import Registry, autodiscover, register_app
 from druks.settings import get_settings
 from druks.ui.exceptions import PageContractError, PageReadError, PageRouteError
-from druks.user_settings.models import SettingsOverride
 
 from .exceptions import AppRouteConflict, AppSubjectContractError, SettingsDeclarationError
-from .registry import agents as agent_registry
-from .registry import autodiscover
-from .registry import workflows as workflow_registry
 from .schemas import Operation
 from .settings import (
     coerce_setting_value,
@@ -35,13 +32,13 @@ from .settings import (
 if TYPE_CHECKING:
     from fastapi import APIRouter
 
-    from druks.agents import Agent, Bot
+    from druks.agents import Bot
     from druks.doctor import CheckResult
     from druks.durable.datastructures import Subject
     from druks.durable.schemas import SubjectStatus, SubjectSummary
+    from druks.models import StoredSubject
     from druks.ui import Page
     from druks.ui.page import PageRoute
-    from druks.workflows import Workflow
 
     # A check the app owns returns a verdict on one of its own preconditions
     # using the same ``CheckResult`` shape as a core check; sync or async.
@@ -72,6 +69,24 @@ class AppSettings(BaseModel):
         must fix. Advisory at rest, blocking on save: the settings form rejects
         a save that would create them; doctor reports the ones already stored."""
         return {}
+
+
+class _OwnRegistry:
+    """A registry that each App class has for itself."""
+
+    def __init__(self, name: str, *, key: Callable[[Any], str]) -> None:
+        self._name = name
+        self._key = key
+
+    def __set_name__(self, owner: type, attribute: str) -> None:
+        self._attribute = f"_{attribute}"
+
+    def __get__(self, instance: object, owner: type) -> Registry:
+        # Python names the attributes of a class before it runs __init_subclass__,
+        # so the first reader makes the class its registry.
+        if self._attribute not in owner.__dict__:
+            setattr(owner, self._attribute, Registry(self._name, key=self._key))
+        return owner.__dict__[self._attribute]
 
 
 class App:
@@ -129,6 +144,12 @@ class App:
     # checks, isolating a raising one under this app's name so it can't hide a
     # core failure. Default none; declare a list to add them.
     checks: "ClassVar[list[Check]]" = []
+    # What this app's code declares. Each thing files itself here when Python
+    # defines it.
+    workflows = _OwnRegistry("workflows", key=lambda cls: cls.kind)
+    agents = _OwnRegistry("agents", key=lambda agent: agent.id)
+    page_routes = _OwnRegistry("pages", key=lambda page_route: page_route.key)
+    browser_sessions = _OwnRegistry("browser_sessions", key=lambda session: session.name)
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
@@ -149,23 +170,23 @@ class App:
         cls.table_prefix = f"{name}_"
         if "package" not in cls.__dict__:
             cls.package = cls.__module__.rpartition(".")[0]
-        if cls.package:
-            # Claimed here so the package's models and workflows resolve their app
-            # as they define. Cycle: the loader is built on App.
-            from .loader import register_workflow_package
-
-            register_workflow_package(cls.package, name)
         declared = cls.__dict__.get("Settings")
         if declared:
             if not isinstance(declared, type) or not issubclass(declared, AppSettings):
                 raise SettingsDeclarationError(f"{cls.__name__}.Settings must subclass AppSettings")
             validate_settings_declaration(declared)
             cls.settings_model = declared
+        # Filed here so the package's models, workflows and pages find their app
+        # as Python defines them.
+        register_app(cls)
 
     @classmethod
     async def settings(cls) -> AppSettings:
         """The app's settings, resolved through the override store keyed by app
         name. Raises if the app declares no ``Settings``."""
+        from druks.db import db_session
+        from druks.user_settings.models import SettingsOverride
+
         model = cls.settings_model
         if not model:
             raise TypeError(f"app {cls.name!r} declares no Settings")
@@ -185,6 +206,9 @@ class App:
     async def override_setting(cls, field: str, value: Any) -> None:
         """An operator's override for one declared setting; ``None`` clears it back
         to the declared default. Raises ``ValueError`` so the API layer can 422 it."""
+        from druks.db import db_session
+        from druks.user_settings.models import SettingsOverride
+
         model = cls.settings_model
         if not model or field not in model.model_fields:
             raise ValueError(f"Unknown {cls.name} setting {field!r}")
@@ -224,22 +248,6 @@ class App:
         return f"druks:app:{cls.name}:{key}"
 
     @classmethod
-    def agents(cls) -> "list[Agent]":
-        """The agents declared on this app class — their ``app`` field is
-        stamped in ``__set_name__``. Registry order is id-sorted."""
-        return [agent for agent in agent_registry.all() if agent.app == cls.name]
-
-    @classmethod
-    def workflows(cls) -> "list[type[Workflow]]":
-        """The workflows living in this app's package."""
-        prefix = cls.package + "."
-        return [
-            workflow
-            for workflow in workflow_registry.all()
-            if workflow.__module__.startswith(prefix)
-        ]
-
-    @classmethod
     async def get_statuses_for_subjects(
         cls, session: AsyncSession, identities: list[tuple[str, str]]
     ) -> "dict[tuple[str, str], SubjectStatus]":
@@ -247,7 +255,9 @@ class App:
         of this app alone."""
         from druks.durable import reads
 
-        return await reads.get_statuses_for_subjects(session, identities, workflows=cls.workflows())
+        return await reads.get_statuses_for_subjects(
+            session, identities, workflows=cls.workflows.all()
+        )
 
     @classmethod
     def subjects(cls) -> "list[type[Subject] | type[StoredSubject]]":
@@ -258,7 +268,7 @@ class App:
         from druks.durable.datastructures import Subject
 
         stub = Subject.list_summaries.__func__
-        declared = {workflow.subject for workflow in cls.workflows() if workflow.subject}
+        declared = {workflow.subject for workflow in cls.workflows.all() if workflow.subject}
         for subject_class in declared:
             if subject_class.subject_type in RESERVED_SEGMENTS:
                 raise AppSubjectContractError(
@@ -282,7 +292,7 @@ class App:
         from druks.ui.page import list_pages_for_app
 
         cls.discover()
-        return list_pages_for_app(cls.name, cls.package)
+        return list_pages_for_app(cls)
 
     @classmethod
     def navigation_pages(cls) -> "list[PageRoute]":
@@ -579,6 +589,7 @@ class App:
         work on each of its subjects stands, from one read."""
         from fastapi.responses import JSONResponse
 
+        from druks.db import db_session
         from druks.ui import Action, EmptyState, GateControls, Link, Page, SubjectStatus
 
         controls = []
@@ -651,7 +662,7 @@ class App:
             # The loader gates this router on the app, so a call of another app, or of
             # an app that is not installed, answers as unknown.
             call = await AgentCall.get(session, request.path_params["call_id"])
-            workflow = workflow_registry.get(call.run.kind)
+            workflow = call.run.workflow
             if not workflow or workflow.app != cls.name:
                 raise AgentCallNotFound(call.id)
 
@@ -768,7 +779,7 @@ class App:
         module = subject_class.__module__
         if module == cls.package or module.startswith(cls.package + "."):
             return await subject_class.list_summaries(account_id)
-        subjects = await subject_class.list_open(workflows=cls.workflows())
+        subjects = await subject_class.list_open(workflows=cls.workflows.all())
         return [subject.get_summary() for subject in subjects]
 
     @classmethod
@@ -802,7 +813,7 @@ class App:
                 session,
                 subject_type,
                 [summary.id for summary in summaries],
-                workflows=cls.workflows(),
+                workflows=cls.workflows.all(),
             )
             return SubjectList(
                 rows=[

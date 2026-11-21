@@ -11,8 +11,8 @@ from starlette.routing import compile_path
 from druks.accounts.context import Actor, current_actor
 from druks.accounts.exceptions import InvalidAssertionError
 from druks.accounts.jwt import verify_claims
-from druks.apps.registry import services, webhooks
 from druks.exceptions import PermissionDenied
+from druks.registry import service_registry, webhook_registry
 from druks.settings import Settings
 
 from .deliveries import mark_delivery, release_delivery
@@ -70,7 +70,7 @@ class Webhook:
         # FastAPI route — but we compile with a leading slash so the
         # regex matches the same shape the router hands us.
         cls.pattern, _, _ = compile_path("/" + cls.path)
-        webhooks.register(cls)
+        webhook_registry.register(cls)
 
     def __init__(self, request: Request, kwargs: dict[str, Any], settings: Settings) -> None:
         self.request = request
@@ -179,7 +179,7 @@ class Webhook:
         self.raw_body = await self.request.body()
 
         # The manager forwards a managed service's events with its own signature.
-        service = services.get(self.provider)
+        service = service_registry.get(self.provider)
         if service and service.is_managed():
             authentic = await self.request_is_manager_signed()
         else:

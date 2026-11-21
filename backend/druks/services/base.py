@@ -10,11 +10,10 @@ from pydantic.fields import FieldInfo
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from druks.apps.base import NAME_RE
-from druks.apps.loader import iter_apps
-from druks.apps.registry import services
 from druks.apps.settings import field_kind, field_multiline
 from druks.db import db_session
 from druks.mcp.models import McpServer
+from druks.registry import iter_apps, service_registry
 from druks.secrets.constants import TOKEN_MIN_TTL_SECONDS
 from druks.secrets.datastructures import Audience
 from druks.secrets.enums import SecretKind
@@ -278,7 +277,7 @@ class Service:
             if isinstance(value, type) and issubclass(value, Resource):
                 value.service = cls
                 cls.resources[value.slug] = value
-        services.register(cls)
+        service_registry.register(cls)
 
     @classmethod
     async def verify(cls, settings: Any) -> dict[str, Any]:
@@ -313,7 +312,7 @@ class Service:
     async def get(cls) -> VaultSecret:
         """The service's vault row. ``ServiceDisabledError`` when druks.toml disables the
         service, ``ServiceNotConnectedError`` when nobody connected it."""
-        if cls.slug not in services:
+        if cls.slug not in service_registry:
             raise ServiceDisabledError(cls.slug)
         if row := await VaultSecret.lookup(
             db_session(), cls.secret_kind, Audience.service(cls.slug)
@@ -357,7 +356,7 @@ class Service:
         for slug, entry in configuration.services.items():
             if not entry.get("enabled", True):
                 continue
-            service = services.get(slug)
+            service = service_registry.get(slug)
             if not service:
                 # A manager can write the table before the app release that reads it.
                 logger.info(

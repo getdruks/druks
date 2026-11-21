@@ -1,7 +1,7 @@
 from druks.apps.loader import load_app
-from druks.apps.registry import agents, browser_sessions
 from druks.browser import BrowserClient
 from druks.models import Base
+from druks.registry import get_agent, get_browser_session
 
 _PACKAGE = "druks_field_notes"
 
@@ -18,7 +18,7 @@ def test_discovery_registers_the_tables_and_capabilities():
     app = load_app("field_notes")
 
     assert "field_notes_note" in Base.metadata.tables
-    assert [workflow.__name__ for workflow in app.workflows()] == ["Summarize", "Survey"]
+    assert [workflow.__name__ for workflow in app.workflows.all()] == ["Summarize", "Survey"]
 
     prefixes = {router.prefix for router in app.routers()}
     assert prefixes >= {"/notes", "/transcripts/{call_id}", "/note"}
@@ -28,20 +28,20 @@ def test_discovery_registers_the_agent_hooks():
     load_app("field_notes")
     from druks_field_notes.hooks import keep_the_checkout
 
-    assert agents.get("field_notes.survey")._after_agent == [keep_the_checkout]
+    assert get_agent("field_notes.survey")._after_agent == [keep_the_checkout]
 
 
 def test_boot_registers_the_read_only_browser_session():
     app = load_app("field_notes")
 
-    assert browser_sessions.get("field_notes.atlas") is app.atlas
+    assert get_browser_session("field_notes.atlas") is app.atlas
     assert app.atlas.read_only
 
 
 def test_boot_registers_the_browser_agent():
     app = load_app("field_notes")
 
-    identify = agents.get("field_notes.identify")
+    identify = get_agent("field_notes.identify")
     assert identify.browser is app.atlas
     assert identify.browser_client == BrowserClient.PINCHTAB
 

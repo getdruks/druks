@@ -5,6 +5,7 @@ import pytest
 from dbos import DBOS
 from druks.accounts.models import Account
 from druks.agents import Agent, AgentOutput
+from druks.apps import App
 from druks.durable.models import Run
 from druks.events.models import Event
 from druks.events.routes import list_feed
@@ -22,7 +23,14 @@ SPEND_CAP_MESSAGE = (
     "You hit your spend cap set by the owner of your workspace. "
     "Ask an owner to increase your spend cap to continue."
 )
-FAILURE_PROBE = Agent(id="activity_failure_probe", contract=AgentOutput)
+
+
+class Failures(App):
+    name = "failures"
+    probe = Agent(contract=AgentOutput)
+
+
+FAILURE_PROBE = Failures.probe
 
 
 @pytest.mark.parametrize("stream", ["stdout", "stderr"])

@@ -20,8 +20,7 @@ from sqlalchemy.orm import Session
 
 from .accounts.models import Account
 from .agents import Agent
-from .apps.loader import iter_apps, register_apps
-from .apps.registry import _ROLES, agents, autodiscover, services, webhooks, workflows
+from .apps.loader import load_installed_apps
 from .browser.sessions import BrowserSession
 from .chat.bridge import Bridge
 from .chat.channels.base import Channel
@@ -29,6 +28,15 @@ from .core.services import Github
 from .database import create_async_engine_from_url, create_engine_from_url, session_scope
 from .harnesses.providers import get_providers
 from .harnesses.registry import get_harnesses
+from .registry import (
+    _ROLES,
+    autodiscover,
+    iter_agents,
+    iter_apps,
+    iter_workflows,
+    service_registry,
+    webhook_registry,
+)
 from .sandbox.client import sandbox_client
 from .sandbox.exceptions import TemplateNotFound
 from .sandbox.templates import get_declared_sandboxes
@@ -71,7 +79,7 @@ async def check_service_identities(settings: Settings) -> list[CheckResult]:
     try:
         async with _check_engine(settings) as engine, session_scope(engine):
             results: list[CheckResult] = []
-            for service in services.all():
+            for service in service_registry.all():
                 name = f"{service.slug}_identity"
                 if await service.is_connected():
                     row = await service.get()
@@ -489,18 +497,17 @@ def check_capability_modules(settings: Settings) -> CheckResult:
     """``autodiscover`` imports only leaf modules named for their role, so a
     capability under another filename never registers. Import each off-canon
     leaf and flag it."""
-    by_role = {
-        "workflows": workflows,
-        "webhooks": webhooks,
-        "agents": agents,
-        "services": services,
-    }
     packages = [app.package for app in iter_apps()]
     strays: list[str] = []
     for package in packages:
         # The canonical walk first, so an off-canon import below cannot mask a stray.
         autodiscover(package)
-        discovered = {role: set(registry._items) for role, registry in by_role.items()}
+        discovered = {
+            "workflows": {workflow.kind for workflow in iter_workflows()},
+            "webhooks": set(webhook_registry._items),
+            "agents": {agent.id for agent in iter_agents()},
+            "services": set(service_registry._items),
+        }
         # Tasks register straight into DBOS's own map — it is their registry.
         discovered["tasks"] = set(_get_or_create_dbos_registry().workflow_info_map)
         package_module = importlib.import_module(package)
@@ -651,9 +658,9 @@ def main(*, sandbox: bool = False) -> int:
         return 1
     configure_settings(settings)
     try:
-        register_apps()
+        load_installed_apps()
     except Exception as error:  # noqa: BLE001 — an app's own import can raise anything
-        print(f"✗  register_apps           {error}")
+        print(f"✗  load_installed_apps     {error}")
         print()
         print("doctor: could not load the installed apps. Fix them and re-run.")
         return 1

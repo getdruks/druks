@@ -154,9 +154,9 @@ def main() -> None:
     druks.settings.configure_settings(settings)
     druks.settings.setup_logging(settings)
     druks.settings.ensure_data_dirs(settings)
-    from .apps.loader import register_apps
+    from .apps.loader import load_installed_apps
 
-    register_apps()
+    load_installed_apps()
 
     if args.command == "init-db":
         run_migrations(settings.database_url.get_secret_value())
@@ -169,9 +169,9 @@ def main() -> None:
     if args.command == "sandboxes":
         import asyncio
 
-        from .apps.loader import iter_apps
         from .browser.sessions import BrowserSession
         from .chat.bridge import Bridge
+        from .registry import iter_apps
         from .sandbox.templates import prepare_sandbox_templates
 
         for app in iter_apps():

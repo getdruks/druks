@@ -8,9 +8,9 @@ from urllib.parse import parse_qsl, urlparse
 import httpx
 import pytest
 from druks.accounts.models import Account
-from druks.apps.registry import mcp_servers
 from druks.db import db_session
 from druks.mcp import oauth
+from druks.mcp.catalog import mcp_server_registry
 from druks.mcp.enums import IdentityMode
 from druks.mcp.exceptions import (
     GrantRefreshError,
@@ -114,7 +114,7 @@ def auth_server(monkeypatch):
 
 
 def _register_oauth_server(name: str = _NAME, enabled: bool = True) -> None:
-    mcp_servers.register(
+    mcp_server_registry.register(
         {
             "name": name,
             "url": _SERVER_URL,

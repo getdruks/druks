@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock
 import pytest
 from druks.accounts.enums import AccountKind
 from druks.accounts.models import Account
-from druks.apps.registry import channels, services
 from druks.chat import service
 from druks.chat.constants import DELIVERY_FAILED_MESSAGE
 from druks.chat.enums import MessageRole, MessageState
@@ -15,6 +14,7 @@ from druks.database import session_scope
 from druks.files.datastructures import File
 from druks.files.models import FileRecord
 from druks.harnesses.exceptions import HarnessNotConnectedError
+from druks.registry import channel_registry, service_registry
 from druks.secrets.datastructures import Audience
 from druks.secrets.models import VaultSecret
 from druks.settings import Urls
@@ -36,13 +36,13 @@ async def test_a_failed_delivery_ends_the_pending_messages_and_replies_on_a_live
     if source != "web":
         connection = await VaultSecret.store(
             druks_db,
-            services.get(source).secret_kind,
+            service_registry.get(source).secret_kind,
             Audience.service(source),
             identity={},
             secrets={},
         )
         conversation.connection_id = connection.id
-        monkeypatch.setattr(channels.get(source), "send_reply", send_reply)
+        monkeypatch.setattr(channel_registry.get(source), "send_reply", send_reply)
     await druks_db.commit()
 
     async def run_inline(options, function, *args):
@@ -100,7 +100,7 @@ async def test_a_turn_with_no_connected_provider_names_the_fix_to_the_operator_s
     conversation.source = "slack"
     connection = await VaultSecret.store(
         druks_db,
-        services.get("slack").secret_kind,
+        service_registry.get("slack").secret_kind,
         Audience.service("slack"),
         identity={},
         secrets={},
@@ -121,7 +121,7 @@ async def test_a_turn_with_no_connected_provider_names_the_fix_to_the_operator_s
     monkeypatch.setattr(
         service, "get_settings", lambda: SimpleNamespace(urls=Urls(endpoint=endpoint))
     )
-    monkeypatch.setattr(channels.get("slack"), "send_reply", AsyncMock())
+    monkeypatch.setattr(channel_registry.get("slack"), "send_reply", AsyncMock())
 
     await inspect.unwrap(service.deliver)(conversation.id)
 

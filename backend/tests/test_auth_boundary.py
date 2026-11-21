@@ -1,4 +1,5 @@
 import pytest
+from conftest import IDENTITY_HEADER, header_client
 from druks.accounts.dependencies import (
     current_account,
     current_account_or_setup,
@@ -8,8 +9,12 @@ from druks.accounts.dependencies import (
 )
 from druks.accounts.models import Account
 from druks.api.server import app
-from druks.apps.loader import iter_apps
+from druks.chat.constants import CONVERSATION_HEADER
+from druks.chat.dependencies import current_conversation
+from druks.chat.models import Conversation
 from druks.harnesses.providers import get_providers
+from druks.mcp.server import _TOOL_TAGS
+from druks.registry import iter_apps
 from fastapi.routing import APIRoute, _IncludedRouter
 
 # Every /api path allowed to skip the identity gate; additions are deliberate.
@@ -179,6 +184,12 @@ def _gated_by(route, gate) -> bool:
     )
 
 
+def _calls(dependant):
+    yield dependant.call
+    for dependency in dependant.dependencies:
+        yield from _calls(dependency)
+
+
 def _is_session_only(route) -> bool:
     return any((method, route.path) in SESSION_ONLY_API_ROUTES for method in route.methods)
 
@@ -245,6 +256,32 @@ async def test_provider_list_answers_before_an_account_exists(druks_db, druks_cl
     assert by_id["anthropic"]["billingOptions"] == ["api_key", "subscription"]
     assert by_id["openai"]["billingOptions"] == ["api_key", "subscription"]
     assert not await Account.list_operators(druks_db)
+
+
+def test_every_agent_tool_route_checks_the_conversation_header(api_routes):
+    tools = [route for route in api_routes if _TOOL_TAGS & set(route.tags)]
+    assert tools
+    for route in tools:
+        assert current_conversation in _calls(route.dependant), route.path
+
+
+async def test_a_conversation_of_another_account_is_refused(druks_db, tmp_path):
+    owner = await Account.get_or_create(druks_db, "owner@example.com")
+    other = await Account.get_or_create(druks_db, "other@example.com")
+    conversation = await Conversation.create(druks_db, account_id=other.id, body="Hi")
+    headers = {IDENTITY_HEADER: owner.username, CONVERSATION_HEADER: conversation.id}
+
+    with header_client(tmp_path) as client:
+        refusals = [
+            client.get(path, headers=headers).json()
+            for path in ("/api/notifications", "/api/field_notes/notes")
+        ]
+
+    refusal = {
+        "error": "HTTP_403",
+        "detail": f"Conversation {conversation.id} is not this account's.",
+    }
+    assert refusals == [refusal] * 2
 
 
 def test_capability_management_is_session_only(api_routes):

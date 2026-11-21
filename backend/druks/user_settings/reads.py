@@ -27,7 +27,7 @@ async def list_agent_settings(
     overrides: dict[str, SettingsOverride],
 ) -> list[AgentSettingResponse]:
     """The rows of the app's Agents tab: its agents, and then its Bot."""
-    declared = [*app.agents(), app.bot] if app.bot else app.agents()
+    declared = [*app.agents.all(), app.bot] if app.bot else app.agents.all()
     return [
         await get_agent_setting(session, agent, settings=settings, overrides=overrides)
         for agent in declared
@@ -163,7 +163,7 @@ async def get_app_settings(
         # schedule to retune.
         workflows=[
             await get_workflow_settings(session, workflow, overrides=overrides)
-            for workflow in app.workflows()
+            for workflow in app.workflows.all()
             if workflow.Settings.model_fields or workflow.every
         ],
         settings=[

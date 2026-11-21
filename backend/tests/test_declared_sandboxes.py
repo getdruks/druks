@@ -48,8 +48,8 @@ def test_get_declared_sandboxes_deduplicates_by_content(monkeypatch):
         kind = "notes.second"
         sandbox = other
 
-    app = SimpleNamespace(workflows=lambda: [First, Second])
-    monkeypatch.setattr(templates, "loader", SimpleNamespace(iter_apps=lambda: [app]))
+    app = SimpleNamespace(workflows=SimpleNamespace(all=lambda: [First, Second]))
+    monkeypatch.setattr(templates, "iter_apps", lambda: [app])
     monkeypatch.setattr(Sandbox, "read_setup_script", lambda self: b"setup")
 
     declared = templates.get_declared_sandboxes()

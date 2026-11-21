@@ -11,14 +11,14 @@ from zoneinfo import ZoneInfo
 import httpx
 import pytest
 from conftest import IDENTITY_HEADER, bind_ambient_session, connect_service
+from druks import registry
 from druks.accounts.dependencies import current_account, resolve_single_operator
 from druks.accounts.enums import AccountKind
 from druks.accounts.models import Account, PersonalAccessToken
 from druks.agents import Bot, BotUser
 from druks.api.dependencies import request_session
-from druks.apps import App, loader
+from druks.apps import App
 from druks.apps.exceptions import AppBotError
-from druks.apps.registry import bots
 from druks.chat import service
 from druks.chat.app import Chat
 from druks.chat.bots import routes as bot_routes
@@ -36,6 +36,7 @@ from druks.chat.constants import (
     TRANSCRIPTION_FAILED_MESSAGE,
     VOICE_NOTE_MARKER,
 )
+from druks.chat.dependencies import current_conversation
 from druks.chat.enums import (
     BotAccess,
     ConversationSource,
@@ -72,9 +73,7 @@ GROUP = "120363000000000001@g.us"
 
 
 @pytest.fixture
-def helpdesk(monkeypatch, request):
-    declared = dict(bots._items)
-
+def helpdesk(monkeypatch, request, declared_apps):
     class Helpdesk(App):
         name = "helpdesk"
         bot = Bot(
@@ -84,11 +83,9 @@ def helpdesk(monkeypatch, request):
             admin_tools=("list_requests",),
         )
 
-    installed = loader.iter_apps()
-    monkeypatch.setattr(loader, "iter_apps", lambda: [*installed, Helpdesk])
+    installed = registry.iter_apps()
+    monkeypatch.setattr(registry, "iter_apps", lambda: [*installed, Helpdesk])
     yield Helpdesk
-    bots._items.clear()
-    bots._items.update(declared)
 
 
 @pytest.fixture
@@ -1427,6 +1424,7 @@ async def test_a_reminder_sends_in_the_calling_chat_unless_told_where(
         status_code=201,
         response_model=ReminderResponse,
         response_model_by_alias=True,
+        dependencies=[Depends(current_conversation)],
     )
     settings = SimpleNamespace(timezone="Europe/Madrid")
     monkeypatch.setattr("druks.chat.models.get_settings", lambda: settings)
@@ -1518,6 +1516,7 @@ async def test_an_operator_on_a_private_number_starts_a_chat_their_reminders_rea
         status_code=201,
         response_model=ConversationResponse,
         response_model_by_alias=True,
+        dependencies=[Depends(current_conversation)],
     )
     connection = await link(
         druks_db, await bot_account(druks_db), app="chat", access=BotAccess.PRIVATE

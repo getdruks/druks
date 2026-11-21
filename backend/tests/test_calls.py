@@ -9,11 +9,11 @@ from unittest.mock import AsyncMock
 
 import pytest
 from conftest import bind_ambient_session, connect_service
+from druks import registry
 from druks.accounts.enums import AccountKind
 from druks.accounts.models import Account, PersonalAccessToken
 from druks.agents import Bot
-from druks.apps import App, loader
-from druks.apps.registry import bots
+from druks.apps import App
 from druks.chat import service
 from druks.chat.bots import service as bot_service
 from druks.chat.channels.calls import webhooks
@@ -35,18 +35,14 @@ CALLS_EVENTS = "/_external/calls/events/"
 
 
 @pytest.fixture
-def helpdesk(monkeypatch):
-    declared = dict(bots._items)
-
+def helpdesk(monkeypatch, declared_apps):
     class Helpdesk(App):
         name = "helpdesk"
         bot = Bot(prompt="helpdesk/bot.md", user_tools=("get_ticket",))
 
-    installed = loader.iter_apps()
-    monkeypatch.setattr(loader, "iter_apps", lambda: [*installed, Helpdesk])
+    installed = registry.iter_apps()
+    monkeypatch.setattr(registry, "iter_apps", lambda: [*installed, Helpdesk])
     yield Helpdesk
-    bots._items.clear()
-    bots._items.update(declared)
 
 
 @pytest.fixture

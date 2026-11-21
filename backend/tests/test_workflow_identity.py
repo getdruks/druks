@@ -1,30 +1,23 @@
 import pytest
 from druks.accounts.models import Account
-from druks.apps import loader as apps_loader
-from druks.apps.exceptions import MalformedApp
-from druks.apps.loader import register_workflow_package, resolve_workflow_app
-from druks.apps.registry import workflows
+from druks.apps import App
 from druks.core.tasks import refresh_tokens
 from druks.durable.enums import RunState
 from druks.durable.exceptions import WorkflowError
 from druks.durable.models import Run
 from druks.durable.schemas import get_display_label
 from druks.events.models import Event
+from druks.registry import get_app_name, get_workflow
 from druks.workflows import Gate, Workflow, _log_run_event, step, task
 from druks_field_notes.models import Note
 from sqlalchemy import select
 
+# Every test here defines app classes; the suite keeps seeing only the installed apps.
+pytestmark = pytest.mark.usefixtures("declared_apps")
 
-@pytest.fixture(autouse=True)
-def _isolated_registrations():
-    # Every test here mutates the package-owner map and the workflows registry;
-    # restore both so the suite keeps seeing only the installed apps.
-    packages = dict(apps_loader._workflow_packages)
-    items = dict(workflows._items)
-    yield
-    apps_loader._workflow_packages.clear()
-    apps_loader._workflow_packages.update(packages)
-    workflows._items = items
+
+def _app(name: str, package: str) -> type[App]:
+    return type(name.title(), (App,), {"name": name, "package": package})
 
 
 def _workflow(name: str, module: str, **attrs):
@@ -42,24 +35,24 @@ def test_a_gate_without_a_pinned_name_raises():
             action: str = ""
 
 
-def test_registration_is_idempotent_and_conflicts_loudly():
-    register_workflow_package("alpha_pkg", "alpha")
-    register_workflow_package("alpha_pkg", "alpha")
-    with pytest.raises(MalformedApp, match="already belongs"):
-        register_workflow_package("alpha_pkg", "beta")
+def test_a_package_belongs_to_one_app():
+    _app("alpha", "alpha_pkg")
+    _app("alpha", "alpha_pkg")
+    with pytest.raises(ValueError, match="already belongs"):
+        _app("beta", "alpha_pkg")
 
 
 def test_overlapping_ownership_across_owners_is_rejected():
-    register_workflow_package("alpha_pkg", "alpha")
-    with pytest.raises(MalformedApp, match="overlaps"):
-        register_workflow_package("alpha_pkg.nested", "beta")
+    _app("alpha", "alpha_pkg")
+    with pytest.raises(ValueError, match="overlaps"):
+        _app("beta", "alpha_pkg.nested")
 
 
 def test_resolution_matches_package_boundaries():
-    register_workflow_package("alpha_pkg", "alpha")
-    assert resolve_workflow_app("alpha_pkg.workflows") == "alpha"
+    _app("alpha", "alpha_pkg")
+    assert get_app_name("alpha_pkg.workflows") == "alpha"
     with pytest.raises(LookupError):
-        resolve_workflow_app("alpha_pkg_sibling.workflows")
+        get_app_name("alpha_pkg_sibling.workflows")
 
 
 def _task_in(module: str, body, name: str | None = None):
@@ -72,7 +65,7 @@ def _task_in(module: str, body, name: str | None = None):
 def test_duplicate_task_name_is_rejected():
     # DBOS only warns on a duplicate durable name and lets the last registration
     # win — enqueues of one task would silently run the other's body.
-    register_workflow_package("collide_pkg", "")
+    _app("collide", "collide_pkg")
 
     async def clash() -> None: ...
 
@@ -87,7 +80,7 @@ def test_duplicate_task_name_is_rejected():
 def test_task_input_is_typed():
     # The signature is the wire contract — enqueue validates against it and
     # dumps to JSON, so an unannotated parameter has no wire shape.
-    register_workflow_package("untyped_pkg", "")
+    _app("untyped", "untyped_pkg")
 
     async def send(recipient) -> None: ...  # noqa: ANN001
 
@@ -95,15 +88,15 @@ def test_task_input_is_typed():
         _task_in("untyped_pkg.tasks", send)
 
 
-def test_unregistered_module_fails_at_class_definition():
-    # The error carries the invariant: load through the loader, or register first.
-    with pytest.raises(WorkflowError, match="druks.apps.loader"):
+def test_a_workflow_outside_every_app_fails_at_class_definition():
+    # A workflow belongs to the app that owns its module, so one with no app has no kind.
+    with pytest.raises(WorkflowError, match="outside every app package"):
         _workflow("Orphan", "nowhere.workflows")
 
 
 def test_declaring_app_namespaces_the_kind():
-    register_workflow_package("alpha_pkg", "alpha")
-    register_workflow_package("beta_pkg", "beta")
+    _app("alpha", "alpha_pkg")
+    _app("beta", "beta_pkg")
 
     alpha = _workflow("Summarize", "alpha_pkg.workflows")
     beta = _workflow("Summarize", "beta_pkg.workflows")
@@ -114,35 +107,28 @@ def test_declaring_app_namespaces_the_kind():
 
 
 def test_explicit_kind_is_a_local_suffix():
-    register_workflow_package("alpha_pkg", "alpha")
+    _app("alpha", "alpha_pkg")
     digest = _workflow("Summarize", "alpha_pkg.workflows", kind="digest")
     assert digest.kind == "alpha.digest"
 
 
 def test_dotted_explicit_kind_is_rejected():
-    register_workflow_package("alpha_pkg", "alpha")
+    _app("alpha", "alpha_pkg")
     with pytest.raises(WorkflowError, match="local name"):
         _workflow("Summarize", "alpha_pkg.workflows", kind="alpha.digest")
 
 
-def test_none_owned_package_keeps_bare_kinds():
-    register_workflow_package("plain_pkg", "")
-    flow = _workflow("Sweep", "plain_pkg.workflows")
-    assert flow.app == ""
-    assert flow.kind == "sweep"
-
-
 def test_in_tree_identities_are_stable():
     # These are durable DBOS names — byte-for-byte pins.
-    assert workflows.get("software_factory.build") is not None
-    assert workflows.get("software_factory.profile") is not None
+    assert get_workflow("software_factory.build") is not None
+    assert get_workflow("software_factory.profile") is not None
     assert refresh_tokens.name == "core.refresh_tokens"
 
 
 def test_steps_capture_the_namespaced_kind():
     # _wrap_steps closes over cls.kind after the namespace lands, so durable
     # step names carry the final kind — the replay identity.
-    register_workflow_package("alpha_pkg", "alpha")
+    _app("alpha", "alpha_pkg")
 
     async def run_multistep(self) -> None:
         await self.ping()
@@ -163,7 +149,7 @@ def test_steps_capture_the_namespaced_kind():
 async def test_lifecycle_event_stamps_the_declaring_app(druks_db):
     # The event's app derives from the run's kind through the registry —
     # never an argument, never a stored copy on the run.
-    register_workflow_package("alpha_pkg", "alpha")
+    _app("alpha", "alpha_pkg")
     flow = _workflow("Beacon", "alpha_pkg.workflows")
     run = Run(
         id="wf-identity-1",
@@ -189,7 +175,7 @@ def test_display_label_reads_the_local_kind():
 async def test_a_declared_subject_answers_off_the_workflow_and_off_a_run():
     # One word, two answers: the workflow says what kind of thing its runs are about,
     # a run of it says which one.
-    register_workflow_package("alpha_pkg", "alpha")
+    _app("alpha", "alpha_pkg")
     flow = _workflow("Sweep", "alpha_pkg.workflows", subject=Note)
 
     assert flow.subject is Note
@@ -197,7 +183,7 @@ async def test_a_declared_subject_answers_off_the_workflow_and_off_a_run():
 
 
 def test_a_workflow_about_nothing_says_so_by_silence():
-    register_workflow_package("alpha_pkg", "alpha")
+    _app("alpha", "alpha_pkg")
     assert _workflow("Sweep", "alpha_pkg.workflows").subject is None
 
 
@@ -205,6 +191,6 @@ def test_a_workflow_about_nothing_says_so_by_silence():
 def test_a_subject_that_is_not_a_subject_class_is_rejected(declared):
     # ``subject = None`` included: written out it would shadow the declaration with a
     # permanent None, so a workflow about nothing writes nothing.
-    register_workflow_package("alpha_pkg", "alpha")
+    _app("alpha", "alpha_pkg")
     with pytest.raises(WorkflowError, match="must be a Subject or StoredSubject"):
         _workflow("Sweep", "alpha_pkg.workflows", subject=declared)

@@ -41,8 +41,6 @@ from uuid_utils import uuid7
 
 from druks.accounts.context import current_account_id, current_actor, current_conversation_id
 from druks.accounts.models import Account
-from druks.apps.loader import get_app, resolve_workflow_app
-from druks.apps.registry import workflows
 from druks.apps.settings import (
     coerce_setting_value,
     field_live_choices,
@@ -92,6 +90,7 @@ from druks.models import StoredSubject, snake_name
 from druks.notifications.constants import RUN_FAILED_MESSAGE
 from druks.notifications.models import Notification
 from druks.notifications.outbox import send_notification
+from druks.registry import get_app, get_app_by_module, get_app_name
 from druks.sandbox.client import provisioning_key, sandbox_client
 from druks.sandbox.constants import WORKFLOW_HOST_LEASE_SECONDS
 from druks.sandbox.datastructures import Sandbox
@@ -575,15 +574,14 @@ class _Task:
         self._function = function
         self.module = function.__module__
         try:
-            app = resolve_workflow_app(function.__module__)
+            app = get_app_name(function.__module__)
         except LookupError:
             raise WorkflowError(
                 f"{function.__module__} declares task {function.__name__} outside every "
-                "registered app package — task modules load through "
-                "druks.apps.loader; a module the loader doesn't own must "
-                "register_workflow_package() before importing"
+                "app package. Declare it in a module of the app's package, and "
+                "import that module after the App class."
             ) from None
-        self.name = f"{app}.{function.__name__}" if app else function.__name__
+        self.name = f"{app}.{function.__name__}"
         self._retries = retries
         self._input_model = _input_model_from_signature(
             function, owner=f"task {self.name}", model_name=f"{function.__name__}_input"
@@ -810,7 +808,7 @@ async def _log_run_event(
         run=run.id,
         kind=run.kind,
         facts=facts,
-        app=workflows.get(run.kind).app,
+        app=run.app,
     )
     return {"run": run.id, "kind": run.kind, **facts}
 
@@ -935,21 +933,21 @@ class Workflow:
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
         try:
-            cls.app = resolve_workflow_app(cls.__module__)
+            app = get_app_by_module(cls.__module__)
         except LookupError:
             raise WorkflowError(
                 f"{cls.__module__} declares workflow {cls.__name__} outside every "
-                "registered app package — workflow modules load through "
-                "druks.apps.loader; a module the loader doesn't own must "
-                "register_workflow_package() before importing"
+                "app package. Declare it in a module of the app's package, and "
+                "import that module after the App class."
             ) from None
+        cls.app = app.name
         local_kind = cls.__dict__.get("kind") or snake_name(cls.__name__)
         if "." in local_kind:
             raise WorkflowError(
                 f"{cls.__name__}.kind {local_kind!r} must be a local name — "
                 "the declaring app supplies the namespace"
             )
-        cls.kind = f"{cls.app}.{local_kind}" if cls.app else local_kind
+        cls.kind = f"{cls.app}.{local_kind}"
         _declare_subject(cls)
         validate_settings_declaration(cls.Settings)
         if any(field_live_choices(field) for field in cls.Settings.model_fields.values()):
@@ -989,7 +987,7 @@ class Workflow:
             cls.dispatch = _bind_dispatch(vars(cls)["dispatch"])
         _wrap_steps(cls)
         _register_entry(cls)
-        workflows.register(cls)
+        app.workflows.register(cls)
 
     def __init__(self) -> None:
         self._workflow_id: str = ""
@@ -1369,17 +1367,14 @@ class Workflow:
         """The account that a new run starts as. It must be able to use the workflow's app.
         During a webhook delivery that names a person, the run starts as that person's account,
         also when the caller passes another ``account_id``."""
-        app = get_app(cls.app) if cls.app else None
+        app = get_app(cls.app)
         if actor := current_actor.get():
             if owner_id := await VaultSecret.get_owner_id(session, actor.authority, actor.user_id):
                 account_id = owner_id
-            elif app and await Team.exists_for_app(session, app):
+            elif await Team.exists_for_app(session, app):
                 # A person with no account is on no team.
                 raise PermissionDenied(f"A person with no account cannot use the app {app.name}.")
         account = await Account.get_for_run(session, account_id)
-        # A workflow in a package that no app declares has no app to keep an account out of.
-        if not app:
-            return account
         if DBOS.workflow_id:
             # A replay runs the caller's body again. The step keeps the first answer, so a
             # later change to a team cannot refuse a run that started.

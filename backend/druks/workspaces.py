@@ -8,7 +8,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from druks.accounts.context import current_account_id
 from druks.accounts.models import Account
-from druks.apps.registry import services
 from druks.core.services import Github
 from druks.durable.engine import step_session
 from druks.durable.exceptions import WorkflowError
@@ -18,6 +17,7 @@ from druks.mcp.enums import Credential, IdentityMode, Toolkit
 from druks.mcp.exceptions import MissingGrantError, MissingTokenError
 from druks.mcp.helpers import get_bearer_token_env_var
 from druks.mcp.inbound import get_druks_account_token
+from druks.registry import service_registry
 from druks.sandbox import repo as checkout
 from druks.sandbox.client import sandbox_client
 from druks.sandbox.datastructures import (
@@ -193,7 +193,7 @@ class Workspace:
             bearer_token_env_var = ""
             secret_headers = access.secret_headers
             pasted_login = access.credential == Credential.SERVICE_LOGIN and not (
-                await services.get(access.service).get_grant()
+                await service_registry.get(access.service).get_grant()
             )
             if pasted_login:
                 login = await mcp_models.McpServer.store_login(

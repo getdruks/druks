@@ -9,11 +9,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy_encrypted_field import EncryptedJsonField
 
-from druks.apps.registry import services
 from druks.core.models import Uuid7Pk
 from druks.database import get_session
 from druks.locks import lock
 from druks.models import Base
+from druks.registry import service_registry
 from druks.secrets.constants import TOKEN_MIN_TTL_SECONDS
 from druks.secrets.datastructures import Audience
 from druks.secrets.enums import IdentityStatus, SecretKind
@@ -538,7 +538,7 @@ class VaultSecret(Base, Uuid7Pk):
             raise SecretRevokedError(self.audience)
         if self.audience == Audience.service(self.audience_name) and self.kind != SecretKind.OAUTH:
             # An OAuth row at this audience is the service's grant, not its own row.
-            return await services.get(self.audience_name).issue_token(resources, name=name)
+            return await service_registry.get(self.audience_name).issue_token(resources, name=name)
         if self.kind == SecretKind.STATIC:
             # A header row holds one secret.
             [secret] = self.secrets.values()
@@ -550,7 +550,7 @@ class VaultSecret(Base, Uuid7Pk):
                 return await oauth.get_access_token(
                     self.session, self.audience_name, self.account_id
                 )
-            client = await services.get(self.audience_name).get_oauth_client()
+            client = await service_registry.get(self.audience_name).get_oauth_client()
             return await client.get_access_token(self.session, connection=self)
         from druks.harnesses.providers import get_provider
 

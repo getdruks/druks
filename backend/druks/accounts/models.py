@@ -22,10 +22,10 @@ from druks.accounts.constants import (
 )
 from druks.accounts.enums import AccountKind, Role, Theme
 from druks.accounts.exceptions import AuthConfigurationError, InvalidPatError, LastAdminError
-from druks.apps.loader import iter_apps
 from druks.core.models import Uuid7Pk, uuid7_str
 from druks.db import db_session
 from druks.models import Base, Model
+from druks.registry import iter_apps
 from druks.secrets.models import VaultSecret
 from druks.settings import get_settings
 
@@ -93,7 +93,9 @@ class Account(Model, Uuid7Pk, ordering=("created_at", "id")):
     async def list_usable_kinds(self) -> list[str]:
         """The workflow kinds of every installed app that this account can use."""
         return [
-            workflow.kind for app in await self.list_usable_apps() for workflow in app.workflows()
+            workflow.kind
+            for app in await self.list_usable_apps()
+            for workflow in app.workflows.all()
         ]
 
     @classmethod
