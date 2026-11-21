@@ -111,7 +111,8 @@ text after the agent's last tool call. The text before it holds the agent's
 notes. Only the Chat page shows them. When the agent writes nothing after its
 last tool call, Druks asks it once for the answer in an internal message. When
 that turn ends without text too, the channel gets "The reply is unavailable.
-Send the message again to retry."
+Send the message again to retry." A turn that asks a [question](#questions) has
+an answer, even with no text.
 
 An agent plan shows the latest complete plan. A plan update replaces the
 previous list. Tool updates instead change only the fields that the adapter
@@ -126,6 +127,32 @@ Only the Chat page shows it.
 
 The page stays at the bottom while text arrives. Scroll up to read earlier
 messages. **Latest message** returns to the bottom.
+
+## Questions
+
+The agent can ask you a question with two to four short choices. It calls
+`chat_ask` during its turn, and the call returns at once: the agent does not wait
+for your answer. `chat_ask` is a tool of the Druks toolkit, so the agent of an
+operator has it, on the web and on each channel. The agents of a public WhatsApp
+number have only the tools that their Bot names, so they do not have it.
+
+When the turn ends, Druks sends the question after the agent's reply:
+
+- In Slack, the reply, the question, and a button for each choice come in one
+  message. A reply too long for one message loses its end. The question and the
+  buttons stay whole.
+- In the web chat, WhatsApp, and GitHub, the reply ends with the question and its
+  choices as a numbered list. Answer with a number or in your own words.
+
+Select a button, and its choice reaches the agent as your next message. The
+message then shows your choice in place of the buttons. Only the person of the
+conversation can select one. When you write an answer instead, it reaches the
+agent as any message does. When your message reaches the agent, Druks takes the
+buttons off each open question of the conversation, and its message says that the
+question is closed. When you write while the agent asks, your message can close
+the question before Druks posts it. Druks then posts the reply and the question
+with no buttons, and the message says that the question is closed. A turn that you
+stop asks nothing, and neither does a turn of a paused conversation.
 
 ## Agent access
 
@@ -168,10 +195,13 @@ parks with a question, Druks adds an internal message with the request to that
 conversation, except on a WhatsApp number with an admin, where the admin answers
 instead (see [Confirmation](#confirmation)). In a Slack conversation, a run
 that waits for an answer in the dashboard also gets the question in the thread or direct
-message, with a button for each choice. The agent says in one line where the buttons
-are. Only the person who started the run can click them. When a choice needs more from
-you, such as Request changes or the answers to the question's own questions, the agent
-asks for it in the thread and then answers the run. When the run
+message, with a button for each choice. Only the person who started the run can click
+them. The question with its buttons is the only message that you get about it. Druks
+keeps the internal message for the agent's next turn, such as the turn of your next
+message there, and starts no turn for it. The agent then knows that the run waits and
+what it waits for. When a choice needs more from you, such as Request changes or the
+answers to the question's own questions, the agent asks for it in the thread and then
+answers the run. When the run
 waits for the provider's usage limit to reset, Druks itself posts a line with the
 time the run continues, in the installation's timezone. The agent shares the
 run's login, so its own turn would fail on the same limit. When the run
@@ -198,17 +228,20 @@ bridge runs in the sandbox and starts one ACP adapter per conversation. Druks
 opens an SSH channel only when it communicates with the bridge.
 
 Postgres stores conversations and messages. A reply links to the message it
-answers and keeps the tool calls it made. Your messages have six durable
-states: `pending`, `delivered`, `replied`, `interrupted`, `cancelled`, and
-`failed`. A
-`delivered` message is the one the agent is answering. Redis stores the
-delivery locks, the read positions, and the live events. The bridge determines
-whether a turn runs.
+answers and keeps the tool calls it made. Your messages have seven durable
+states: `pending`, `deferred`, `delivered`, `replied`, `interrupted`,
+`cancelled`, and `failed`. A `delivered` message is the one the agent is
+answering. A `deferred` message is an internal message that waits for the
+agent's next turn and starts none. Redis stores the delivery locks, the read
+positions, and the live events. The bridge determines whether a turn runs.
 
 Delivery and Stop each use a conditional Postgres update from `pending`.
 Delivery changes the state to `delivered` just before the prompt request. Stop
 changes the state to `cancelled`. The first update wins. Delivery never sends
-a message that Stop cancelled while pending.
+a message that Stop cancelled while pending. Delivery changes a `deferred`
+message to `delivered` only after it won the update of a `pending` message in
+the same turn. When Stop cancels every pending message first, Druks sends no
+prompt, and the `deferred` message waits for the next turn.
 
 After delivery wins, Stop sends ACP `session/cancel` through the bridge.
 The bridge matches the message ID, so a delayed Stop cannot cancel the next
@@ -384,8 +417,9 @@ the person in one line to write instead. The web page shows the typed text, the
 words, and a link to the audio.
 
 Druks also adds **internal messages** to a conversation. Each one comes from a
-fixed template. An internal message starts a turn like any message, and it
-never goes to WhatsApp. Druks talks to agents, and agents talk to people.
+fixed template. An internal message starts a turn like any message, unless it
+waits for the agent's next turn: see [Agent access](#agent-access). It never
+goes to WhatsApp. Druks talks to agents, and agents talk to people.
 
 ### Groups
 

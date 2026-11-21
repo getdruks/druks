@@ -18,6 +18,7 @@ from druks.files import FileField
 from druks.files.datastructures import File
 from druks.files.models import FileRecord
 from druks.models import Base, Model
+from druks.notifications.models import Notification
 from druks.secrets.models import VaultSecret
 from druks.settings import get_settings
 
@@ -41,7 +42,7 @@ class Message(Base, Uuid7Pk):
     reply_to: Mapped[str | None] = mapped_column(ForeignKey("chat_messages.id", ondelete="CASCADE"))
     state: Mapped[str | None]
     tool_calls: Mapped[list[dict]] = mapped_column(JSONB, default=list)
-    # Druks wrote it for the agent. It starts a turn and never reaches the source.
+    # Druks wrote it for the agent. It never reaches the source.
     is_internal: Mapped[bool] = mapped_column(default=False, server_default=text("false"))
     # The message's id at its source. Druks records a reply's id before it sends the
     # reply, so the source's copy of it is known as Druks's own.
@@ -67,7 +68,10 @@ class Message(Base, Uuid7Pk):
         """Mark the message delivered, unless a Stop cancelled it first."""
         result = await session.execute(
             update(Message)
-            .where(Message.id == self.id, Message.state == MessageState.PENDING)
+            .where(
+                Message.id == self.id,
+                Message.state.in_((MessageState.PENDING, MessageState.DEFERRED)),
+            )
             .values(state=MessageState.DELIVERED, delivered_at=Base.utc_now())
             .returning(Message.id)
         )
@@ -263,14 +267,16 @@ class Conversation(Base, Uuid7Pk):
         source_id: str | None = None,
         file: File | None = None,
         transcript: str = "",
+        state: MessageState = MessageState.PENDING,
     ) -> Message:
-        """A message in the conversation. The person's message starts pending."""
+        """A message in the conversation. The person's message starts in ``state``:
+        pending, or deferred when it waits for a turn that another message starts."""
         message = Message(
             conversation_id=self.id,
             role=role,
             body=body,
             reply_to=reply_to.id if reply_to else None,
-            state=MessageState.PENDING if role == MessageRole.USER else None,
+            state=state if role == MessageRole.USER else None,
             tool_calls=tool_calls or [],
             is_internal=is_internal,
             source_id=source_id,
@@ -355,22 +361,30 @@ class Conversation(Base, Uuid7Pk):
         )
 
     async def list_reply_source_ids(self, session: AsyncSession) -> list[str]:
-        """The ids at the source of the replies Druks sent in this conversation."""
-        return list(
-            await session.scalars(
-                select(Message.source_id).where(
-                    Message.conversation_id == self.id,
-                    Message.role == MessageRole.ASSISTANT,
-                    Message.source_id.is_not(None),
-                )
-            )
+        """The ids at the source of the replies Druks sent in this conversation. A reply
+        that asks a question goes out as the message of the question's notification."""
+        replies = select(Message.source_id).where(
+            Message.conversation_id == self.id,
+            Message.role == MessageRole.ASSISTANT,
+            Message.source_id.is_not(None),
         )
+        questions = select(Notification.message_id).where(
+            Notification.conversation_id == self.id,
+            Notification.run_id.is_(None),
+            Notification.message_id.is_not(None),
+        )
+        return list(await session.scalars(replies.union_all(questions)))
 
     async def list_pending_messages(self, session: AsyncSession) -> list[Message]:
+        """The messages that wait for the next turn, oldest first: the pending messages,
+        and the deferred messages that join them."""
         return list(
             await session.scalars(
                 select(Message)
-                .where(Message.conversation_id == self.id, Message.state == MessageState.PENDING)
+                .where(
+                    Message.conversation_id == self.id,
+                    Message.state.in_((MessageState.PENDING, MessageState.DEFERRED)),
+                )
                 .order_by(Message.created_at, Message.id)
             )
         )
