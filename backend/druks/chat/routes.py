@@ -39,6 +39,7 @@ from .schemas import (
     ReminderResponse,
 )
 from .service import cancel_turn, deliver, publish, question_key, upload_file
+from .workflows import RunInstruction
 
 router = APIRouter()
 
@@ -364,6 +365,23 @@ async def ask(
         json.dumps({"question": question, "choices": choices, "fields": form}),
         ex=SANDBOX_HOST_LEASE_SECONDS,
     )
+
+
+@router.post("/instructions", operation_id="run_instruction", status_code=202, tags=["agent"])
+async def run_instruction(
+    instruction: Annotated[
+        str, Body(embed=True, description="The task, in words, as the person gave it.")
+    ],
+    account: Account = Depends(current_account),
+) -> str:
+    """Start a run that does a task in a fresh box, and return its run id. As a saved
+    agent, you do the task there with your instructions, your model, and your skills. The
+    run reports the task and its answer to this chat. Use it to schedule a task that none
+    of your other tools does, or when the person asks for a task to run on its own. Do
+    other work yourself."""
+    if not current_conversation_id.get():
+        raise HTTPException(422, "Start a task from a chat. This call comes from no chat.")
+    return await RunInstruction.start(subject=None, instruction=instruction)
 
 
 @router.post(
