@@ -6,9 +6,9 @@ from druks.accounts.enums import Role
 from druks.accounts.models import Account
 from druks.contrib.software_factory.app import SoftwareFactory
 from druks.db import db_session
-from druks.instructions import Instruction
 from druks.teams.models import Team
 from druks.user_settings.models import SettingsOverride
+from druks.workflows import Instruction
 from druks_field_notes.app import FieldNotes
 from druks_field_notes.workflows import Summarize
 from fastapi.testclient import TestClient
@@ -138,7 +138,7 @@ def test_patch_settings_updates_the_defaults_every_agent_inherits(tmp_path: Path
         assert patch.status_code == 200
         assert patch.json()["defaultModel"] == "openai/gpt-5.5"
         assert patch.json()["includeApps"] is True
-        agents = {agent["name"]: agent for agent in _software_factory_app(client)["agents"]}
+        agents = {agent["name"]: agent for agent in _software_factory_app(client)["instructions"]}
     assert agents["software_factory.implement"]["harness"] == "codex"
     assert agents["software_factory.implement"]["harnessSource"] == "default"
     assert agents["software_factory.implement"]["model"] == "openai/gpt-5.5"
@@ -185,7 +185,7 @@ def test_agents_lists_every_apps_agents_as_they_resolve(tmp_path: Path):
     apps = {app["name"]: app for app in body["apps"]}
     assert "software_factory" in apps
     assert "field_notes" in apps
-    agents = {agent["name"]: agent for agent in apps["software_factory"]["agents"]}
+    agents = {agent["name"]: agent for agent in apps["software_factory"]["instructions"]}
     assert agents["software_factory.implement"]["harness"] == "codex"
     assert agents["software_factory.implement"]["harnessSource"] == "agent"
     assert agents["software_factory.implement"]["model"] == "openai/gpt-5.5"
@@ -223,7 +223,7 @@ def test_apps_judge_an_agents_triple_as_it_resolves(tmp_path: Path):
         )
         assert response.status_code == 422
         assert "does not run OpenAI" in response.json()["detail"]
-        agents = {agent["name"]: agent for agent in _software_factory_app(client)["agents"]}
+        agents = {agent["name"]: agent for agent in _software_factory_app(client)["instructions"]}
         assert agents["software_factory.implement"]["harnessSource"] == "default"
         assert agents["software_factory.implement"]["source"] == "default"
         response = client.patch(
@@ -234,7 +234,7 @@ def test_apps_judge_an_agents_triple_as_it_resolves(tmp_path: Path):
             },
         )
         assert response.status_code == 200
-        agents = {agent["name"]: agent for agent in _software_factory_app(client)["agents"]}
+        agents = {agent["name"]: agent for agent in _software_factory_app(client)["instructions"]}
         assert (
             agents["software_factory.implement"]["harness"],
             agents["software_factory.implement"]["billing"],
@@ -268,7 +268,7 @@ def test_apps_surface_build_agents_and_workflow_defaults(tmp_path: Path):
     with settings_client(tmp_path) as client:
         software_factory = _software_factory_app(client)
 
-    agents = {agent["name"]: agent for agent in software_factory["agents"]}
+    agents = {agent["name"]: agent for agent in software_factory["instructions"]}
     assert agents["software_factory.generate_plan"] == {
         "name": "software_factory.generate_plan",
         "label": "generate_plan",
@@ -474,7 +474,7 @@ def test_incoherent_app_save_is_rejected_and_rolled_back_before_schedules(
         }
         assert not reconciled
         assert not _field_notes_settings_fields(client)["visibility"]["overridden"]
-        agents = {agent["name"]: agent for agent in _software_factory_app(client)["agents"]}
+        agents = {agent["name"]: agent for agent in _software_factory_app(client)["instructions"]}
         assert agents["software_factory.generate_plan"]["model"] == "anthropic/claude-opus-4-7"
 
 
@@ -532,7 +532,7 @@ def test_apps_override_agent_model_persists(tmp_path: Path):
             },
         )
         assert patch.status_code == 200
-        agents = {agent["name"]: agent for agent in _software_factory_app(client)["agents"]}
+        agents = {agent["name"]: agent for agent in _software_factory_app(client)["instructions"]}
 
     assert agents["software_factory.implement"]["model"] == "openai/gpt-5.5"
     assert agents["software_factory.implement"]["source"] == "agent"
@@ -549,7 +549,7 @@ def test_apps_accept_a_bot_id_across_the_override_maps(tmp_path: Path):
             },
         )
         assert response.status_code == 200
-        agents = {agent["name"]: agent for agent in _chat_app(client)["agents"]}
+        agents = {agent["name"]: agent for agent in _chat_app(client)["instructions"]}
 
     bot = agents["chat.bot"]
     assert (bot["harness"], bot["model"], bot["billing"]) == ("codex", "openai/gpt-5.5", "api_key")
@@ -584,7 +584,7 @@ async def test_apps_reject_a_name_in_neither_registry_without_storing_it(tmp_pat
 
 def test_apps_default_effort_and_per_agent_effort_override(tmp_path: Path):
     with settings_client(tmp_path) as client:
-        agents = {agent["name"]: agent for agent in _software_factory_app(client)["agents"]}
+        agents = {agent["name"]: agent for agent in _software_factory_app(client)["instructions"]}
         assert agents["software_factory.generate_plan"]["effort"] == "high"
         assert agents["software_factory.generate_plan"]["effortSource"] == "default"
 
@@ -592,7 +592,7 @@ def test_apps_default_effort_and_per_agent_effort_override(tmp_path: Path):
         client.patch(
             "/api/settings/apps", json={"agentEfforts": {"software_factory.generate_plan": "high"}}
         )
-        agents = {agent["name"]: agent for agent in _software_factory_app(client)["agents"]}
+        agents = {agent["name"]: agent for agent in _software_factory_app(client)["instructions"]}
         assert agents["software_factory.generate_plan"]["effort"] == "high"
         assert agents["software_factory.generate_plan"]["effortSource"] == "agent"
         assert agents["software_factory.revise_contract"]["effort"] == "low"
@@ -611,7 +611,7 @@ def test_apps_reject_unknown_effort(tmp_path: Path):
 
 def test_apps_default_timeout_and_per_agent_timeout_override(tmp_path: Path):
     with settings_client(tmp_path) as client:
-        agents = {agent["name"]: agent for agent in _software_factory_app(client)["agents"]}
+        agents = {agent["name"]: agent for agent in _software_factory_app(client)["instructions"]}
         assert agents["software_factory.implement"]["timeout"] == 1800
         assert agents["software_factory.implement"]["timeoutSource"] == "default"
 
@@ -619,7 +619,7 @@ def test_apps_default_timeout_and_per_agent_timeout_override(tmp_path: Path):
         client.patch(
             "/api/settings/apps", json={"agentTimeouts": {"software_factory.implement": 3600}}
         )
-        agents = {agent["name"]: agent for agent in _software_factory_app(client)["agents"]}
+        agents = {agent["name"]: agent for agent in _software_factory_app(client)["instructions"]}
         assert agents["software_factory.implement"]["timeout"] == 3600
         assert agents["software_factory.implement"]["timeoutSource"] == "agent"
         assert agents["software_factory.review_plan"]["timeout"] == 1200
@@ -661,14 +661,14 @@ def test_apps_clearing_an_override_reverts_to_the_operator_default(tmp_path: Pat
             "/api/settings/apps",
             json={"agentModels": {"software_factory.generate_plan": "anthropic/claude-opus-4-7"}},
         )
-        agents = {agent["name"]: agent for agent in _software_factory_app(client)["agents"]}
+        agents = {agent["name"]: agent for agent in _software_factory_app(client)["instructions"]}
         assert agents["software_factory.generate_plan"]["model"] == "anthropic/claude-opus-4-7"
         assert agents["software_factory.generate_plan"]["source"] == "agent"
 
         client.patch(
             "/api/settings/apps", json={"agentModels": {"software_factory.generate_plan": None}}
         )
-        agents = {agent["name"]: agent for agent in _software_factory_app(client)["agents"]}
+        agents = {agent["name"]: agent for agent in _software_factory_app(client)["instructions"]}
         assert agents["software_factory.generate_plan"]["model"] == "anthropic/claude-opus-4-7"
         assert agents["software_factory.generate_plan"]["source"] == "default"
 

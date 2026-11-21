@@ -1,7 +1,3 @@
-{% if agent_instructions %}
-{{ agent_instructions }}
-
-{% endif %}
 A person gave you this task in a chat. Do it now. Nobody answers questions while you
 work, so decide on your own.
 

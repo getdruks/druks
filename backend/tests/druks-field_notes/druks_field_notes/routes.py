@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from druks.instructions import BotUser
+from druks.chat import BotUser
 from fastapi import APIRouter, Body, status
 
 from druks_field_notes.models import Note

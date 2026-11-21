@@ -18,6 +18,7 @@ from conftest import (
 from druks.accounts.context import current_conversation_id
 from druks.accounts.enums import AccountKind
 from druks.accounts.models import Account, PersonalAccessToken
+from druks.agents.models import Agent
 from druks.api.server import mcp_app
 from druks.browser.constants import BROWSER_TOOLS
 from druks.chat.channels.whatsapp.constants import WAHA_AUDIENCE
@@ -29,10 +30,12 @@ from druks.contrib.software_factory.models import Project, ProjectRepo, Ticket
 from druks.contrib.software_factory.ticketing.base import Tracker
 from druks.contrib.software_factory.workflows import Build
 from druks.core.apis.exceptions import UnknownTicketError
-from druks.durable.models import Artifact, Run, Schedule
-from druks.durable.schedules import call_tool
+from druks.durable.models import Artifact, Run
 from druks.mcp.exceptions import InvalidAgentToolError
 from druks.mcp.server import create_mcp_app
+from druks.schedules.exceptions import ScheduleSkipped
+from druks.schedules.models import Schedule
+from druks.schedules.service import call_tool
 from druks.secrets.enums import SecretKind
 from druks.secrets.models import VaultSecret
 from druks.settings import Urls
@@ -906,7 +909,7 @@ def _call_schedules_in_process(app, monkeypatch) -> None:
         lambda: SimpleNamespace(urls=Urls(endpoint="http://druks.test", webhook_host="")),
     )
     monkeypatch.setattr(
-        "druks.durable.schedules.StreamableHttpTransport",
+        "druks.schedules.service.StreamableHttpTransport",
         partial(StreamableHttpTransport, httpx_client_factory=factory),
     )
 
@@ -928,9 +931,8 @@ async def test_a_schedule_calls_its_tool_as_its_owner_from_its_chat(
     await druks_db.commit()
 
     async with live(app):
-        skipped = await call_tool(schedule.id)
+        await call_tool(schedule.id)
 
-    assert skipped is None
     [reminder] = await druks_db.scalars(select(Reminder))
     assert (reminder.conversation_id, reminder.account_id, reminder.body) == (
         conversation.id,
@@ -954,11 +956,41 @@ async def test_a_schedule_whose_tool_refuses_the_call_says_why(app, account, dru
     await druks_db.commit()
 
     async with live(app):
-        skipped = await call_tool(schedule.id)
+        with pytest.raises(ScheduleSkipped, match="no-such-run"):
+            await call_tool(schedule.id)
 
-    assert skipped["conversation_id"] == conversation.id
-    assert skipped["tool"] == "cancel_run"
-    assert "no-such-run" in skipped["reason"]
+
+async def test_a_schedule_whose_agent_no_longer_answers_its_owner_says_why(account, druks_db):
+    owner = await Account.get_or_create(druks_db, "ana@example.com")
+    agent = await Agent.create(
+        druks_db,
+        owner=owner,
+        name="Reviewer",
+        description="Reviews pull requests.",
+        instructions="Review the pull request.",
+        skills=[],
+        harness="claude",
+        model="anthropic/claude-opus-4-7",
+        is_private=True,
+    )
+    conversation = await Conversation.create(
+        druks_db, account_id=account.id, body="Nudge me", agent_id=agent.id
+    )
+    schedule = await Schedule.create(
+        druks_db,
+        account_id=account.id,
+        conversation_id=conversation.id,
+        tool="chat_create_reminder",
+        arguments={"body": "Stand up", "delay_seconds": 60},
+        cron="0 9 * * *",
+        tool_names=["chat_create_reminder"],
+    )
+    await druks_db.commit()
+
+    with pytest.raises(
+        ScheduleSkipped, match="Only the agent's owner can talk to a private agent."
+    ):
+        await call_tool(schedule.id)
 
 
 async def test_a_schedule_whose_call_cannot_reach_druks_says_why(account, druks_db, monkeypatch):
@@ -978,7 +1010,5 @@ async def test_a_schedule_whose_call_cannot_reach_druks_says_why(account, druks_
     )
     await druks_db.commit()
 
-    skipped = await call_tool(schedule.id)
-
-    assert skipped["conversation_id"] == conversation.id
-    assert skipped["reason"].startswith("Druks could not reach its own tools:")
+    with pytest.raises(ScheduleSkipped, match="Druks could not reach its own tools:"):
+        await call_tool(schedule.id)

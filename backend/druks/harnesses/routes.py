@@ -12,10 +12,10 @@ from druks.accounts.dependencies import (
 from druks.accounts.models import Account
 from druks.accounts.schemas import AccountResponse
 from druks.api.dependencies import SessionDep
-from druks.instructions import Instruction
 from druks.secrets.datastructures import Audience
 from druks.secrets.enums import SecretKind
 from druks.secrets.models import VaultSecret
+from druks.workflows import Instruction
 
 from . import directory
 from .datastructures import CompletedConnect

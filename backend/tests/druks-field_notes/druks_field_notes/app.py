@@ -3,8 +3,9 @@ from typing import Annotated, Literal
 
 from druks.apps import App, AppSettings, Choices, Secret
 from druks.browser import BrowserClient, BrowserSession
+from druks.chat import Bot
 from druks.doctor import CheckResult
-from druks.instructions import Bot, Instruction
+from druks.workflows import Instruction
 from pydantic import Field, SecretStr, field_validator
 
 from druks_field_notes.contracts import GistOutput

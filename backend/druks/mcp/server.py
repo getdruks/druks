@@ -187,6 +187,10 @@ def _validate_agent_tools(api: FastAPI) -> None:
             )
 
 
+def _get_app_name(tags: list[str], app_names: set[str]) -> str:
+    return next((tag for tag in tags if tag in app_names), "")
+
+
 def get_tool_name(operation_id: str, tags: list[str], app_names: set[str]) -> str:
     # An app-owned operation's id is f"{app}_{operation_id}", so the author
     # never repeats the prefix. The loader tags every app route with its app's
@@ -194,7 +198,7 @@ def get_tool_name(operation_id: str, tags: list[str], app_names: set[str]) -> st
     # owner; platform operations carry no such tag and keep their declared ids.
     # Boot refuses an app id that already carries the prefix, so a prefixed id
     # here is one this derived before, and it passes through unchanged.
-    app = next((tag for tag in tags if tag in app_names), None)
+    app = _get_app_name(tags, app_names)
     if app and not operation_id.startswith(f"{app}_"):
         return f"{app}_{operation_id}"
     return operation_id
@@ -240,6 +244,14 @@ def _install_app_namespacing(api: FastAPI, app_names: set[str]) -> None:
     # the endpoint a request matched.
     api.state.agent_tools = {
         route.endpoint: get_tool_name(route.operation_id, list(route.tags), app_names)
+        for route in iter_route_contexts(api.routes)
+        if isinstance(route.original_route, APIRoute) and _TOOL_TAGS & set(route.tags)
+    }
+    # An agent's page lists a schedule only to an account that can use its tool's app.
+    api.state.tool_apps = {
+        get_tool_name(route.operation_id, list(route.tags), app_names): _get_app_name(
+            list(route.tags), app_names
+        )
         for route in iter_route_contexts(api.routes)
         if isinstance(route.original_route, APIRoute) and _TOOL_TAGS & set(route.tags)
     }
@@ -302,7 +314,7 @@ def _annotate(
     # never searches denies the tool. This key loads the tool upfront; other clients ignore it.
     tool.meta = {"anthropic/alwaysLoad": True}
     # A tool of an app is listed only for an account that can use the app.
-    app_name = next((tag for tag in route.tags if tag in app_names), "")
+    app_name = _get_app_name(route.tags, app_names)
     preconditions = tool_preconditions[route.operation_id]
     if preconditions or app_name:
         tool.auth = _visible_while(preconditions, app_name)

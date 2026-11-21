@@ -668,7 +668,7 @@ export interface TeamInput {
   apps: string[]
 }
 
-export interface ConfiguredAgentInput {
+export interface AgentInput {
   name: string
   description: string
   instructions: string
@@ -677,11 +677,11 @@ export interface ConfiguredAgentInput {
   model: string
   isPrivate: boolean
   ownerId: string
-  slackChannelId: string | null
+  channelId: string | null
   pictureUrl: string | null
 }
 
-export interface ConfiguredAgent extends ConfiguredAgentInput {
+export interface Agent extends AgentInput {
   id: string
 }
 
@@ -893,7 +893,7 @@ export interface BrowserSession {
 export type Source = 'agent' | 'default'
 export type TimeoutSource = 'agent' | 'declared' | 'default'
 
-export interface AgentSetting {
+export interface InstructionSetting {
   /** The agent's durable id, `<app>.<attribute>` — the key in an update's agent maps. */
   name: string
   /** The declared display name, else the attribute name. */
@@ -913,13 +913,13 @@ export interface AgentSetting {
   timeoutSource: TimeoutSource
 }
 
-export interface AgentsApp {
+export interface InstructionsApp {
   name: string
-  agents: AgentSetting[]
+  instructions: InstructionSetting[]
 }
 
-export interface AgentsResponse {
-  apps: AgentsApp[]
+export interface InstructionsResponse {
+  apps: InstructionsApp[]
 }
 
 
@@ -963,7 +963,7 @@ export interface AppSettings {
   /** The id of the app's Bot, which answers people on its channels. */
   bot: string | null
   botAccess: 'public' | 'private' | null
-  agents: AgentSetting[]
+  instructions: InstructionSetting[]
   workflows: WorkflowSettings[]
   /** The app's own settings (not tied to a workflow). */
   settings: WorkflowSettingField[]

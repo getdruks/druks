@@ -1,4 +1,4 @@
-from druks.instructions import InstructionOutput
+from druks.workflows import InstructionOutput
 
 
 class AnswerOutput(InstructionOutput):

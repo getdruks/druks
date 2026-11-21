@@ -149,9 +149,14 @@ export async function expectChatFacts(
   const log = page.getByRole('log', { name: 'Messages' })
   await expect.poll(async () => {
     const { messages } = await getConversation(request, id)
+    // The page shows a reply in the turn of its message, also when Druks saved the reply
+    // after the next message.
+    const shown = messages
+      .filter((message) => !message.replyTo)
+      .flatMap((message) => [message, ...messages.filter((reply) => reply.replyTo === message.id)])
     const text = normalize(await log.innerText())
     let position = -1
-    return messages.flatMap((message) => {
+    return shown.flatMap((message) => {
       const body = normalize(message.body)
       const count = text.split(body).length - 1
       if (count !== 1) return [`${message.role} "${body}" shows ${count} times`]

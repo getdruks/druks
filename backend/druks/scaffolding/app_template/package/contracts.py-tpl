@@ -1,4 +1,4 @@
-from druks.instructions import InstructionOutput
+from druks.workflows import InstructionOutput
 
 # Every schema sent to or received from an agent — nowhere else. Schemas an agent
 # RETURNS subclass ``InstructionOutput`` (the platform unwraps it via to_result()); schemas

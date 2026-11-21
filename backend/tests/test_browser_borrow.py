@@ -24,7 +24,7 @@ from druks.browser.exceptions import (
 )
 from druks.browser.models import StoredBrowserSession
 from druks.browser.sessions import BrowserSession
-from druks.browser.subscribers import signed_out_session_goes_stale
+from druks.core.subscribers import signed_out_session_goes_stale
 from druks.db import db_session
 from druks.redis import get_client
 from druks.testing import make_settings

@@ -13,7 +13,7 @@ from druks import registry
 from druks.accounts.enums import AccountKind
 from druks.accounts.models import Account, PersonalAccessToken
 from druks.apps import App
-from druks.chat import service
+from druks.chat import Bot, service
 from druks.chat.bots import service as bot_service
 from druks.chat.channels.calls import webhooks
 from druks.chat.channels.calls.channel import CallsChannel
@@ -21,7 +21,6 @@ from druks.chat.enums import MessageState
 from druks.chat.models import Conversation
 from druks.core.apis.twilio import TwilioClient
 from druks.core.services import Twilio
-from druks.instructions import Bot
 from druks.notifications.services import validate_in_app_answer
 from druks.secrets.models import VaultSecret
 from druks.teams.models import Team

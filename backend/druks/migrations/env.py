@@ -1,15 +1,16 @@
 from logging.config import fileConfig
 
 import druks.accounts.models  # noqa: F401
+import druks.agents.models  # noqa: F401
 import druks.browser.models  # noqa: F401
 import druks.chat.models  # noqa: F401
-import druks.configured_agents.models  # noqa: F401
 import druks.contrib.software_factory.models  # noqa: F401
 import druks.durable.models  # noqa: F401
 import druks.files.models  # noqa: F401
 import druks.harnesses.models  # noqa: F401
 import druks.mcp.models  # noqa: F401
 import druks.notifications.models  # noqa: F401
+import druks.schedules.models  # noqa: F401
 import druks.services.models  # noqa: F401
 import druks.skills.models  # noqa: F401
 import druks.teams.models  # noqa: F401

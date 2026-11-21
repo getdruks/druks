@@ -32,11 +32,11 @@ from .settings import (
 if TYPE_CHECKING:
     from fastapi import APIRouter
 
+    from druks.chat.bots.base import Bot
     from druks.doctor import CheckResult
     from druks.durable.datastructures import Subject
     from druks.durable.models import Run
     from druks.durable.schemas import SubjectStatus, SubjectSummary
-    from druks.instructions import Bot
     from druks.models import StoredSubject
     from druks.ui import Page
     from druks.ui.page import PageRoute

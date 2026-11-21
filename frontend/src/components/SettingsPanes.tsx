@@ -18,8 +18,8 @@ import { ConnectSteps, useProviderConnect } from './ProviderConnectFlow'
 import {
   type Harness,
   type Account,
-  type AgentSetting,
-  type AgentsResponse,
+  type InstructionSetting,
+  type InstructionsResponse,
   type AppSettingChoices,
   type AppSettings,
   type Billing,
@@ -183,7 +183,7 @@ export function ModelChooser({
             ? `set-cell model-chooser-trigger ${isOverride ? 'override' : 'inherit'}`
             : 'set-select model-chooser-trigger'
         }
-        aria-label={`${label}: ${inheritLabel && !isOverride ? 'Inherit · ' : ''}${selected?.label ?? displayValue} · ${value ?? displayValue}`}
+        aria-label={`${label}: ${inheritLabel && !isOverride ? 'Inherit · ' : ''}${selected?.label ?? displayValue}${selected || value ? ` · ${value ?? displayValue}` : ''}`}
         title={selected?.label ?? displayValue}
         aria-haspopup="listbox"
         aria-expanded={Boolean(anchor)}
@@ -530,7 +530,7 @@ export function PreferencesPane({
   )
 }
 
-export function AgentsPane({
+export function InstructionsPane({
   defaults,
   onDefaults,
   accounts,
@@ -546,7 +546,7 @@ export function AgentsPane({
   defaults: Defaults
   onDefaults: (next: Defaults) => void
   accounts: Account[]
-  resolved: AgentsResponse
+  resolved: InstructionsResponse
   harnessByName: Record<string, Harness>
   harnessColor: Record<string, string>
   catalog: Catalog
@@ -581,7 +581,7 @@ export function AgentsPane({
     setTriple(name, keyOnly(harnessByName[name]) ? 'api_key' : defaults.defaultBilling)
 
   return (
-    <div className="set-pane mcp-pane settings-agents">
+    <div className="set-pane mcp-pane settings-instructions">
       <header className="mcp-pane-head">
         <p className="mcp-pane-sub">Shared execution settings for this installation. Instruction overrides take priority.</p>
       </header>
@@ -737,11 +737,11 @@ export function AgentsPane({
       </section>
 
       <div className="set-group">
-        <div className="set-group-label">Resolved agents</div>
-        <p className="set-field-help">These agents use the installation defaults and shared app overrides.</p>
-        <div className="set-table agents-table">
+        <div className="set-group-label">Resolved instructions and bots</div>
+        <p className="set-field-help">These instructions and bots use the installation defaults and shared app overrides.</p>
+        <div className="set-table instructions-table">
           <div className="set-thead">
-            <div>agent</div>
+            <div>name</div>
             <div>harness</div>
             <div>model</div>
             <div>billing</div>
@@ -750,19 +750,19 @@ export function AgentsPane({
           </div>
           {resolved.apps.map((app) => (
             <Fragment key={app.name}>
-              <div className="agents-app">
+              <div className="instructions-app">
                 <span>{appLabel(app.name)}</span>
                 <button
                   type="button"
-                  className="agents-app-link"
+                  className="instructions-app-link"
                   onClick={() => onOpenApp(app.name)}
                   aria-label={`Open ${appLabel(app.name)}`}
                 >
                   ›
                 </button>
               </div>
-              {app.agents.map((agent) => (
-                <ResolvedAgentRow
+              {app.instructions.map((agent) => (
+                <ResolvedInstructionRow
                   key={agent.name}
                   agent={agent}
                   harnessByName={harnessByName}
@@ -772,7 +772,7 @@ export function AgentsPane({
             </Fragment>
           ))}
         </div>
-        <div className="agents-legend">
+        <div className="instructions-legend">
           <span>
             <span className="ov-dot" /> overridden on the app&apos;s page
           </span>
@@ -783,31 +783,31 @@ export function AgentsPane({
   )
 }
 
-function ResolvedAgentRow({
+function ResolvedInstructionRow({
   agent,
   harnessByName,
   harnessColor,
 }: {
-  agent: AgentSetting
+  agent: InstructionSetting
   harnessByName: Record<string, Harness>
   harnessColor: Record<string, string>
 }) {
   const locked = keyOnly(harnessByName[agent.harness])
   const cell = (value: string, overridden: boolean) => (
-    <span className="agents-cell">
+    <span className="instructions-cell">
       {overridden && <span className="ov-dot" />}
       {value}
     </span>
   )
   return (
     <div className="set-trow">
-      <div className="agent-cell agents-agent">
+      <div className="agent-cell instructions-name">
         <span className="agent-name">{agent.label}</span>
         <span className="agent-desc">{agent.description}</span>
       </div>
       <div>
         <span
-          className="agents-cell"
+          className="instructions-cell"
           style={{ '--fam': harnessColor[agent.harness] } as CSSProperties}
         >
           {agent.harnessSource === 'agent' && <span className="ov-dot" />}
@@ -816,7 +816,7 @@ function ResolvedAgentRow({
       </div>
       <div>{cell(agent.model, agent.source === 'agent')}</div>
       <div>
-        <span className={'agents-cell' + (locked ? ' agents-locked' : '')}>
+        <span className={'instructions-cell' + (locked ? ' instructions-locked' : '')}>
           {agent.billingSource === 'agent' && !locked && <span className="ov-dot" />}
           {billingLabel(agent.billing)}
           {locked && ' ⚬'}
@@ -3720,7 +3720,7 @@ export function AppPane({
         <div className="set-group">
           <div className="set-group-label">{section}</div>
           <AgentRecords
-            agents={app.agents.filter((agent) => section === 'bots' ? agent.name === app.bot : agent.name !== app.bot)}
+            agents={app.instructions.filter((agent) => section === 'bots' ? agent.name === app.bot : agent.name !== app.bot)}
             edits={edits}
             harnessByName={harnessByName}
             defaults={defaults}
@@ -3757,7 +3757,7 @@ function AgentRecords({
   onAddProvider,
   busy,
 }: {
-  agents: AgentSetting[]
+  agents: InstructionSetting[]
   edits: UpdateAppsSettingsRequest
   harnessByName: Record<string, Harness>
   defaults: Defaults

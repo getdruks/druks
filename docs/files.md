@@ -15,7 +15,7 @@ Annotate the file in the instruction output contract. Every nested object must a
 inherit `InstructionOutput`. The harness needs a strict schema at every object node.
 
 ```python
-from druks.instructions import InstructionOutput
+from druks.workflows import InstructionOutput
 from druks.files import File
 
 

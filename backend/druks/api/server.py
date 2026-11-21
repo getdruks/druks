@@ -14,12 +14,12 @@ from starlette.routing import Route
 from druks.accounts.dependencies import current_account, resolve_single_operator
 from druks.accounts.exceptions import AuthConfigurationError
 from druks.accounts.routes import router as auth_router
+from druks.agents.routes import router as agents_router
 from druks.api.artifacts import router as artifacts_router
 from druks.api.dashboard import router as dashboard_router
 from druks.api.dependencies import commit_before_response
 from druks.api.exceptions import AgentApiError
 from druks.api.runs import router as runs_router
-from druks.api.schedules import router as schedules_router
 from druks.api.subjects import router as subjects_router
 from druks.apps.loader import load, load_installed_apps
 from druks.apps.routes import router as apps_router
@@ -30,7 +30,6 @@ from druks.chat.channels.calls.exceptions import CallsLinkError
 from druks.chat.channels.whatsapp.exceptions import WahaError, WhatsAppLinkError
 from druks.chat.dependencies import current_conversation
 from druks.chat.sockets import router as chat_sockets_router
-from druks.configured_agents.routes import router as configured_agents_router
 from druks.core.apis.exceptions import TwilioError
 from druks.core.templates import render_page
 from druks.database import (
@@ -54,6 +53,7 @@ from druks.notifications.routes import router as notifications_router
 from druks.redis import close_client
 from druks.registry import iter_apps
 from druks.sandbox.routes import router as secrets_router
+from druks.schedules.routes import router as schedules_router
 from druks.services.base import Service
 from druks.services.exceptions import OauthPageError, ServiceManagedError, ServiceNotConnectedError
 from druks.services.routes import oauth_router
@@ -335,7 +335,7 @@ app.include_router(notifications_external_router)
 app.include_router(webhooks_router)
 app.include_router(auth_router)
 app.include_router(teams_router)
-app.include_router(configured_agents_router)
+app.include_router(agents_router)
 app.include_router(providers_router)
 app.include_router(secrets_router)
 app.include_router(browser_sessions_router)

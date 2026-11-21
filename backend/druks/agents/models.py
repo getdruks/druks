@@ -4,21 +4,22 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
+from druks.accounts.enums import AccountKind
 from druks.accounts.models import Account
 from druks.core.models import Uuid7Pk
 from druks.exceptions import ObjectNotFound, PermissionDenied, ValidationError
 from druks.harnesses.config import AgentConfig, build_config, check_config
 from druks.harnesses.exceptions import AgentConfigError, HarnessNotConnectedError
 from druks.harnesses.providers import provider_label
+from druks.harnesses.registry import get_harnesses
 from druks.models import Model
 from druks.skills.models import Skill
 from druks.user_settings.models import InstallationSettings
 
 
-class ConfiguredAgent(Model, Uuid7Pk):
+class Agent(Model, Uuid7Pk):
     """An agent a person saves with its own instructions, skills, harness and model.
-    A private agent shows only to its owner and the admins. A public agent shows to
-    everyone."""
+    Only its owner and the admins see a private agent."""
 
     __tablename__ = "agents"
 
@@ -30,15 +31,13 @@ class ConfiguredAgent(Model, Uuid7Pk):
     model: Mapped[str]
     owner_id: Mapped[str] = mapped_column(ForeignKey("accounts.id", ondelete="RESTRICT"))
     is_private: Mapped[bool]
-    # A tag that names no agent in this Slack channel reaches this agent.
-    slack_channel_id: Mapped[str | None] = mapped_column(default=None, unique=True)
-    # Slack shows this image on the agent's replies.
+    # A tag that names no agent in this channel reaches this agent.
+    channel_id: Mapped[str | None] = mapped_column(default=None, unique=True)
+    # A channel shows this image on the agent's replies.
     picture_url: Mapped[str | None] = mapped_column(default=None)
 
     @classmethod
-    async def list_for_account(
-        cls, session: AsyncSession, account: Account
-    ) -> list["ConfiguredAgent"]:
+    async def list_for_account(cls, session: AsyncSession, account: Account) -> list["Agent"]:
         return list(
             await session.scalars(select(cls).where(cls._for_account(account)).order_by(cls.name))
         )
@@ -46,7 +45,7 @@ class ConfiguredAgent(Model, Uuid7Pk):
     @classmethod
     async def get_for_account(
         cls, session: AsyncSession, agent_id: str, account: Account
-    ) -> "ConfiguredAgent":
+    ) -> "Agent":
         agent = await session.scalar(
             select(cls).where(cls.id == agent_id, cls._for_account(account))
         )
@@ -55,20 +54,18 @@ class ConfiguredAgent(Model, Uuid7Pk):
         raise ObjectNotFound("agent", {"id": agent_id})
 
     @classmethod
-    async def get_for_name(cls, session: AsyncSession, name: str) -> "ConfiguredAgent | None":
+    async def get_for_name(cls, session: AsyncSession, name: str) -> "Agent | None":
         """The agent with this name in any case."""
         return await session.scalar(
-            select(cls).where(sqlalchemy.func.lower(cls.name) == name.lower())
+            select(cls).where(sqlalchemy.func.lower(cls.name) == sqlalchemy.func.lower(name))
         )
 
     @classmethod
-    async def get_for_slack_channel(
-        cls, session: AsyncSession, channel_id: str
-    ) -> "ConfiguredAgent | None":
-        return await session.scalar(select(cls).where(cls.slack_channel_id == channel_id))
+    async def get_for_channel(cls, session: AsyncSession, channel_id: str) -> "Agent | None":
+        return await session.scalar(select(cls).where(cls.channel_id == channel_id))
 
     @classmethod
-    async def get_for_text(cls, session: AsyncSession, text: str) -> "ConfiguredAgent | None":
+    async def lookup(cls, session: AsyncSession, text: str) -> "Agent | None":
         """The agent whose whole name starts the text, in any case. The longest such
         name wins: "Security engineer" over "Security"."""
         lower_text = sqlalchemy.func.lower(text)
@@ -102,7 +99,7 @@ class ConfiguredAgent(Model, Uuid7Pk):
         harness: str,
         model: str,
         is_private: bool,
-    ) -> "ConfiguredAgent":
+    ) -> "Agent":
         if await cls.get_for_name(session, name):
             raise ValidationError(f"An agent named {name!r} already exists.")
         await cls._check_harness(session, harness, model, is_private)
@@ -133,30 +130,34 @@ class ConfiguredAgent(Model, Uuid7Pk):
         harness: str,
         model: str,
         is_private: bool,
-        slack_channel_id: str | None,
+        channel_id: str | None,
         picture_url: str | None,
     ) -> None:
-        """Set every field. Only an admin changes the owner or the Slack channel. Only a
-        public agent has a Slack channel: everyone there talks to it."""
-        self.check_editor(editor)
-        if owner_id != self.owner_id and not editor.is_admin:
-            raise PermissionDenied("Only an admin can change an agent's owner.")
-        if slack_channel_id != self.slack_channel_id and not editor.is_admin:
-            raise PermissionDenied("Only an admin can change an agent's Slack channel.")
-        if slack_channel_id:
+        """Set every field. Only an admin changes the owner or the channel. Only a public
+        agent has a channel: everyone there talks to it."""
+        if owner_id != self.owner_id:
+            if not editor.is_admin:
+                raise PermissionDenied("Only an admin can change an agent's owner.")
+            if not await session.scalar(
+                select(Account).where(Account.id == owner_id, Account.kind == AccountKind.OPERATOR)
+            ):
+                raise ValidationError(f"Account {owner_id!r} is not an operator account.")
+        if channel_id != self.channel_id and not editor.is_admin:
+            raise PermissionDenied("Only an admin can change an agent's channel.")
+        if channel_id:
             if is_private:
                 raise ValidationError(
-                    "Only a public agent can have a Slack channel: everyone there talks to it. "
+                    "Only a public agent can have a channel: everyone there talks to it. "
                     "An admin can remove the channel first."
                 )
-            other = await ConfiguredAgent.get_for_slack_channel(session, slack_channel_id)
+            other = await Agent.get_for_channel(session, channel_id)
             if other and other.id != self.id:
-                raise ValidationError(f"The Slack channel already belongs to {other.name!r}.")
-        other = await ConfiguredAgent.get_for_name(session, name)
+                raise ValidationError(f"The channel already belongs to {other.name!r}.")
+        other = await Agent.get_for_name(session, name)
         if other and other.id != self.id:
             raise ValidationError(f"An agent named {name!r} already exists.")
         await self._check_harness(session, harness, model, is_private)
-        self.owner_id = (await Account.get(session, id=owner_id)).id
+        self.owner_id = owner_id
         self.name = name
         self.description = description
         self.instructions = instructions
@@ -164,22 +165,23 @@ class ConfiguredAgent(Model, Uuid7Pk):
         self.harness = harness
         self.model = model
         self.is_private = is_private
-        self.slack_channel_id = slack_channel_id
+        self.channel_id = channel_id
         self.picture_url = picture_url
         await session.flush()
 
     async def get_config(self, session: AsyncSession) -> AgentConfig:
         """A private agent runs on its owner's subscription. A public agent runs on the
-        install's API key or, without one, the unattended account's subscription, so a
-        turn never bills the person who asks."""
+        install's API key or, without one, on the unattended account's subscription."""
         if self.is_private:
-            return await self._build_config(session, self.owner_id, "subscription")
+            return await self._build_config(
+                session, account_id=self.owner_id, billing="subscription"
+            )
         try:
-            return await self._build_config(session, None, "api_key")
+            return await self._build_config(session, account_id=None, billing="api_key")
         except HarnessNotConnectedError as error:
             no_key = error
         try:
-            return await self._build_config(session, None, "subscription")
+            return await self._build_config(session, account_id=None, billing="subscription")
         except AgentConfigError:
             # The API key attempt already checked that the harness runs the model, so a
             # config error here says only that the harness takes no subscription.
@@ -191,16 +193,10 @@ class ConfiguredAgent(Model, Uuid7Pk):
                 "subscription, in Settings → Providers."
             ) from error
 
-    def check_editor(self, account: Account) -> None:
-        """Only the owner or an admin changes or deletes an agent."""
-        if account.id != self.owner_id and not account.is_admin:
-            raise PermissionDenied("Only the agent's owner or an admin can change it.")
-
-    def check_talker(self, account: Account) -> None:
-        """Anyone talks to a public agent. Only the owner talks to their private agent:
-        it runs on their subscription."""
-        if self.is_private and account.id != self.owner_id:
-            raise PermissionDenied("Only the agent's owner can talk to a private agent.")
+    async def list_enabled_skills(self, session: AsyncSession) -> list[str]:
+        """The picked skills that are still enabled in Settings → Skills."""
+        enabled = {skill.name for skill in await Skill.list_enabled(session)}
+        return [name for name in self.skills if name in enabled]
 
     @classmethod
     def _for_account(cls, account: Account) -> sqlalchemy.ColumnElement[bool]:
@@ -210,7 +206,7 @@ class ConfiguredAgent(Model, Uuid7Pk):
         return sqlalchemy.or_(cls.is_private.is_(False), cls.owner_id == account.id)
 
     async def _build_config(
-        self, session: AsyncSession, account_id: str | None, billing: str
+        self, session: AsyncSession, *, account_id: str | None, billing: str
     ) -> AgentConfig:
         """The agent's harness and model on this billing, with the installation's other
         execution defaults. No account id means the unattended account."""
@@ -224,17 +220,26 @@ class ConfiguredAgent(Model, Uuid7Pk):
             effort=settings.default_effort,
             timeout=settings.default_timeout,
             fast_mode=settings.fast_mode,
-            include_apps=settings.include_apps,
+            # A public agent runs on a subscription that is not the asker's, so it loads no apps.
+            include_apps=settings.include_apps and self.is_private,
         )
 
     @staticmethod
     async def _check_harness(
         session: AsyncSession, harness: str, model: str, is_private: bool
     ) -> None:
-        """The harness must run the model. A private agent runs on its owner's
-        subscription. A public agent can run on the install's API key, which every
-        harness takes."""
-        harness_class = await check_config(session, harness, model, "api_key")
+        """The harness must run the model, and Chat must run on it. A private agent also
+        needs a harness that takes a subscription."""
+        harness_class = await check_config(session, harness, model, billing="api_key")
+        if not harness_class.adapter_command:
+            adapters = ", ".join(
+                installed_harness.name
+                for installed_harness in get_harnesses()
+                if installed_harness.adapter_command
+            )
+            raise ValidationError(
+                f"An agent answers in Chat, and Chat runs on {adapters}. Pick one of them."
+            )
         if is_private and "subscription" not in harness_class.billing_options:
             raise ValidationError(
                 f"A private agent runs on its owner's subscription, and {harness} runs on an "
@@ -253,4 +258,4 @@ class ConfiguredAgent(Model, Uuid7Pk):
         return list(dict.fromkeys(names))
 
 
-sqlalchemy.Index("agents_name_lower_key", sqlalchemy.func.lower(ConfiguredAgent.name), unique=True)
+sqlalchemy.Index("agents_name_lower_key", sqlalchemy.func.lower(Agent.name), unique=True)

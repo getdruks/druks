@@ -79,7 +79,7 @@ class UpdateSettingsRequest(BaseModel):
 Source = Literal["agent", "default"]
 
 
-class AgentSettingResponse(Schema):
+class InstructionSettingResponse(Schema):
     name: str
     label: str
     description: str
@@ -95,13 +95,13 @@ class AgentSettingResponse(Schema):
     timeout_source: Literal["agent", "declared", "default"]
 
 
-class AgentsAppResponse(Schema):
+class InstructionsAppResponse(Schema):
     name: str
-    agents: list[AgentSettingResponse]
+    instructions: list[InstructionSettingResponse]
 
 
-class AgentsResponse(Schema):
-    apps: list[AgentsAppResponse]
+class InstructionsResponse(Schema):
+    apps: list[InstructionsAppResponse]
 
 
 class SettingsFieldResponse(Schema):
@@ -157,12 +157,12 @@ class AppSettingsResponse(Schema):
     description: str
     # A Lucide icon name.
     icon: str
-    # The agents of a built-in app show under the Druks tab.
+    # The instructions of a built-in app show under the Druks tab.
     builtin: bool
     # The id of the app's Bot, which answers people on its channels.
     bot: str | None
     bot_access: BotAccess | None
-    agents: list[AgentSettingResponse]
+    instructions: list[InstructionSettingResponse]
     workflows: list[WorkflowSettingsResponse]
     settings: list[SettingsFieldResponse]
 

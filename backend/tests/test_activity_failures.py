@@ -10,11 +10,10 @@ from druks.events.models import Event
 from druks.events.routes import list_feed
 from druks.harnesses.codex import CodexHarness
 from druks.harnesses.exceptions import HarnessSpendLimitError, Retry
-from druks.instructions import Instruction, InstructionOutput
 from druks.sandbox.datastructures import HarnessRunResult
 from druks.testing import seed_run
 from druks.usage.models import UsageScrape
-from druks.workflows import _execute_run, current_workflow
+from druks.workflows import Instruction, InstructionOutput, _execute_run, current_workflow
 from druks_field_notes.models import Note
 from druks_field_notes.workflows import Summarize
 from sqlalchemy import select
