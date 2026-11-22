@@ -12,7 +12,6 @@ from druks.chat.channels.slack import constants as slack
 from druks.chat.exceptions import FormError
 from druks.core.apis.slack import SlackClient
 from druks.notifications.buttons import encode_button
-from druks.notifications.constants import MARKDOWN_TEXT_LIMIT, TRUNCATION_MARKER
 from druks.notifications.exceptions import (
     BlocksRefusedError,
     ChannelUnavailableError,
@@ -69,7 +68,7 @@ def cut_markdown(text: str, limit: int) -> str:
     line that opens a fence keeps no start, because a part of a fence closes nothing."""
     if len(text) <= limit:
         return text
-    room = limit - len(TRUNCATION_MARKER)
+    room = limit - len(slack.TRUNCATION_MARKER)
     lines: list[str] = []
     # A newline goes before each line but the first.
     size = -1
@@ -93,11 +92,11 @@ def cut_markdown(text: str, limit: int) -> str:
         open_fence = fence_after
     if lines:
         kept = "\n".join(lines).rstrip("\n")
-        return kept + (f"\n{open_fence}" if open_fence else "") + TRUNCATION_MARKER
+        return kept + (f"\n{open_fence}" if open_fence else "") + slack.TRUNCATION_MARKER
     # The loop stopped at the first line, so ``closing`` says whether that line opens a fence.
     if closing:
-        return TRUNCATION_MARKER
-    return text[:room] + TRUNCATION_MARKER
+        return slack.TRUNCATION_MARKER
+    return text[:room] + slack.TRUNCATION_MARKER
 
 
 def get_input(field: dict) -> dict:
@@ -321,14 +320,14 @@ def get_blocks(
     line = deep_link or ""
     markdown = sum(len(part["text"]) for part in content if part["type"] == "markdown")
     # A line takes a newline before it.
-    if markdown + bool(line) + len(line) > MARKDOWN_TEXT_LIMIT:
+    if markdown + bool(line) + len(line) > slack.MARKDOWN_TEXT_LIMIT:
         line = OMISSION_MESSAGE + (OMISSION_LINK.format(link=deep_link) if deep_link else "")
-        room = MARKDOWN_TEXT_LIMIT - len(line) - 1
+        room = slack.MARKDOWN_TEXT_LIMIT - len(line) - 1
         kept = []
         # The content keeps its start, as a cut body does, and what follows the cut goes.
         for part in content:
             if part["type"] == "markdown" and len(part["text"]) > room:
-                if room > len(TRUNCATION_MARKER):
+                if room > len(slack.TRUNCATION_MARKER):
                     kept.append({"type": "markdown", "text": cut_markdown(part["text"], room)})
                 break
             if part["type"] == "markdown":
@@ -374,7 +373,9 @@ async def deliver(
         reply, question = body[:question_offset], body[question_offset:]
     # Slack refuses markdown longer than this, so a long body loses its end and
     # keeps the link, which opens the full text.
-    text = cut_markdown(reply, MARKDOWN_TEXT_LIMIT - len(question) - len(link)) + question + link
+    text = (
+        cut_markdown(reply, slack.MARKDOWN_TEXT_LIMIT - len(question) - len(link)) + question + link
+    )
     message = partial(
         get_blocks, text, actions=actions, fields=fields, token=token, outcome=outcome
     )

@@ -1,23 +1,22 @@
 import logging
 from datetime import datetime
-from functools import partial
+from typing import TYPE_CHECKING
 
 from dbos import DBOS, EnqueueOptions, StepOptions
 from dbos._error import DBOSMaxStepRetriesExceeded
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from druks.accounts.models import Account
 from druks.chat.models import Conversation
-from druks.core.services import Slack
 from druks.durable.constants import NOTIFICATIONS_QUEUE
 from druks.durable.engine import enqueue_in_transaction, step_session
 from druks.notifications import constants, exceptions
-from druks.notifications.delivery import deliver
 from druks.notifications.models import Notification
-from druks.secrets.datastructures import Audience
-from druks.secrets.models import VaultSecret
+from druks.registry import channel_registry
 from druks.services.exceptions import ServiceNotConnectedError
 from druks.settings import get_settings
+
+if TYPE_CHECKING:
+    from druks.chat.channels.base import Channel
 
 logger = logging.getLogger(__name__)
 
@@ -43,39 +42,13 @@ async def send_notification(notification_id: str) -> None:
             notification.attempts += 1
         # Delivery runs after that session commits, so a refusal still counts the
         # attempt. The detached rows stay readable: sessions don't expire on commit.
-        if notification.conversation_id:
-            # The conversation's channel posts where it lives, and reads its grant here.
-            async with step_session() as session:
-                conversation = await session.get(Conversation, notification.conversation_id)
-                message_id = await conversation.channel.post_buttons(
-                    session, conversation, notification
-                )
-        else:
-            async with step_session() as session:
-                channels = await list_account_channels(session, notification.account_id)
-                if not channels:
-                    # The bell has the notification, so it is delivered with no Slack message.
-                    await (await session.get(Notification, notification_id)).mark_delivered()
-                    return
-                client = await Slack.get_client()
-            post = partial(
-                deliver,
-                client,
-                body=notification.body,
-                blocks=notification.blocks,
-                actions=notification.actions,
-                fields=notification.fields,
-                token=notification.correlation_token,
-                deep_link=notification.deep_link,
-            )
-            try:
-                posted = await post(channels[0])
-            except exceptions.ChannelUnavailableError:
-                # The next channel takes a notification that the first one refuses.
-                if not channels[1:]:
-                    raise
-                posted = await post(channels[1])
-            message_id = f"{posted['channel']}:{posted['ts']}"
+        # The channel posts where the conversation lives, or where the account reads it, and
+        # reads its grant here.
+        async with step_session() as session:
+            channel, conversation = await get_channel(session, notification)
+            # An account that reads the channel nowhere gets no message: the bell has the
+            # notification.
+            message_id = await channel.post_buttons(session, conversation, notification)
         # Kept so that Druks can close the message when its question ends without a click,
         # and so that a chat's agent knows its question in the thread as its own.
         async with step_session() as session:
@@ -131,19 +104,19 @@ async def queue_send(session: AsyncSession, notification: Notification) -> None:
     await enqueue_in_transaction(session, options, notification.id)
 
 
-async def list_account_channels(session: AsyncSession, account_id: str) -> list[str]:
-    """Where the bot posts an account's notification, in order: the channel that the
-    person chose, then their Slack user, which opens the bot's DM."""
-    account = await session.get(Account, account_id)
-    sign_ins = await VaultSecret.list_account_connections(
-        session, Audience.service(Slack.slug), account_id
-    )
-    channels = []
-    if account.notification_channel_id:
-        channels.append(account.notification_channel_id)
-    if sign_ins:
-        channels.append(sign_ins[0].identity["subject"])
-    return channels
+async def get_channel(
+    session: AsyncSession, notification: Notification
+) -> "tuple[type[Channel], Conversation | None]":
+    """The channel that posts the notification, and the conversation that it posts in. A
+    notification with no conversation goes to its account, through the channel that posts
+    the notifications of accounts."""
+    if notification.conversation_id:
+        conversation = await session.get(Conversation, notification.conversation_id)
+        return conversation.channel, conversation
+    (channel,) = [
+        channel for channel in channel_registry.all() if channel.has_account_notifications
+    ]
+    return channel, None
 
 
 @DBOS.workflow(name=constants.CLOSE_WORKFLOW)
@@ -189,19 +162,6 @@ async def close_question(notification_id: str) -> None:
 
 async def remove_buttons(session: AsyncSession, notification: Notification) -> None:
     """Take the buttons off the notification's posted message, and say that its question
-    is closed. A conversation's channel edits its own message. An account's message
-    goes through Slack, as its post did."""
-    if notification.conversation_id:
-        conversation = await session.get(Conversation, notification.conversation_id)
-        await conversation.channel.remove_buttons(session, conversation, notification)
-    else:
-        room, message_ts = notification.message_id.split(":")
-        await deliver(
-            await Slack.get_client(),
-            room,
-            notification.body,
-            blocks=notification.blocks,
-            message_ts=message_ts,
-            deep_link=notification.deep_link,
-            outcome=constants.CLOSED_MESSAGE,
-        )
+    is closed. The channel that posted the message edits it."""
+    channel, conversation = await get_channel(session, notification)
+    await channel.remove_buttons(session, conversation, notification)

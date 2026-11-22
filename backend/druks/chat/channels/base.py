@@ -25,6 +25,8 @@ class Channel:
     # Whether the channel shows the agent's form and a parked run's questions and note as
     # inputs. Only without them does a click on a control that needs more reach the agent.
     has_inputs: ClassVar[bool] = False
+    # Whether the channel posts the notifications of an account that have no conversation.
+    has_account_notifications: ClassVar[bool] = False
     # The reaction that acknowledges a person's message, as the channel names it.
     reaction_ack: ClassVar[str]
 
@@ -51,17 +53,25 @@ class Channel:
 
     @classmethod
     async def post_buttons(
-        cls, session: AsyncSession, conversation: Conversation, notification: Notification
-    ) -> str:
+        cls,
+        session: AsyncSession,
+        conversation: Conversation | None,
+        notification: Notification,
+    ) -> str | None:
         """Post the notification where the conversation lives, with its fields as inputs and
         its actions as buttons. Fields without actions get a Submit button. A notification
         that an answer closed before the post says that its question is closed instead.
-        Returns the posted message's id, as the channel names it."""
+        Without a conversation, post the notification where its account reads the channel.
+        Returns the posted message's id, as the channel names it, or None when the account
+        reads the channel nowhere."""
         raise NotImplementedError
 
     @classmethod
     async def remove_buttons(
-        cls, session: AsyncSession, conversation: Conversation, notification: Notification
+        cls,
+        session: AsyncSession,
+        conversation: Conversation | None,
+        notification: Notification,
     ) -> None:
         """Take the buttons off the notification's posted message, and say that its
         question is closed."""

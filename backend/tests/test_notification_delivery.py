@@ -8,9 +8,11 @@ from druks.accounts.models import Account
 from druks.chat.channels.slack.channel import SlackChannel
 from druks.chat.channels.slack.constants import (
     LINK_BUTTON_ACTION_ID,
+    MARKDOWN_TEXT_LIMIT,
     MESSAGE_BLOCKS_LIMIT,
     SECTION_TEXT_LIMIT,
 )
+from druks.chat.channels.slack.delivery import OMISSION_MESSAGE, cut_markdown, deliver, get_blocks
 from druks.chat.enums import ConversationSource
 from druks.chat.exceptions import FormError
 from druks.chat.forms import parse_fields
@@ -19,8 +21,7 @@ from druks.core.apis.slack import SlackClient
 from druks.core.webhooks.slack import replace_buttons
 from druks.durable.models import AgentCall, Artifact, Run
 from druks.notifications.buttons import decode_button, encode_button
-from druks.notifications.constants import CLOSED_MESSAGE, MARKDOWN_TEXT_LIMIT
-from druks.notifications.delivery import OMISSION_MESSAGE, cut_markdown, deliver, get_blocks
+from druks.notifications.constants import CLOSED_MESSAGE
 from druks.notifications.exceptions import (
     ChannelUnavailableError,
     DeliveryError,

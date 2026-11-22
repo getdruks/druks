@@ -18,6 +18,10 @@ UNACCEPTED_AUTOMATION_REPLY = (
     "I do not answer this automation yet. A Druks admin can accept it here: {url}"
 )
 WELCOME_TEMPLATE = "chat/channels/slack/welcome.md"
+# Slack's limit for the text of all the markdown blocks of one message.
+MARKDOWN_TEXT_LIMIT = 12_000
+# What ends a message that Druks cut to fit, in a paragraph of its own.
+TRUNCATION_MARKER = "\n\n…"
 # Slack's limits for a message of inputs, from the Block Kit reference.
 MESSAGE_BLOCKS_LIMIT = 50
 BLOCK_ID_LIMIT = 255

@@ -9,6 +9,7 @@ from fastapi import HTTPException, status
 from fastapi.responses import JSONResponse, Response
 
 from druks.chat.channels.slack.constants import LINK_BUTTON_ACTION_ID
+from druks.chat.channels.slack.delivery import deliver
 from druks.chat.forms import get_answer
 from druks.core.services import Slack
 from druks.db import db_session
@@ -16,7 +17,6 @@ from druks.durable.engine import step_session
 from druks.exceptions import ObjectNotFound
 from druks.notifications.buttons import decode_button
 from druks.notifications.constants import CLOSED_MESSAGE
-from druks.notifications.delivery import deliver
 from druks.notifications.exceptions import (
     AlreadyAcknowledgedError,
     AnswerNotAllowedError,

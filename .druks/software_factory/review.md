@@ -122,14 +122,16 @@ short form" is the caveat that shows you did not.
 
 Channel code lives in its channel. A channel's limits, message layout, block types
 and API calls go in that channel's files: `backend/druks/chat/channels/<channel>/`,
-`backend/druks/core/apis/<provider>.py`, `backend/druks/core/webhooks/<provider>.py`,
-and `backend/druks/notifications/delivery.py` for Slack's delivery of a notice. These
+`backend/druks/core/apis/<provider>.py` and `backend/druks/core/webhooks/<provider>.py`.
+Slack's delivery of a notice is `backend/druks/chat/channels/slack/delivery.py`. These
 files hold no channel code: `backend/druks/durable/models.py`,
 `backend/druks/workflows.py`, `backend/druks/notifications/models.py`,
-`backend/druks/chat/service.py` and `backend/druks/chat/channels/base.py`. Examples:
+`backend/druks/notifications/outbox.py`, `backend/druks/chat/service.py` and
+`backend/druks/chat/channels/base.py`. The outbox posts through the `Channel` class.
+Examples:
 
 - Slack's 12,000-character limit for markdown, and the cut that keeps a message under
-  it, go in `notifications/delivery.py`, not in `get_rendered_ask`.
+  it, go in `chat/channels/slack/delivery.py`, not in `get_rendered_ask`.
 - Slack puts a notice's link on a line of its own after the text. That is the layout
   of `deliver()`, so `get_rendered_ask` writes only the ask and does not budget for the
   link.
