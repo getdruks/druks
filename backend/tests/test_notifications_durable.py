@@ -674,8 +674,11 @@ async def test_in_app_park_notifies_with_actions(rt, deliver_spy):
     assert notification.reason == "gate.parked"
     assert notification.body.startswith("# Review")
     assert "Which database?\n- Postgres" in notification.body
-    # A click sends only its control: a bare request_changes or an option is refused.
-    assert notification.actions == [{"id": "approve", "label": "Approve"}]
+    assert notification.actions == [
+        {"id": "approve", "label": "Approve"},
+        {"id": "request_changes", "label": "Request changes"},
+    ]
+    assert [field["name"] for field in notification.fields] == ["question:q1", "note"]
     assert notification.deep_link == f"https://druks.example/runs/{workflow_id}"
     assert notification.subject == {"type": "notification_probe", "id": 9001}
     assert notification.run_id == workflow_id
@@ -684,6 +687,7 @@ async def test_in_app_park_notifies_with_actions(rt, deliver_spy):
     (call,) = deliver_spy.calls
     assert call["blocks"] == notification.blocks
     assert call["actions"] == notification.actions
+    assert call["fields"] == notification.fields
     assert call["token"] == notification.correlation_token
     assert call["deep_link"] == notification.deep_link
 
@@ -696,10 +700,10 @@ async def test_external_park_notifies_without_actions(rt, deliver_spy):
 
     notification = await _wait_notification(rt, workflow_id, "delivered")
     assert notification.body == "Answer on the ticket"
-    assert notification.actions is None
+    assert (notification.actions, notification.fields) == (None, None)
     assert notification.deep_link is None
     (call,) = deliver_spy.calls
-    assert call["actions"] is None
+    assert (call["actions"], call["fields"]) == (None, None)
 
 
 async def test_external_park_with_declared_url_sets_deep_link(rt, deliver_spy):
@@ -942,7 +946,7 @@ async def test_a_cancelled_run_closes_the_question_s_message(rt, deliver_spy):
     assert edit["outcome"] == CLOSED_MESSAGE
 
 
-async def _respond_in_own_session(rt, token, choice, *, user_id=None):
+async def _respond_in_own_session(rt, token, choice, *, user_id=None, **click):
     # Each caller is its own task, so the scoped registry gives each its own
     # session — a real request-shaped transaction. (The HTTP layer itself is
     # pinned by the unit route tests; driving DBOS's send through a TestClient
@@ -950,7 +954,9 @@ async def _respond_in_own_session(rt, token, choice, *, user_id=None):
     session = get_session(rt.engine)
     db_session.registry.set(session)
     try:
-        await respond_to_notification(session, token, choice, user_id=user_id, account_id=None)
+        await respond_to_notification(
+            session, token, choice, user_id=user_id, account_id=None, **click
+        )
         await session.commit()
         return "ok"
     except NotificationError as error:
@@ -1037,9 +1043,11 @@ async def test_a_slack_chat_s_review_offers_its_buttons_in_its_thread(rt, delive
         {"id": "approve", "label": "Approve"},
         {"id": "request_changes", "label": "Request changes"},
     ]
+    assert [field["name"] for field in in_thread.fields] == ["question:q1", "note"]
     assert in_thread.deep_link == f"https://druks.example/runs/{workflow_id}"
     (call,) = [call for call in deliver_spy.calls if call["token"] == in_thread.correlation_token]
     assert (call["channel"], call["thread_ts"]) == ("C9", "1700000000.000100")
+    assert (call["actions"], call["fields"]) == (in_thread.actions, in_thread.fields)
     assert call["deep_link"] == in_thread.deep_link
 
     session = get_session(rt.engine)
@@ -1054,13 +1062,19 @@ async def test_a_slack_chat_s_review_offers_its_buttons_in_its_thread(rt, delive
     # The ask with its buttons is the person's one message, so the park starts no turn.
     assert not await DBOS.list_workflows_async(name="chat.deliver", parent_workflow_id=workflow_id)
 
-    # The review asks a question, so the click goes to the chat, and the run waits for
-    # the agent's answer.
+    # The click carries the answer and the note, so the chat's agent is not asked.
     clicked = await _respond_in_own_session(
-        rt, in_thread.correlation_token, {"control": "approve"}, user_id="U1"
+        rt,
+        in_thread.correlation_token,
+        {"control": "request_changes"},
+        user_id="U1",
+        values={"question:q1": "postgres", "note": "Use a queue."},
+        has_inputs=True,
     )
     assert clicked == "ok"
-    parked = await _wait_run(rt, workflow_id, lambda run: run.state == RunState.PARKED)
+    await _wait_run(rt, workflow_id, lambda run: run.state == RunState.FINISHED)
+    reply = OperatorReply(action="request_changes", answers={"q1": "postgres"}, note="Use a queue.")
+    assert reply in _REVIEW_REPLIES
     session = get_session(rt.engine)
     try:
         bodies = await session.scalars(
@@ -1070,12 +1084,9 @@ async def test_a_slack_chat_s_review_offers_its_buttons_in_its_thread(rt, delive
                 ~Message.is_internal,
             )
         )
-        assert list(bodies) == ["Approve"]
+        assert list(bodies) == []
     finally:
         await session.close()
-
-    await parked.resume(action="approve", answers={"q1": "postgres"}, note="")
-    await _wait_run(rt, workflow_id, lambda run: run.state == RunState.FINISHED)
 
 
 async def test_concurrent_responds_resolve_to_one_answer(rt, deliver_spy):
@@ -1084,10 +1095,16 @@ async def test_concurrent_responds_resolve_to_one_answer(rt, deliver_spy):
     await _wait_run(rt, workflow_id, lambda run: run.state == RunState.PARKED)
     notification = await _wait_notification(rt, workflow_id, "delivered")
     token = notification.correlation_token
+    # Two clicks on the approval's message, each with the note in its input.
+    click = {"values": {"note": "Use a queue."}, "has_inputs": True}
 
     results = await asyncio.gather(
-        asyncio.create_task(_respond_in_own_session(rt, token, {"control": "approve"})),
-        asyncio.create_task(_respond_in_own_session(rt, token, {"control": "approve"})),
+        asyncio.create_task(
+            _respond_in_own_session(rt, token, {"control": "request_changes"}, **click)
+        ),
+        asyncio.create_task(
+            _respond_in_own_session(rt, token, {"control": "request_changes"}, **click)
+        ),
     )
 
     assert results.count("ok") == 1

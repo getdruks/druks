@@ -48,12 +48,15 @@ PARKED_MESSAGE = (
 PARKED_BUTTONS_MESSAGE = (
     "[Internal: Run {run} waits for an answer. Its buttons are in this thread, with its "
     "ask. The person already knows what the run waits for, so do not repeat the ask "
-    "unless they ask about it. The request:\n{request}\nA click on a button that needs a "
-    "note or answers to the questions reaches you as the person's message with the "
-    "button's name. Then ask them for what is missing, and answer the run with "
-    "answer_gate.]"
+    "unless they ask about it. The request:\n{request}\nA click on a button answers the "
+    "run, and you then get the answer. A click that cannot carry a note or answers that "
+    "its button needs reaches you instead as the person's message with the button's name. "
+    "Then ask them for what is missing, and answer the run with answer_gate.]"
 )
-CLICK_ANSWER_MESSAGE = "[Internal: The person answered run {run} with its {answer} button.]"
+CLICK_ANSWER_MESSAGE = (
+    "[Internal: The person answered run {run} with a button in this thread. Their answer:\n"
+    "{answer}]"
+)
 QUOTA_RESUMED_MESSAGE = (
     "[Internal: Run {run} continues after its usage-limit wait. Tell the person in one short line.]"
 )

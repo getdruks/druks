@@ -22,7 +22,8 @@ class Channel:
     has_readable_threads: ClassVar[bool] = False
     # Whether the channel shows a parked run's controls and the agent's choices as buttons.
     has_buttons: ClassVar[bool] = False
-    # Whether the channel shows the fields of the agent's form as inputs, with a Submit button.
+    # Whether the channel shows the agent's form and a parked run's questions and note as
+    # inputs. Only without them does a click on a control that needs more reach the agent.
     has_inputs: ClassVar[bool] = False
     # The reaction that acknowledges a person's message, as the channel names it.
     reaction_ack: ClassVar[str]
@@ -52,10 +53,10 @@ class Channel:
     async def post_buttons(
         cls, session: AsyncSession, conversation: Conversation, notification: Notification
     ) -> str:
-        """Post the notification with its actions as buttons, or its fields as inputs with a
-        Submit button, where the conversation lives. A notification that an answer closed
-        before the post says that its question is closed instead. Returns the posted
-        message's id, as the channel names it."""
+        """Post the notification where the conversation lives, with its fields as inputs and
+        its actions as buttons. Fields without actions get a Submit button. A notification
+        that an answer closed before the post says that its question is closed instead.
+        Returns the posted message's id, as the channel names it."""
         raise NotImplementedError
 
     @classmethod

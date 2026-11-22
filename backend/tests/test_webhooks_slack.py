@@ -28,6 +28,7 @@ from druks.models import Base
 from druks.notifications.buttons import encode_button
 from druks.notifications.exceptions import AnswerNotAllowedError
 from druks.notifications.models import Notification
+from druks.notifications.services import create_park_notification
 from druks.secrets.models import Audience, VaultSecret
 from druks.teams.models import Team
 from druks.testing import configure_app_for_test, make_settings, seed_dbos_status
@@ -427,6 +428,151 @@ async def test_a_submit_that_its_fields_refuse_tells_the_person_why_and_keeps_th
     )
     ambient_db_session().expunge_all()
     assert (await ambient_db_session().get(Notification, question.id)).state == "pending"
+
+
+_REVIEW_ASK = {
+    **_IN_APP_ASK,
+    "questions": [
+        {
+            "id": "database",
+            "prompt": "Which database?",
+            "options": [{"id": "postgres", "label": "Postgres"}, {"id": "mysql", "label": "MySQL"}],
+        },
+        {"id": "cache", "prompt": "Which cache?", "options": [{"id": "redis", "label": "Redis"}]},
+    ],
+    "reply_fields": ["action", "answers", "note"],
+}
+
+
+async def _approval(druks_db, *, is_in_a_chat: bool) -> tuple[Run, Notification]:
+    """A run parked on _REVIEW_ASK, and the notification that its park made: for its
+    account, or in the thread of its Slack chat with U7."""
+    account = await Account.get_or_create(druks_db, "op@example.com")
+    conversation_id = None
+    if is_in_a_chat:
+        conversation = Conversation(
+            account_id=account.id,
+            source=ConversationSource.SLACK,
+            user_id="U7",
+            thread_id=f"C1:{_THREAD_TS}",
+        )
+        druks_db.add(conversation)
+        await druks_db.flush()
+        conversation_id = conversation.id
+    run = Run(
+        account_id=account.id,
+        id=str(uuid7()),
+        kind=Summarize.kind,
+        input_gate="review",
+        input_request=_REVIEW_ASK,
+        input_requested_at=Base.utc_now(),
+        conversation_id=conversation_id,
+    )
+    druks_db.add(run)
+    await druks_db.flush()
+    await seed_dbos_status(druks_db, run.id, "parked")
+    notification_id = await create_park_notification(
+        druks_db,
+        run,
+        {"type": "notification_probe", "id": 1},
+        account_id=None if is_in_a_chat else account.id,
+        conversation_id=conversation_id,
+    )
+    return run, await druks_db.get(Notification, notification_id)
+
+
+def _select(option: dict | None) -> dict:
+    return {"a1": {"type": "static_select", "selected_option": option}}
+
+
+def _text(value: str | None) -> dict:
+    return {"a2": {"type": "plain_text_input", "value": value}}
+
+
+@pytest.mark.parametrize("is_in_a_chat", [False, True], ids=["account", "chat"])
+@pytest.mark.parametrize(
+    ("control", "state", "reply", "outcome"),
+    [
+        (
+            "approve",
+            {
+                "question:database": _select(_option("Postgres", "postgres")),
+                "question:cache": _select(_option("Redis", "redis")),
+                "note": _text(None),
+                # Inputs that the approval does not offer.
+                "question:ghost": _select(_option("Ghost", "ghost")),
+                "database": _text("mysql"),
+            },
+            {"action": "approve", "answers": {"database": "postgres", "cache": "redis"}},
+            "<@U7> chose Approve.\nWhich database?: Postgres\nWhich cache?: Redis\n"
+            "Note: (no answer)",
+        ),
+        (
+            "request_changes",
+            {
+                "question:database": _select(_option("MySQL", "mysql")),
+                "question:cache": _select(None),
+                "note": _text("Fix <!here> & go"),
+            },
+            {
+                "action": "request_changes",
+                "answers": {"database": "mysql"},
+                "note": "Fix <!here> & go",
+            },
+            "<@U7> chose Request changes.\nWhich database?: MySQL\nWhich cache?: (no answer)\n"
+            "Note: Fix &lt;!here&gt; &amp; go",
+        ),
+    ],
+    ids=["every-answer", "some-answers-and-a-note"],
+)
+@pytest.mark.usefixtures("slack_card")
+async def test_a_click_answers_the_run_with_the_inputs_and_shows_them_in_their_place(
+    tmp_path, druks_db, resume_spy, started, is_in_a_chat, control, state, reply, outcome
+):
+    run, approval = await _approval(druks_db, is_in_a_chat=is_in_a_chat)
+    button = {"type": "button", "action_id": encode_button(approval.correlation_token, control)}
+    body = _form_body(button, state)
+
+    with _client(tmp_path) as client:
+        response = client.post(
+            "/_external/slack/interactivity/", content=body, headers=_signed_headers(body)
+        )
+
+    assert response.json() == {"accepted": True}
+    assert resume_spy == [{"id": run.id, "note": "", **reply}]
+    # The chat's agent is not asked.
+    assert started.await_args_list == [
+        call(replace_buttons, approval.id, channel="C1", message_ts=_MESSAGE_TS, outcome=outcome)
+    ]
+
+
+@pytest.mark.parametrize("is_in_a_chat", [False, True], ids=["account", "chat"])
+@pytest.mark.parametrize("note", [None, "   "], ids=["empty", "blank"])
+@pytest.mark.parametrize("database", [None, _option("MySQL", "mysql")], ids=["no-answer", "answer"])
+@pytest.mark.usefixtures("slack_card")
+async def test_a_click_that_needs_a_note_tells_only_the_person_when_the_note_is_empty(
+    tmp_path, druks_db, resume_spy, started, is_in_a_chat, note, database
+):
+    _, approval = await _approval(druks_db, is_in_a_chat=is_in_a_chat)
+    button = {
+        "type": "button",
+        "action_id": encode_button(approval.correlation_token, "request_changes"),
+    }
+    body = _form_body(button, {"question:database": _select(database), "note": _text(note)})
+
+    with _client(tmp_path) as client:
+        response = client.post(
+            "/_external/slack/interactivity/", content=body, headers=_signed_headers(body)
+        )
+
+    assert (response.status_code, response.json()) == (200, {"accepted": False})
+    assert resume_spy == []
+    reason = "This button needs a note. Write the note, then click the button again."
+    assert started.await_args_list == [
+        call(explain_reason, "C1", user="U7", reason=reason, thread_ts=_THREAD_TS)
+    ]
+    ambient_db_session().expunge_all()
+    assert (await ambient_db_session().get(Notification, approval.id)).state == "pending"
 
 
 async def test_malformed_payloads_400_never_500_never_resume(

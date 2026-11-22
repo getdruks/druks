@@ -1,6 +1,7 @@
 import logging
 import re
 from collections.abc import Sequence
+from contextlib import suppress
 from functools import partial
 
 import aiohttp
@@ -8,6 +9,7 @@ from slack_sdk.errors import SlackApiError
 
 from druks import ui
 from druks.chat.channels.slack import constants as slack
+from druks.chat.exceptions import FormError
 from druks.core.apis.slack import SlackClient
 from druks.notifications.buttons import encode_button
 from druks.notifications.constants import MARKDOWN_TEXT_LIMIT, TRUNCATION_MARKER
@@ -141,6 +143,44 @@ def get_input(field: dict) -> dict:
     return block
 
 
+def check_input(block: dict) -> None:
+    """Refuse an input block that Slack refuses: a name, a text, or options past their Slack
+    limits. A field's name is the id of its block."""
+    name, element = block["block_id"], block["element"]
+    options = element.get("options", [])
+    if len(options) > slack.OPTIONS_LIMITS[element["type"]]:
+        raise FormError(
+            f"Field {name!r} has {len(options)} options. Slack shows "
+            f"{slack.OPTIONS_LIMITS[element['type']]} at most in this field."
+        )
+    texts = [
+        ("name", name, slack.BLOCK_ID_LIMIT),
+        ("label", block["label"]["text"], slack.LABEL_LIMIT),
+    ]
+    if hint := block.get("hint"):
+        texts.append(("help text", hint["text"], slack.HINT_LIMIT))
+    if placeholder := element.get("placeholder"):
+        texts.append(("placeholder", placeholder["text"], slack.PLACEHOLDER_LIMIT))
+    if "initial_value" in element:
+        texts.append(("value", element["initial_value"], slack.INITIAL_VALUE_LIMIT))
+    for option in options:
+        texts.append(("option label", option["text"]["text"], slack.OPTION_TEXT_LIMIT))
+        texts.append(("option value", option["value"], slack.OPTION_VALUE_LIMIT))
+    for part, text, limit in texts:
+        if not 0 < len(text) <= limit:
+            raise FormError(
+                f"Slack takes 1 to {limit} characters for the {part} of a field. The "
+                f"{part} of field {name!r} has {len(text)}."
+            )
+
+
+def cut_text(text: str, limit: int) -> str:
+    """``text`` when it fits in ``limit`` characters. Otherwise, its start and an ellipsis."""
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1] + "…"
+
+
 def get_blocks(
     text: str,
     *,
@@ -153,8 +193,11 @@ def get_blocks(
 ) -> list[dict]:
     """The blocks of a notification's message: ``text`` as markdown, or ``blocks`` as Slack
     draws them with ``deep_link`` on the line after them, then an input for each of
-    ``fields``, a button that carries ``token`` for each action, then ``outcome``. A form's
-    one button is its Submit button.
+    ``fields``, a button that carries ``token`` for each action, then ``outcome``. Fields
+    without actions are a form, and its one button is its Submit button. Fields with actions
+    are a run's questions and note: an input shows the start of a label that is too long for
+    it, and the content holds the whole label. An input that Slack refuses stays out, so the
+    message still goes out with its question in the content.
 
     Each Druks block takes a branch of its own. Facts and metrics take a section of fields
     for each ten, with the title on the first. A divider takes a divider, and a link takes a
@@ -164,7 +207,32 @@ def get_blocks(
     the blocks left. When the markdown is longer than Slack takes, Druks cuts its end, and a
     line in place of the link says so, with the link."""
     controls: list[dict] = []
-    if fields:
+    if fields and actions:
+        inputs_by_id = {}
+        for field in fields:
+            block = get_input(
+                {
+                    **field,
+                    "label": cut_text(field["label"], slack.LABEL_LIMIT),
+                    "options": [
+                        {
+                            **option,
+                            "label": cut_text(option["label"], slack.OPTION_TEXT_LIMIT),
+                        }
+                        for option in field.get("options", [])
+                    ],
+                }
+            )
+            with suppress(FormError):
+                check_input(block)
+                # Slack refuses a message with two blocks of one id.
+                inputs_by_id.setdefault(block["block_id"], block)
+        inputs = list(inputs_by_id.values())
+        # The content and the buttons take a block each. The note is the last input, and it
+        # stays when the message has no room for every input.
+        room = slack.MESSAGE_BLOCKS_LIMIT - 2
+        controls += inputs if len(inputs) <= room else [*inputs[: room - 1], inputs[-1]]
+    elif fields:
         controls += [get_input(field) for field in fields]
         actions = [SUBMIT_ACTION]
     if actions:
@@ -294,7 +362,8 @@ async def deliver(
     the Druks blocks whose text form is ``body``: Slack draws them in its place, and when
     Slack refuses them, the body goes out in their place once. Each action becomes a button
     that carries ``token``, so a click answers this notification. Each of ``fields``
-    becomes an input, and the Submit button below them carries ``token``. With
+    becomes an input above the buttons. Without actions, the button below the inputs is a
+    Submit button that carries ``token``. With
     ``message_ts``, Druks edits that posted message, and ``outcome`` takes the place of its
     buttons and inputs. With ``user``, only that person sees the message.
     ``question_offset`` is where a chat agent's question starts in ``body``. Returns

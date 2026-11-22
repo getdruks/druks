@@ -64,6 +64,7 @@ async def send_notification(notification_id: str) -> None:
                 body=notification.body,
                 blocks=notification.blocks,
                 actions=notification.actions,
+                fields=notification.fields,
                 token=notification.correlation_token,
                 deep_link=notification.deep_link,
             )
