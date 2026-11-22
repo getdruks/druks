@@ -39,6 +39,32 @@ acceptance criterion — nothing more, nothing less.
 {% include "software_factory/build/_related_repos.md" %}
 {% include "software_factory/build/_blockers.md" %}
 {% include "software_factory/build/_skills.md" %}
+{% if build.journal.last_implementation %}
+## Your previous round
+
+You delivered `{{ build.journal.last_implementation.head_sha }}` on this branch. Start from it: read only the files the request below touches, not the whole change again.
+
+{{ build.journal.last_implementation.summary }}
+
+**Files changed:**
+{% for path in build.journal.last_implementation.files_changed %}
+- `{{ path }}`
+{% endfor %}
+{% if build.journal.last_implementation.checks %}
+**Checks:**
+{% for check in build.journal.last_implementation.checks %}
+- `{{ check.command }}`: {{ check.status }}{% if check.reason %} ({{ check.reason }}){% endif %}
+
+{% endfor %}
+{% endif %}
+{% if build.journal.last_implementation.known_risks %}
+**Known risks:**
+{% for risk in build.journal.last_implementation.known_risks %}
+- {{ risk }}
+{% endfor %}
+{% endif %}
+
+{% endif %}
 {% if build.journal.red_ci_report %}
 ## CI is red
 

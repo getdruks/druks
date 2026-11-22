@@ -6,7 +6,9 @@ import pytest
 from druks.contrib import software_factory
 from druks.contrib.software_factory.contracts import (
     CiReport,
+    CommandCheckOutput,
     FindingOutput,
+    ImplementationOutput,
     ReviewReport,
     TriageOutput,
 )
@@ -172,6 +174,54 @@ async def test_implement_prompt_renders_the_prior_review():
     assert "### Round 1 — decision: request_changes" in prompt
     assert "Rename the flag." in prompt
     assert "- **high** The flag keeps its old name. (`app/flags.py:12`)" in prompt
+
+
+def _delivery() -> ImplementationOutput:
+    return ImplementationOutput(
+        type="result",
+        status="success",
+        base_sha="1a2b3c4d",
+        head_sha="5e6f7a8b",
+        commit_sha="5e6f7a8b",
+        pr_number=7,
+        files_changed=["app/flags.py"],
+        acceptance_results=[],
+        checks=[CommandCheckOutput(command="ruff check .", status="pass", exit_code=0, reason="")],
+        known_risks=["The old flag name stays in the changelog."],
+        summary="Renamed the flag.",
+        workspace_path="/home/agent/work/repo",
+        workspace_retention=None,
+    )
+
+
+async def test_implement_prompt_hands_over_the_previous_round():
+    build = _build()
+    build.journal.add(_delivery())
+
+    prompt = await render_prompt(
+        "software_factory/build/implement.md",
+        build=build,
+        verification="VERIFICATION-BLOCK",
+        workspace=_workspace(),
+    )
+
+    assert "## Your previous round" in prompt
+    assert "You delivered `5e6f7a8b` on this branch." in prompt
+    assert "Renamed the flag." in prompt
+    assert "- `app/flags.py`" in prompt
+    assert "- `ruff check .`: pass" in prompt
+    assert "- The old flag name stays in the changelog." in prompt
+
+
+async def test_implement_prompt_has_no_previous_round_on_the_first_round():
+    prompt = await render_prompt(
+        "software_factory/build/implement.md",
+        build=_build(),
+        verification="VERIFICATION-BLOCK",
+        workspace=_workspace(),
+    )
+
+    assert "## Your previous round" not in prompt
 
 
 async def test_implement_prompt_puts_red_ci_ahead_of_older_instructions():
