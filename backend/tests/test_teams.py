@@ -4,7 +4,7 @@ import pytest
 from conftest import IDENTITY_HEADER, header_client
 from druks.accounts.enums import AccountKind
 from druks.accounts.models import Account
-from druks.apps.loader import get_app
+from druks.registry import get_app
 from druks.teams.models import Team
 
 

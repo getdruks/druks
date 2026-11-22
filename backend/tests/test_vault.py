@@ -2,9 +2,9 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from druks.accounts.models import Account
-from druks.apps.registry import services
 from druks.db import db_session
 from druks.mcp import oauth
+from druks.registry import service_registry
 from druks.secrets.enums import SecretKind
 from druks.secrets.exceptions import SecretRevokedError
 from druks.secrets.models import VaultSecret
@@ -134,7 +134,7 @@ async def test_a_service_grant_issues_through_the_services_client(druks_db, monk
         async def get_oauth_client():
             return Client()
 
-    monkeypatch.setattr(services, "get", lambda slug: Acme if slug == "acme" else None)
+    monkeypatch.setattr(service_registry, "get", lambda slug: Acme if slug == "acme" else None)
 
     assert await row.issue_token(()) == ("tok", expiry)
 

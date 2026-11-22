@@ -11,7 +11,6 @@ from sqlalchemy.orm import Mapped, column_property, mapped_column, relationship
 
 from druks.accounts.enums import AccountKind
 from druks.accounts.models import Account
-from druks.apps.registry import channels
 from druks.core.models import Uuid7Pk, uuid7_str
 from druks.durable.dbos_state import workflow_status
 from druks.files import FileField
@@ -19,6 +18,7 @@ from druks.files.datastructures import File
 from druks.files.models import FileRecord
 from druks.models import Base, Model
 from druks.notifications.models import Notification
+from druks.registry import channel_registry
 from druks.secrets.models import VaultSecret
 from druks.settings import get_settings
 
@@ -133,7 +133,7 @@ class Conversation(Base, Uuid7Pk):
     @property
     def channel(self) -> "type[Channel] | None":
         """The channel that the conversation arrives through. A web conversation has none."""
-        return channels.get(self.source)
+        return channel_registry.get(self.source)
 
     @property
     def admin_account_id(self) -> str | None:

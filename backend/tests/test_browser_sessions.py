@@ -5,6 +5,7 @@ from conftest import IDENTITY_HEADER, header_client
 from druks import database
 from druks.accounts.dependencies import current_account, current_session_account
 from druks.accounts.models import Account, PersonalAccessToken
+from druks.apps import App
 from druks.browser import routes
 from druks.browser.enums import BrowserSessionPayloadFormat, BrowserSessionStatus
 from druks.browser.models import StoredBrowserSession
@@ -19,8 +20,8 @@ from sqlalchemy_encrypted_field import utils as secret_utils
 
 
 @pytest.fixture
-def notebook(browser_session_declarations):
-    class Notebook:
+def notebook(declared_apps):
+    class Notebook(App):
         name = "notebook"
         archive = BrowserSession(site="archive.example")
         journal = BrowserSession(site="journal.example")
@@ -89,9 +90,9 @@ async def test_leftover_rows_list_as_undeclared_and_refuse_the_login_window(clie
 
 
 async def test_anonymous_sessions_list_as_anonymous_and_refuse_login_and_state(
-    client, browser_session_declarations
+    client, declared_apps
 ):
-    class Critic:
+    class Critic(App):
         name = "critic"
         target = BrowserSession(site="druks.local", anonymous=True)
 

@@ -6,11 +6,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from druks.accounts.dependencies import current_admin_account
-from druks.apps.registry import services
 from druks.core.apis.github import GITHUB_API_URL
 from druks.core.apis.slack import SLACK_CREATE_APP_URL
 from druks.core.services import GithubApp, Slack
 from druks.core.templates import render_page
+from druks.registry import service_registry
 from druks.settings import get_settings
 
 # Mounted by the loader under /api/core, like any app's routes.
@@ -25,7 +25,7 @@ async def create_slack_app() -> RedirectResponse:
 
 
 def get_manifest_service(slug: str) -> type[GithubApp]:
-    service = services.get(slug)
+    service = service_registry.get(slug)
     if service and service.manifest:
         return service
     raise HTTPException(status_code=404, detail=f"No service {slug!r} with a manifest.")

@@ -2,13 +2,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, Self
 
-from druks.apps.loader import resolve_workflow_app
-from druks.apps.registry import workflows as workflow_registry
 from druks.db import atomic, db_session
 from druks.durable.schemas import SubjectSummary
 from druks.events.models import Event
 from druks.exceptions import ObjectNotFound
 from druks.models import snake_name
+from druks.registry import get_app_by_module
 
 if TYPE_CHECKING:
     from druks.durable.schemas import SubjectStatus
@@ -88,8 +87,7 @@ class Subject:
     def _list_app_workflows(cls) -> "list[type[Workflow]]":
         """The workflows of the app this class belongs to. Its reads count their runs,
         so another app's run on the same subject does not show."""
-        app_name = resolve_workflow_app(cls.__module__)
-        return [workflow for workflow in workflow_registry.all() if workflow.app == app_name]
+        return get_app_by_module(cls.__module__).workflows.all()
 
     async def get_status(self, *, workflow: "type[Workflow] | None" = None) -> "SubjectStatus":
         """Where this subject stands: the state of the newest run of its app's workflows,

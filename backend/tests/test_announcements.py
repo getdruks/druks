@@ -1,5 +1,5 @@
 import pytest
-from druks.apps import loader
+from druks.apps import App
 from druks.db import db_session
 from druks.events.models import Event
 from druks.signals import subscribe
@@ -12,8 +12,11 @@ class Report(Subject):
     pass
 
 
-async def test_identity_subject_uses_its_registered_app(druks_db, monkeypatch):
-    monkeypatch.setitem(loader._workflow_packages, __name__, "reports")
+async def test_identity_subject_uses_its_app(druks_db, declared_apps):
+    class Reports(App):
+        name = "reports"
+        package = __name__
+
     report = Report(id="owner/repository#7")
     received = []
 
@@ -32,8 +35,8 @@ async def test_identity_subject_uses_its_registered_app(druks_db, monkeypatch):
     assert received == [(report, "https://example.com/report/7")]
 
 
-async def test_unregistered_subject_names_the_missing_registration(druks_db):
-    with pytest.raises(WorkflowError, match="register_workflow_package"):
+async def test_a_subject_outside_every_app_cannot_announce(druks_db):
+    with pytest.raises(WorkflowError, match="outside every app package"):
         await Report(id="owner/repository#7").announce("report.published")
 
 

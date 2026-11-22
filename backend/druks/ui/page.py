@@ -5,12 +5,13 @@ from itertools import count
 from typing import TYPE_CHECKING
 from urllib.parse import quote
 
-from druks.apps.registry import pages
+from druks.registry import get_app_by_module
 
 from .exceptions import PageRouteError
 from .schemas import Page
 
 if TYPE_CHECKING:
+    from druks.apps import App
     from druks.durable.datastructures import Subject
     from druks.models import StoredSubject
 
@@ -51,6 +52,9 @@ class PageRoute:
         self.label = label or self.name.replace("_", " ")
         self.order = next(_declared)
         self.subject = subject
+        # The pages declared under this one, in the order the app declared them.
+        # The static ones are this page's tabs.
+        self.children: list[PageRoute] = []
 
     def child(self, path: str, *, label: str = "") -> Callable[[PageFunction], "PageRoute"]:
         """Declare a page under this one, at ``path`` relative to this route."""
@@ -61,24 +65,17 @@ class PageRoute:
             )
 
         def declare(function: PageFunction) -> PageRoute:
-            return pages.register(PageRoute(path, function, label=label, parent=self))
+            child = _declare(PageRoute(path, function, label=label, parent=self))
+            self.children.append(child)
+            return child
 
         return declare
 
     @property
     def key(self) -> str:
-        """What the registry files this page under. Module, name, and route
+        """What the app's declarations file this page under. Module, name, and route
         together, so two pages that share a name both reach the boot check."""
         return f"{self.module}.{self.name}.{self.route}"
-
-    @property
-    def children(self) -> list["PageRoute"]:
-        """The pages declared under this one, in the order the app declared them.
-        The static ones are this page's tabs."""
-        return sorted(
-            (page_route for page_route in pages.all() if page_route.parent is self),
-            key=lambda page_route: page_route.order,
-        )
 
     @property
     def route(self) -> str:
@@ -169,19 +166,30 @@ def page(
     subject type's Dashboard decisions. Its route must have one ID parameter."""
 
     def declare(function: PageFunction) -> PageRoute:
-        return pages.register(PageRoute(path, function, label=label, subject=subject))
+        return _declare(PageRoute(path, function, label=label, subject=subject))
 
     return declare
 
 
-def list_pages_for_app(app_name: str, package: str) -> list[PageRoute]:
-    """The pages ``package`` declares, in route-match order: literal segments
+def _declare(page_route: PageRoute) -> PageRoute:
+    try:
+        app = get_app_by_module(page_route.module)
+    except LookupError:
+        raise PageRouteError(
+            f"{page_route.module} declares page {page_route.name!r} outside every app "
+            "package. Declare it in a module of the app's package, and import that module "
+            "after the App class."
+        ) from None
+    return app.page_routes.register(page_route)
+
+
+def list_pages_for_app(app: "type[App]") -> list[PageRoute]:
+    """The pages the app declares, in route-match order: literal segments
     before parameters before catch-alls, at every depth. What an app declared
     first never decides a match. Raises ``PageRouteError`` on a table a request
     could not resolve."""
-    declared = [
-        page_route for page_route in pages.all() if page_route.module.startswith(f"{package}.")
-    ]
+    app_name = app.name
+    declared = app.page_routes.all()
     if not declared:
         return []
 

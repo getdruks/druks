@@ -158,7 +158,7 @@ def test_file_field_autogenerates_and_upgrades_with_the_platform_foreign_key(
     app.name = "migration_probe"
     app.table_prefix = "migration_probe_"
     app.package_dir.return_value = package_dir
-    monkeypatch.setattr("druks.apps.loader.get_app", lambda name: app)
+    monkeypatch.setattr("druks.database.get_app", lambda name: app)
 
     with engine.connect() as connection:
         connection.exec_driver_sql(

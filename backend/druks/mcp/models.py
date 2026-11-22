@@ -8,8 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
 from druks.accounts.models import Account
-from druks.apps.registry import mcp_servers, services
 from druks.core.models import Uuid7Pk
+from druks.mcp.catalog import mcp_server_registry
 from druks.mcp.constants import BEARER_HEADER, BROWSER_SERVER_NAME, DRUKS_SERVER_NAME, NAME_PATTERN
 from druks.mcp.datastructures import McpServerAccess
 from druks.mcp.enums import Credential, IdentityMode
@@ -20,6 +20,7 @@ from druks.mcp.exceptions import (
 )
 from druks.mcp.helpers import get_grant_account
 from druks.models import Base
+from druks.registry import service_registry
 from druks.secrets.datastructures import Audience
 from druks.secrets.enums import SecretKind
 from druks.secrets.models import VaultSecret
@@ -63,7 +64,7 @@ class McpServer(Base, Uuid7Pk):
         for secret in await VaultSecret.list_installation_tokens(session):
             secret_headers.setdefault(secret.audience_name, {})[secret.header] = secret
         servers: dict[str, dict] = {}
-        for definition in mcp_servers.all():
+        for definition in mcp_server_registry.all():
             name = definition["name"]
             row = rows.pop(name, None)
             servers[name] = {
@@ -97,7 +98,9 @@ class McpServer(Base, Uuid7Pk):
     ) -> list[McpServerAccess]:
         default_account = await Account.get_default(session)
         is_default = bool(default_account) and default_account.id == account_id
-        owners = {service.mcp_host: service for service in services.all() if service.mcp_host}
+        owners = {
+            service.mcp_host: service for service in service_registry.all() if service.mcp_host
+        }
         accesses = []
         for server in (await cls._merged(session)).values():
             service = owners.get(urlsplit(server["url"]).hostname)
@@ -160,7 +163,7 @@ class McpServer(Base, Uuid7Pk):
     ) -> VaultSecret:
         """Write a service's login to the account's header row for the server: the
         issuer answers a header row verbatim, and the service's row holds only its fields."""
-        service = services.get(login.audience_name)
+        service = service_registry.get(login.audience_name)
         return await VaultSecret.store(
             session,
             SecretKind.STATIC,
@@ -193,8 +196,8 @@ class McpServer(Base, Uuid7Pk):
         server = await cls.get_for_name(session, name)
         if server:
             return server
-        if name in mcp_servers:
-            definition = mcp_servers.get(name)
+        if name in mcp_server_registry:
+            definition = mcp_server_registry.get(name)
             return await cls.create(
                 session, name=name, url=definition["url"], is_enabled=definition["enabled"]
             )

@@ -9,9 +9,9 @@ from druks.accounts.dependencies import (
 )
 from druks.accounts.models import Account
 from druks.api.dependencies import SessionDep
-from druks.apps.loader import get_app
 from druks.chat.enums import BotAccess
 from druks.chat.models import Conversation
+from druks.registry import get_app
 from druks.teams.dependencies import require_pairing_access
 
 from .constants import ONE_TIME_CODE_TTL_SECONDS

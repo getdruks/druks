@@ -110,7 +110,7 @@ async def test_coherent_stored_settings_pass(
 
 
 async def test_app_without_settings_has_no_settings_row(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, declared_apps
 ) -> None:
     class Plain(App):
         name = "plain_without_settings"
@@ -121,7 +121,7 @@ async def test_app_without_settings_has_no_settings_row(
 
 
 async def test_raising_settings_clean_is_contained(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, declared_apps
 ) -> None:
     class Broken(App):
         name = "broken_settings"
@@ -205,7 +205,7 @@ async def test_broken_app_check_does_not_hide_core_failures(
     assert "127.0.0.1:1" in redis_result.detail
 
 
-def test_default_app_contributes_no_checks(tmp_path: Path) -> None:
+def test_default_app_contributes_no_checks(tmp_path: Path, declared_apps) -> None:
     """An app that doesn't declare ``checks`` adds nothing because the base
     attribute is an empty list."""
 

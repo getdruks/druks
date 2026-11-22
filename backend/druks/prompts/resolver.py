@@ -6,7 +6,7 @@ from jinja2 import Environment, FileSystemLoader, PrefixLoader, StrictUndefined,
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 
 from druks.apps.fetcher import fetch_file
-from druks.apps.loader import iter_apps
+from druks.registry import iter_apps
 
 
 @functools.cache

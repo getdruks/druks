@@ -5,7 +5,6 @@ from conftest import installation_key
 from druks.accounts.context import current_account_id
 from druks.accounts.models import Account
 from druks.apps.base import App
-from druks.apps.loader import iter_apps
 from druks.contrib.software_factory.app import SoftwareFactory
 from druks.contrib.software_factory.datastructures import PullRequest
 from druks.contrib.software_factory.workflows import PullRequestReview
@@ -15,6 +14,7 @@ from druks.durable.datastructures import Subject
 from druks.durable.reads import get_statuses_for_subjects, get_subject_statuses
 from druks.durable.schemas import SubjectSummary
 from druks.models import StoredSubject
+from druks.registry import iter_apps
 from druks.testing import asgi_client, seed_dbos_status
 from druks.workflows import Workflow
 from druks_field_notes.workflows import Survey
@@ -76,11 +76,6 @@ class _ThingApp(App):
     name = "faketest"
     # Its subjects are declared in this module, so the app owns them.
     package = __name__
-
-    @classmethod
-    def workflows(cls) -> list:
-        # The base method reads the modules under the package. Flow is in the package.
-        return [Flow]
 
 
 class Flow(Workflow):

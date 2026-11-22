@@ -4,8 +4,8 @@ from importlib.metadata import entry_points
 from typing import TYPE_CHECKING
 
 from druks.apps import App
-from druks.apps.registry import apps
 from druks.models import Base
+from druks.registry import app_registry, iter_apps
 from druks.settings import get_settings
 
 from . import exceptions
@@ -18,44 +18,8 @@ if TYPE_CHECKING:
 
 _GROUP = "druks.apps"
 
-# Which app owns each workflow-declaring package — the loader-validated
-# installation claims, stamped once an entry point checks out, so a Workflow
-# class resolves its identity at definition time.
-_workflow_packages: dict[str, str] = {}
 
-
-def register_workflow_package(package: str, app: str) -> None:
-    # Conflicting or overlapping claims are a packaging mistake — two installs
-    # can't share a workflow package.
-    if package in _workflow_packages:
-        if _workflow_packages[package] != app:
-            raise exceptions.MalformedApp(
-                f"package {package!r} already belongs to "
-                f"{_workflow_packages[package]!r} — {app!r} can't claim it"
-            )
-        return
-    for registered, owner in _workflow_packages.items():
-        nested = registered.startswith(f"{package}.") or package.startswith(f"{registered}.")
-        if nested and owner != app:
-            raise exceptions.MalformedApp(
-                f"package {package!r} overlaps {registered!r} (owned by {owner!r}) — "
-                "workflow ownership must be unambiguous"
-            )
-    _workflow_packages[package] = app
-
-
-def resolve_workflow_app(module: str) -> str:
-    """The app owning ``module``'s nearest registered ancestor package.
-    Raises ``LookupError`` when no registered package contains the module."""
-    prefix = module
-    while prefix:
-        if prefix in _workflow_packages:
-            return _workflow_packages[prefix]
-        prefix = prefix.rpartition(".")[0]
-    raise LookupError(module)
-
-
-def register_apps() -> None:
+def load_installed_apps() -> None:
     """Fill the apps registry with every installed app that druks.toml leaves
     enabled. A process calls this once where it starts."""
     # A model can name a model of another package: Account.teams names Team. The
@@ -71,7 +35,7 @@ def register_apps() -> None:
                 f"provides it. Remove [apps.{name}]."
             )
     disabled = {name for name, table in tables.items() if not table.get("enabled", True)}
-    apps.clear()
+    app_registry.clear()
     for entry in entries:
         if entry.name in disabled:
             continue
@@ -83,21 +47,7 @@ def register_apps() -> None:
                 f"app {entry.name!r} entry point resolves to an App named "
                 f"{app.name!r} — the entry-point name must match App.name"
             )
-        apps.register(app)
-
-
-def iter_apps() -> list[type[App]]:
-    """Every app ``register_apps`` registered when the process started."""
-    if not apps:
-        raise exceptions.AppsNotRegisteredError
-    return apps.all()
-
-
-def get_app(name: str) -> type[App]:
-    for app in iter_apps():
-        if app.name == name:
-            return app
-    raise KeyError(f"no installed app named {name!r}")
+        app_registry.register(app)
 
 
 def load_app(name: str) -> type[App]:
@@ -234,6 +184,7 @@ def mount(api: "FastAPI", app: type[App], modules: list["ModuleType"]) -> None:
     from fastapi import Depends
 
     from druks.accounts.dependencies import current_account
+    from druks.chat.dependencies import current_conversation
     from druks.teams.dependencies import require_app_access
 
     prefix = f"/api/{app.name}"
@@ -242,7 +193,11 @@ def mount(api: "FastAPI", app: type[App], modules: list["ModuleType"]) -> None:
             router,
             prefix=prefix,
             tags=[app.name],
-            dependencies=[Depends(current_account), Depends(require_app_access(app))],
+            dependencies=[
+                Depends(current_account),
+                Depends(current_conversation),
+                Depends(require_app_access(app)),
+            ],
         )
     dist = app.frontend_dist()
     if dist:

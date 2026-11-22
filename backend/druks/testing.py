@@ -39,7 +39,7 @@ import druks.user_settings.models  # noqa: F401
 from druks.accounts.context import current_account_id
 from druks.accounts.models import Account
 from druks.api.dependencies import SessionDep
-from druks.apps.loader import import_app_models, register_apps
+from druks.apps.loader import import_app_models, load_installed_apps
 from druks.database import configure_session, create_engine_from_url
 from druks.db import db_session
 from druks.durable import AgentCall, Run
@@ -135,7 +135,7 @@ def pytest_load_initial_conftests(early_config, parser, args) -> None:
     # A Workflow class resolves its declaring app at definition time, so
     # ownership must be claimed before collection imports a module that defines one.
     try:
-        register_apps()
+        load_installed_apps()
     except Exception as error:  # noqa: BLE001 — re-raised from the fixtures below
         _discovery_error = error
 

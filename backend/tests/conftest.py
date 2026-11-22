@@ -12,14 +12,15 @@ from druks import agents, tracing
 from druks.accounts import jwt as assertion
 from druks.accounts.models import Account
 from druks.api.server import app
-from druks.apps.loader import register_workflow_package
-from druks.apps.registry import apps, browser_sessions, mcp_servers, services
+from druks.apps import App
 from druks.database import create_engine_from_url
 from druks.db import db_session
 from druks.durable.dbos_state import DBOS_SYSTEM_SCHEMA, workflow_status
 from druks.durable.enums import AgentCallStatus
 from druks.harnesses.providers import AnthropicProvider
+from druks.mcp.catalog import mcp_server_registry
 from druks.models import Base
+from druks.registry import _app_classes, _app_packages, app_registry, service_registry
 from druks.sandbox.datastructures import AgentResult
 from druks.secrets.datastructures import Audience
 from druks.secrets.enums import SecretKind
@@ -43,13 +44,6 @@ from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.test.globals_test import reset_trace_globals
 from sqlalchemy import update
-
-# A Workflow class resolves its declaring app at definition time, from
-# packages the loader registers before importing. Tests import workflow modules
-# directly and some declare their own workflows, so they register here — before
-# collection imports any test module.
-for test_module in ("test_durable_sdk", "test_notifications_durable"):
-    register_workflow_package(test_module, "")
 
 # What a process propagates before tracing sets its own.
 _TEXTMAP = get_global_textmap()
@@ -83,7 +77,12 @@ class ConfigOutput(agents.AgentOutput):
     ok: bool
 
 
-CONFIG_PROBE = agents.Agent(id="config_probe", prompt="probe.md", contract=ConfigOutput)
+class Probes(App):
+    name = "probes"
+    config_probe = agents.Agent(prompt="probe.md", contract=ConfigOutput)
+
+
+CONFIG_PROBE = Probes.config_probe
 
 
 def settings_client(tmp_path: Path) -> TestClient:
@@ -105,7 +104,7 @@ async def connect_service(slug: str, *, identity: dict, secrets: dict) -> VaultS
     """Seed the vault row a finished connect flow would leave for a service."""
     return await VaultSecret.store(
         db_session(),
-        services.get(slug).secret_kind,
+        service_registry.get(slug).secret_kind,
         Audience.service(slug),
         identity=identity,
         secrets=secrets,
@@ -165,10 +164,10 @@ def reset_tracing() -> None:
 def declared_services():
     # Service subclasses self-register at class definition; tests declare
     # inside this fixture and leave the registry as found.
-    saved = dict(services._items)
+    saved = dict(service_registry._items)
     yield
-    services._items.clear()
-    services._items.update(saved)
+    service_registry._items.clear()
+    service_registry._items.update(saved)
 
 
 @pytest.fixture
@@ -179,11 +178,11 @@ def tmp_data_dir(tmp_path):
 
 @pytest.fixture
 def registered_apps():
-    # A test that calls register_apps() leaves the registry as found.
-    saved = dict(apps._items)
+    # A test that calls load_installed_apps() leaves the registry as found.
+    saved = dict(app_registry._items)
     yield
-    apps._items.clear()
-    apps._items.update(saved)
+    app_registry._items.clear()
+    app_registry._items.update(saved)
 
 
 @pytest.fixture(autouse=True)
@@ -244,21 +243,32 @@ def registry_state():
     # Catalog loads and test registrations mutate the process-global MCP
     # registry; snapshot and restore so a test's entries don't leak into the
     # rest of the suite.
-    saved = dict(mcp_servers._items)
+    saved = dict(mcp_server_registry._items)
     yield
-    mcp_servers._items.clear()
-    mcp_servers._items.update(saved)
+    mcp_server_registry._items.clear()
+    mcp_server_registry._items.update(saved)
+
+
+def snapshot_apps() -> Callable[[], None]:
+    # An App class files itself, with what it declares, when Python defines it. A
+    # test that defines one calls what this returns, and the apps are as found.
+    classes, packages = dict(_app_classes), dict(_app_packages)
+
+    def restore() -> None:
+        _app_classes.clear()
+        _app_classes.update(classes)
+        _app_packages.clear()
+        _app_packages.update(packages)
+
+    return restore
 
 
 @pytest.fixture
-def browser_session_declarations():
-    # BrowserSession declarations self-register at class definition, so what a
-    # test module defines at import time would leak into every merged-list
-    # read; tests declare inside this fixture and leave the registry as found.
-    saved = dict(browser_sessions._items)
-    yield browser_sessions
-    browser_sessions._items.clear()
-    browser_sessions._items.update(saved)
+def declared_apps():
+    # A test that defines an App class inside this fixture leaves the apps as found.
+    restore = snapshot_apps()
+    yield
+    restore()
 
 
 # These modules manage their own engine + database and commit for real — the DBOS

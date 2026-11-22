@@ -3,11 +3,11 @@ import hmac
 
 import pytest
 from druks.accounts.context import Actor, current_actor
-from druks.apps.registry import webhooks
 from druks.core.apis.linear import LINEAR_AUTHORITY
 from druks.database import configure_session
 from druks.db import db_session
 from druks.exceptions import PermissionDenied
+from druks.registry import webhook_registry
 from druks.settings import Settings, configure_settings
 from druks.testing import TEST_DATABASE_URL
 from druks.webhooks import InvalidWebhookError, Webhook, verify_hmac_sha256
@@ -29,11 +29,11 @@ def _isolated_registry():
     ``__init_subclass__``. Restore the pre-test state so tests don't
     bleed registrations into each other.
     """
-    snapshot = dict(webhooks._items)
+    snapshot = dict(webhook_registry._items)
     try:
         yield
     finally:
-        webhooks._items = snapshot
+        webhook_registry._items = snapshot
 
 
 @pytest.fixture
@@ -60,7 +60,7 @@ def test_concrete_subclass_registers_automatically():
         def get_action(self):
             return "noop"
 
-    assert Hook in webhooks.all()
+    assert Hook in webhook_registry.all()
     assert Hook.path == "acme/events/"
 
 
@@ -68,7 +68,7 @@ def test_abstract_subclass_does_not_register():
     class Mid(Webhook):
         abstract = True
 
-    assert Mid not in webhooks.all()
+    assert Mid not in webhook_registry.all()
 
 
 def test_grandchild_of_abstract_does_register():
@@ -85,8 +85,8 @@ def test_grandchild_of_abstract_does_register():
         def get_action(self):
             return "noop"
 
-    assert Hook in webhooks.all()
-    assert Mid not in webhooks.all()
+    assert Hook in webhook_registry.all()
+    assert Mid not in webhook_registry.all()
 
 
 def test_concrete_without_provider_and_category_raises():

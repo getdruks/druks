@@ -84,6 +84,16 @@ For app-surface changes, inspect the proof app at
 - Put only identity and facts in a read-side field. Keep UI wording in the app pages.
 - Give a shared resource one global registry. When a second
   consumer needs a different answer, add a scoping axis. Do not add one in anticipation.
+- Keep the app registry in `druks.registry`, below the author namespaces. Internal code
+  imports it from there, never through an author namespace's package. `druks.apps`
+  loads no models, so that every layer can import it. A method of `App` that reads the
+  database imports what it needs when it runs.
+- A workflow, an agent, a bot, a page, and a browser session belong to an `App`, which
+  holds them: `app.workflows`, `app.agents`, `app.bot`, `app.page_routes`, and
+  `app.browser_sessions`. None of them exists without an `App` class, in the tests
+  too. Ask the app (`app.workflows.all()`) or the object that holds the name
+  (`run.workflow`). A service, a webhook, and a channel belong to the installation, so
+  each keeps a registry of its own in `druks.registry`.
 - Druks UI shows data and acts on an app's own records. Do not rebuild the
   screens or the settings of a connected service in app pages or app settings.
   The app's Bot changes the service through its API. See "What pages are for"

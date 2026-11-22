@@ -2,13 +2,24 @@ from inspect import Parameter, Signature
 from types import ModuleType
 
 import pytest
+from druks.apps import App
 from druks.apps.exceptions import AppRouteConflict
 from druks.apps.loader import load_app
+from druks.registry import get_app_by_module
 from druks.ui import Page, page
 from druks.ui.exceptions import PageRouteError
 from druks.ui.page import PageRoute, list_pages_for_app
 from druks_field_notes.models import Note
 from fastapi import APIRouter
+
+
+def app_for(package: str) -> type[App]:
+    """The make-believe app that owns ``package``. A page files itself under the
+    app that owns its module."""
+    try:
+        return get_app_by_module(f"{package}.pages")
+    except LookupError:
+        return type("MakeBelieve", (App,), {"name": package, "package": package})
 
 
 def declare(
@@ -30,12 +41,13 @@ def declare(
     project.__signature__ = Signature(  # type: ignore[attr-defined]
         [Parameter(parameter, Parameter.POSITIONAL_OR_KEYWORD) for parameter in parameters]
     )
+    app_for(package)
     declaration = parent.child(path, label=label) if parent else page(path, label=label)
     return declaration(project)
 
 
 def routes_for(package: str) -> list[str]:
-    return [declaration.route for declaration in list_pages_for_app(package, package)]
+    return [declaration.route for declaration in list_pages_for_app(app_for(package))]
 
 
 def test_discovery_loads_the_pages_module():
@@ -142,7 +154,7 @@ def test_a_child_of_a_child_fails_at_declaration():
 def test_a_missing_landing_page_is_allowed():
     declare("no_landing", "/notes", "notes")
 
-    routes = list_pages_for_app("no_landing", "no_landing")
+    routes = list_pages_for_app(app_for("no_landing"))
     assert [page.name for page in routes] == ["notes"]
 
 
@@ -151,7 +163,7 @@ def test_two_landing_pages_fail():
     declare("two_landings", "/", "home")
 
     with pytest.raises(PageRouteError, match=r"declares 2 pages at '/'"):
-        list_pages_for_app("two_landings", "two_landings")
+        list_pages_for_app(app_for("two_landings"))
 
 
 def test_equivalent_parameter_shapes_fail():
@@ -160,7 +172,7 @@ def test_equivalent_parameter_shapes_fail():
     declare("same_shape", "/{slug}", "note_by_slug", "slug")
 
     with pytest.raises(PageRouteError, match="same shape"):
-        list_pages_for_app("same_shape", "same_shape")
+        list_pages_for_app(app_for("same_shape"))
 
 
 def test_a_repeated_page_name_fails():
@@ -174,7 +186,7 @@ def test_a_repeated_page_name_fails():
     page("/archive")(notes)
 
     with pytest.raises(PageRouteError, match="two pages named 'notes'"):
-        list_pages_for_app("same_name", "same_name")
+        list_pages_for_app(app_for("same_name"))
 
 
 def test_a_child_must_take_its_parent_parameters():
@@ -183,7 +195,7 @@ def test_a_child_must_take_its_parent_parameters():
     declare("dropped_parameter", "/history", "note_history", parent=note)
 
     with pytest.raises(PageRouteError, match=r"takes \[\], and its route"):
-        list_pages_for_app("dropped_parameter", "dropped_parameter")
+        list_pages_for_app(app_for("dropped_parameter"))
 
 
 def test_an_extra_parameter_must_come_from_the_route():
@@ -191,7 +203,7 @@ def test_an_extra_parameter_must_come_from_the_route():
     declare("extra_parameter", "/notes", "notes", "note_id")
 
     with pytest.raises(PageRouteError, match="one parameter for each route parameter"):
-        list_pages_for_app("extra_parameter", "extra_parameter")
+        list_pages_for_app(app_for("extra_parameter"))
 
 
 def test_an_optional_extra_parameter_is_a_query_filter():
@@ -203,7 +215,7 @@ def test_an_optional_extra_parameter_is_a_query_filter():
     notes.__module__ = "query_filter.pages"
     page("/notes")(notes)
 
-    names = [declaration.name for declaration in list_pages_for_app("query_filter", "query_filter")]
+    names = [declaration.name for declaration in list_pages_for_app(app_for("query_filter"))]
     assert names == ["overview", "notes"]
 
 
@@ -249,7 +261,7 @@ def test_two_pages_in_one_module_with_one_name_fail():
     declare("one_module_twice", "/second", "notes")
 
     with pytest.raises(PageRouteError, match="two pages named 'notes'"):
-        list_pages_for_app("one_module_twice", "one_module_twice")
+        list_pages_for_app(app_for("one_module_twice"))
 
 
 def test_static_children_keep_declaration_order():
@@ -271,7 +283,7 @@ def test_a_positional_only_parameter_fails():
     page("/notes/{note_id}")(note)
 
     with pytest.raises(PageRouteError, match="callable by name"):
-        list_pages_for_app("positional_only", "positional_only")
+        list_pages_for_app(app_for("positional_only"))
 
 
 def test_a_catch_all_must_be_the_last_segment():
@@ -280,7 +292,7 @@ def test_a_catch_all_must_be_the_last_segment():
     declare("late_catch_all", "/metadata", "file_metadata", "rest", parent=files)
 
     with pytest.raises(PageRouteError, match="catch-all is not the last segment"):
-        list_pages_for_app("late_catch_all", "late_catch_all")
+        list_pages_for_app(app_for("late_catch_all"))
 
 
 def test_two_children_of_different_parents_with_one_name_fail():
@@ -291,7 +303,7 @@ def test_two_children_of_different_parents_with_one_name_fail():
     declare("shared_child_name", "/history", "history", "peer_id", parent=peer)
 
     with pytest.raises(PageRouteError, match="two pages named 'history'"):
-        list_pages_for_app("shared_child_name", "shared_child_name")
+        list_pages_for_app(app_for("shared_child_name"))
 
 
 @pytest.mark.parametrize(

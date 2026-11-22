@@ -5,14 +5,21 @@ from druks.accounts.dependencies import current_account, current_admin_account
 from druks.accounts.models import Account
 from druks.agents import Agent
 from druks.api.dependencies import SessionDep
-from druks.apps.loader import get_app
-from druks.apps.registry import agents, bots, channels, workflows
 from druks.durable.engine import apply_schedules
 from druks.harnesses.base import Harness
 from druks.harnesses.config import check_config
 from druks.harnesses.exceptions import AgentConfigError
 from druks.harnesses.registry import get_harnesses
 from druks.notifications.services import list_notification_channels
+from druks.registry import (
+    channel_registry,
+    get_agent,
+    get_app,
+    get_bot,
+    get_workflow,
+    iter_agents,
+    iter_bots,
+)
 from druks.teams.dependencies import require_named_app_access
 
 from . import reads
@@ -82,7 +89,7 @@ async def check_agent_configs(session: AsyncSession, settings: InstallationSetti
     await check_config(
         session, settings.default_harness, settings.default_model, settings.default_billing
     )
-    for agent in (*agents.all(), *bots.all()):
+    for agent in (*iter_agents(), *iter_bots()):
         harness = await SettingsOverride.agent_harness(session, agent.id, settings=settings)
         model = await SettingsOverride.agent_model(session, agent.id, settings=settings)
         billing = await SettingsOverride.agent_billing(session, agent.id, settings=settings)
@@ -145,7 +152,9 @@ async def get_app_settings(
         allowed_efforts=list(ALLOWED_EFFORTS),
         apps=[out for out in projected if out.agents or out.workflows or out.settings],
         channels=[
-            channel.name for channel in channels.all() if await channel.service.is_connected()
+            channel.name
+            for channel in channel_registry.all()
+            if await channel.service.is_connected()
         ],
     )
 
@@ -176,7 +185,7 @@ async def update_app_settings(
     # A cell set alone must still fit the two it inherits, so the check reads
     # the stored triple; a rejection rolls the writes back.
     for name in {*body.agent_harnesses, *body.agent_models, *body.agent_billings}:
-        if name not in agents and name not in bots:
+        if not get_agent(name) and not get_bot(name):
             raise HTTPException(status_code=422, detail=f"Unknown agent {name!r}")
     if body.agent_harnesses or body.agent_models or body.agent_billings:
         installation = await InstallationSettings.get_or_create(session)
@@ -191,7 +200,7 @@ async def update_app_settings(
     changed_apps = []
     try:
         for kind, changes in body.workflow_settings.items():
-            workflow = workflows.get(kind)
+            workflow = get_workflow(kind)
             if not workflow:
                 raise HTTPException(status_code=422, detail=f"Unknown workflow {kind!r}")
             for field, value in changes.items():

@@ -8,12 +8,16 @@ from druks.accounts.enums import Role
 from druks.accounts.models import Account
 from druks.apps import App, loader
 from druks.apps.exceptions import AppSubjectContractError
-from druks.apps.loader import iter_apps, load, register_apps
+from druks.apps.loader import load, load_installed_apps
 from druks.durable.schemas import SubjectSummary
+from druks.registry import iter_apps
 from druks.teams.models import Team
 from druks.workflows import Subject
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
+
+# Every test here defines app classes; the suite keeps seeing only the installed apps.
+pytestmark = pytest.mark.usefixtures("declared_apps")
 
 
 class Widget(Subject):
@@ -71,7 +75,7 @@ def test_duplicate_app_name_is_rejected(monkeypatch, registered_apps):
         lambda *, group: [_fake_entry("dup", DupA), _fake_entry("dup", DupB)],
     )
     with pytest.raises(ValueError, match="already has key 'dup'"):
-        register_apps()
+        load_installed_apps()
 
 
 def test_entry_point_resolving_to_a_non_app_is_rejected(monkeypatch, registered_apps):
@@ -81,7 +85,7 @@ def test_entry_point_resolving_to_a_non_app_is_rejected(monkeypatch, registered_
         lambda *, group: [_fake_entry("bad", object())],
     )
     with pytest.raises(TypeError, match="not an App"):
-        register_apps()
+        load_installed_apps()
 
 
 def test_load_confines_app_routers_to_the_app_namespace(monkeypatch):
@@ -231,9 +235,7 @@ def test_a_subject_cannot_take_the_transcripts_segment():
         name = "colliding"
         package = "colliding"
 
-        @classmethod
-        def workflows(cls):
-            return [SimpleNamespace(subject=Transcripts)]
+        workflows = SimpleNamespace(all=lambda: [SimpleNamespace(subject=Transcripts)])
 
     with pytest.raises(AppSubjectContractError, match="serves every app's platform reads"):
         Colliding.subjects()
@@ -247,9 +249,7 @@ def test_a_declared_subject_missing_list_summaries_is_rejected_with_an_actionabl
         name = "broken"
         package = "broken"
 
-        @classmethod
-        def workflows(cls):
-            return [SimpleNamespace(subject=Account)]
+        workflows = SimpleNamespace(all=lambda: [SimpleNamespace(subject=Account)])
 
     with pytest.raises(AppSubjectContractError) as caught:
         Broken.subjects()
@@ -274,9 +274,7 @@ def test_full_boot_refuses_a_subject_missing_list_summaries(monkeypatch):
         def discover(cls) -> list[ModuleType]:
             return []
 
-        @classmethod
-        def workflows(cls):
-            return [SimpleNamespace(subject=Account)]
+        workflows = SimpleNamespace(all=lambda: [SimpleNamespace(subject=Account)])
 
     monkeypatch.setattr(loader, "iter_apps", lambda: [Broken])
     monkeypatch.setattr(loader, "import_app_models", lambda: None)
@@ -297,9 +295,7 @@ def test_a_concrete_inherited_list_summaries_satisfies_the_contract_without_call
         name = "fine"
         package = "fine"
 
-        @classmethod
-        def workflows(cls):
-            return [SimpleNamespace(subject=Inheritor)]
+        workflows = SimpleNamespace(all=lambda: [SimpleNamespace(subject=Inheritor)])
 
     assert Fine.subjects() == [Inheritor]
 

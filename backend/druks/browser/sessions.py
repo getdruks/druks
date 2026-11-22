@@ -8,7 +8,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar
 
-from druks.apps.registry import browser_sessions
 from druks.browser.constants import (
     CDP_CONNECT_TIMEOUT_SECONDS,
     SESSION_EXPORT_TIMEOUT_SECONDS,
@@ -89,7 +88,7 @@ class BrowserSession:
 
     def __set_name__(self, owner: type, attr: str) -> None:
         self.name = f"{owner.name}.{attr}"
-        browser_sessions.register(self)
+        owner.browser_sessions.register(self)
 
     @property
     def initial_status(self) -> BrowserSessionStatus:

@@ -11,12 +11,12 @@ import pytest
 from conftest import connect_service
 from druks.accounts.models import Account
 from druks.agents import Agent, AgentOutput
-from druks.apps.registry import services
 from druks.core.apis.github import GitHubAppClient
 from druks.core.services import Github
 from druks.core.webhooks.github import GitHubEvents
 from druks.db import db_session
 from druks.redis import close_client
+from druks.registry import service_registry
 from druks.secrets.datastructures import Audience
 from druks.secrets.enums import SecretKind
 from druks.secrets.exceptions import MissingSecretError
@@ -658,7 +658,7 @@ def test_abstract_base_shares_declarations_without_registering(declared_services
     class Mail(AcmeBase):
         slug = "acme_mail"
 
-    assert services.get("acme_mail") is Mail
+    assert service_registry.get("acme_mail") is Mail
     assert Mail.abstract is False
     assert Mail.Authentication.sign_in is AcmeBase.Authentication.sign_in
     assert Mail.Authentication.service is Mail

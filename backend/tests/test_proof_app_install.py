@@ -6,11 +6,12 @@ import textwrap
 # already cover the settings-value and migration reads that need one.
 _CHECK = textwrap.dedent(
     """
-    from druks.apps.loader import iter_apps, load_app, register_apps
+    from druks.apps.loader import load_app, load_installed_apps
+    from druks.registry import iter_apps
     from druks.settings import configure_settings, load_settings
 
     configure_settings(load_settings())
-    register_apps()
+    load_installed_apps()
     names = {app.name for app in iter_apps()}
     assert "field_notes" in names, names
 
@@ -24,7 +25,7 @@ _CHECK = textwrap.dedent(
         "sync_signing_key",
         "sync_token",
     ]
-    assert [workflow.__name__ for workflow in app.workflows()] == ["Summarize", "Survey"]
+    assert [workflow.__name__ for workflow in app.workflows.all()] == ["Summarize", "Survey"]
     assert {router.prefix for router in app.routers()} >= {"/notes", "/note"}
     assert app.migrations_dir() is not None
     print("ok")

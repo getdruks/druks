@@ -6,7 +6,7 @@ from fastapi.responses import Response
 from starlette.requests import ClientDisconnect
 
 from druks.api.dependencies import SessionDep, SettingsDep
-from druks.apps.registry import webhooks
+from druks.registry import webhook_registry
 
 from .exceptions import InvalidWebhookError
 
@@ -25,7 +25,7 @@ def match_webhook(path: str) -> tuple[type, dict[str, Any]]:
     if not path.endswith("/"):
         path = path + "/"
     target = "/" + path
-    for cls in webhooks.all():
+    for cls in webhook_registry.all():
         match = cls.pattern.match(target)
         if match:
             return cls, match.groupdict()

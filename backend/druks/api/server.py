@@ -20,13 +20,14 @@ from druks.api.dependencies import commit_before_response
 from druks.api.exceptions import AgentApiError
 from druks.api.runs import router as runs_router
 from druks.api.subjects import router as subjects_router
-from druks.apps.loader import iter_apps, load, register_apps
+from druks.apps.loader import load, load_installed_apps
 from druks.apps.routes import router as apps_router
 from druks.browser.exceptions import BrowserApiError
 from druks.browser.routes import agent_browser_router
 from druks.browser.routes import router as browser_sessions_router
 from druks.chat.channels.calls.exceptions import CallsLinkError
 from druks.chat.channels.whatsapp.exceptions import WahaError, WhatsAppLinkError
+from druks.chat.dependencies import current_conversation
 from druks.chat.sockets import router as chat_sockets_router
 from druks.core.apis.exceptions import TwilioError
 from druks.core.templates import render_page
@@ -49,6 +50,7 @@ from druks.mcp.routes import router as mcp_router
 from druks.notifications.routes import external_router as notifications_external_router
 from druks.notifications.routes import router as notifications_router
 from druks.redis import close_client
+from druks.registry import iter_apps
 from druks.sandbox.routes import router as secrets_router
 from druks.services.base import Service
 from druks.services.exceptions import OauthPageError, ServiceManagedError, ServiceNotConnectedError
@@ -144,7 +146,7 @@ settings = load_settings()
 configure_settings(settings)
 # Before DBOS launches: DBOS spans its workflows on the provider that this sets.
 init_tracing(settings)
-register_apps()
+load_installed_apps()
 
 app = FastAPI(
     title="Druks",
@@ -324,7 +326,7 @@ async def _unhandled_exception_handler(
 # connection flow must answer during none/zero setup; capability management
 # admits only the session identity). The secrets router authenticates a box's
 # grant bearer and nothing else.
-_identity_gate = [Depends(current_account)]
+_identity_gate = [Depends(current_account), Depends(current_conversation)]
 app.include_router(health_router)
 # Before the webhook catch-all ({hook_path:path}): declaration order is match order.
 app.include_router(notifications_external_router)

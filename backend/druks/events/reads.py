@@ -1,17 +1,20 @@
 from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from druks.apps import App
-from druks.apps.loader import get_app
 from druks.durable.models import Artifact, Run
 from druks.events.feed import FeedDestinations
 from druks.events.models import Event
+from druks.registry import get_app
+
+if TYPE_CHECKING:
+    from druks.apps import App
 
 
 async def list_topics(
-    session: AsyncSession, app: str | None, *, apps: Sequence[type[App]]
+    session: AsyncSession, app: str | None, *, apps: "Sequence[type[App]]"
 ) -> list[dict[str, str]]:
     statement = (
         Event.get_history(apps=apps, app=app)

@@ -2,10 +2,10 @@ from typing import ClassVar
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from druks.apps.registry import channels
 from druks.chat.exceptions import ChannelHasNoThreadsError, ChannelStartsNoConversationsError
 from druks.chat.models import Conversation, Message
 from druks.notifications.models import Notification
+from druks.registry import channel_registry
 from druks.services import Service
 
 
@@ -29,7 +29,7 @@ class Channel:
 
     def __init_subclass__(cls) -> None:
         super().__init_subclass__()
-        channels.register(cls)
+        channel_registry.register(cls)
 
     @classmethod
     async def get_prompt_context(cls, session: AsyncSession, conversation: Conversation) -> dict:

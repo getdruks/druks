@@ -8,12 +8,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import UserDefinedType
 
-from druks.apps import App
-from druks.apps.loader import resolve_workflow_app
 from druks.models import Base, StoredSubject
+from druks.registry import get_app_name
 from druks.signals import publish
 
 if TYPE_CHECKING:
+    from druks.apps import App
     from druks.durable.datastructures import Subject
 
 
@@ -61,7 +61,7 @@ class Event(Base):
     def get_history(
         cls,
         *,
-        apps: Sequence[type[App]],
+        apps: "Sequence[type[App]]",
         app: str | None = None,
         search: str | None = None,
         topic: str | None = None,
@@ -152,12 +152,12 @@ class Event(Base):
         from druks.durable.exceptions import WorkflowError
 
         try:
-            app = resolve_workflow_app(type(subject).__module__)
+            app = get_app_name(type(subject).__module__)
         except LookupError:
             raise WorkflowError(
                 f"{type(subject).__module__} declares subject {type(subject).__name__} outside "
-                "every registered app package. Call register_workflow_package() for the "
-                "package before importing it."
+                "every app package. Declare it in a module of the app's package, and "
+                "import that module after the App class."
             ) from None
         await cls.emit(
             session,

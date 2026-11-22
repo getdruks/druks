@@ -9,13 +9,13 @@ from dbos import DBOS
 from fastapi.responses import JSONResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from druks.apps.loader import get_app
 from druks.chat.bots.service import get_thread_conversation, route_message
 from druks.chat.enums import BotAccess, ConversationSource
 from druks.chat.models import Conversation, Message
 from druks.chat.service import deliver
 from druks.db import db_session
 from druks.files.datastructures import File
+from druks.registry import get_app
 from druks.webhooks import Webhook
 
 from .channel import get_phone, get_sender_name, get_source_id

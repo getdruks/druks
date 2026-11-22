@@ -5,7 +5,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import HTTPConnection
 
-from druks.accounts.context import current_account_id, current_conversation_id
+from druks.accounts.context import current_account_id
 from druks.accounts.exceptions import (
     AuthConfigurationError,
     InvalidAssertionError,
@@ -14,8 +14,6 @@ from druks.accounts.exceptions import (
 from druks.accounts.jwt import verify_assertion
 from druks.accounts.models import Account, PersonalAccessToken
 from druks.api.dependencies import SessionDep
-from druks.chat.constants import CONVERSATION_HEADER
-from druks.chat.models import Conversation
 from druks.settings import get_settings
 
 _BEARER_CHALLENGE = 'Bearer realm="druks"'
@@ -123,8 +121,7 @@ async def current_account(
     bearer: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
 ) -> AsyncIterator[Account]:
     """The Bearer PAT when Authorization is present — present-but-empty still
-    challenges — else the session identity. A named conversation must be the
-    account's own."""
+    challenges — else the session identity."""
     if "Authorization" in request.headers:
         account = await resolve_pat_account(session, request, bearer)
     else:
@@ -135,21 +132,12 @@ async def current_account(
                 status_code=409,
                 detail="No operator account exists yet — connect a provider to finish setup.",
             )
-    conversation_id = request.headers.get(CONVERSATION_HEADER)
-    if conversation_id and not await Conversation.get_for_account(
-        session, conversation_id, account
-    ):
-        raise HTTPException(
-            status_code=403, detail=f"Conversation {conversation_id} is not this account's."
-        )
     token = current_account_id.set(account.id)
-    conversation_token = current_conversation_id.set(conversation_id)
     try:
         yield account
     finally:
         # The actor must not leak into whatever runs on this task next.
         current_account_id.reset(token)
-        current_conversation_id.reset(conversation_token)
 
 
 async def current_session_account(request: Request, session: SessionDep) -> AsyncIterator[Account]:

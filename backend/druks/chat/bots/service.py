@@ -6,7 +6,6 @@ from pydantic_core import to_json
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from druks.accounts.enums import AccountKind
-from druks.apps.loader import get_app
 from druks.chat.constants import PARKED_BUTTONS_MESSAGE, PARKED_MESSAGE
 from druks.chat.enums import BotAccess, MessageState, PauseSignal
 from druks.chat.models import Conversation
@@ -15,6 +14,7 @@ from druks.durable.constants import PAUSE_QUEUE
 from druks.durable.engine import step_session
 from druks.durable.models import Run
 from druks.redis import get_client
+from druks.registry import get_app
 from druks.secrets.enums import SecretKind
 from druks.secrets.models import VaultSecret
 

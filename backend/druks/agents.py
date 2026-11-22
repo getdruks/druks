@@ -16,7 +16,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from druks.apps.exceptions import AppBotError
 from druks.apps.loader import resolve_app
-from druks.apps.registry import agents, bots
 from druks.browser.agent_browsers import AgentBrowser
 from druks.browser.enums import BrowserClient
 from druks.chat.bots.dependencies import BotUser
@@ -40,6 +39,7 @@ from druks.harnesses.exceptions import (
     Retry,
 )
 from druks.prompts.resolver import get_template
+from druks.registry import get_agent
 from druks.sandbox import gate as sandbox_gate
 from druks.sandbox.models import SecretRef
 from druks.secrets.enums import SecretKind
@@ -126,11 +126,9 @@ class Agent:
     browser: "BrowserSession | None" = field(default=None, compare=False)
     browser_client: BrowserClient | None = None
     # ``id`` is the agent's durable key (settings, timeline, registry, step name):
-    # ``<app>.<attribute>`` for an agent declared on an App, or the explicit ``id=``
-    # of a standalone agent (a test, a one-off). ``app`` is the owning App's name,
-    # read from the class in __set_name__ to group the settings UI — blank for a
-    # standalone agent (no owner).
-    id: str = field(default="", compare=False)
+    # ``<app>.<attribute>``, from the App it is declared on. ``app`` is that App's
+    # name. Both are read from the class in __set_name__.
+    id: str = field(default="", init=False, compare=False)
     app: str = field(init=False, compare=False, default="")
     _after_agent: list[Callable[..., Awaitable[str | None]]] = field(
         default_factory=list, init=False, compare=False, repr=False
@@ -157,22 +155,20 @@ class Agent:
                 raise TypeError(
                     f"{declared} belongs to an App key, which issues tokens; no sandbox holds it"
                 )
-        if self.id:  # an explicit id means a standalone agent — it registers itself now
-            agents.register(self)
 
     def __set_name__(self, owner: type, attr: str) -> None:
-        if self.id:  # explicit id: already registered in __post_init__
+        if self.id:  # a second name for an agent that an App declares already
             return
         object.__setattr__(self, "id", f"{owner.name}.{attr}")
         object.__setattr__(self, "app", owner.name)
-        agents.register(self)
+        owner.agents.register(self)
 
     @classmethod
     def get(cls, id: str) -> "Agent":
         """The agent registered as ``id``, ``<app>.<attribute>``, loading its app first."""
-        if id not in agents:
+        if not get_agent(id):
             resolve_app(id.partition(".")[0])
-        agent = agents.get(id)
+        agent = get_agent(id)
         if not agent:
             raise ObjectNotFound("agent", {"id": id})
         return agent
@@ -202,13 +198,9 @@ class Agent:
         else (repo, …) is prompt context. ``contract`` overrides the output
         contract for this call, including schema generation and validation."""
         if not self.id:
-            # Built loose — never assigned to an App, never given an explicit
-            # id — so its settings, its registry entry and the call it would record
-            # all key on nothing.
-            raise WorkflowError(
-                "an agent runs under its own id — declare it on an App, or "
-                "pass id= for a standalone one"
-            )
+            # Built loose — never assigned to an App — so its settings, its
+            # registry entry and the call it would record all key on nothing.
+            raise WorkflowError("an agent runs under its own id — declare it on an App")
         workflow = current_workflow.get(None)
         if not workflow:
             raise WorkflowError(
@@ -688,7 +680,6 @@ class Bot:
         if attribute == "bot":
             object.__setattr__(self, "id", f"{owner.name}.bot")
             object.__setattr__(self, "app", owner.name)
-            bots.register(self)
             return
         raise AppBotError(
             f"app {owner.name!r} declares a Bot as {attribute!r}. An app has one Bot, "

@@ -100,9 +100,9 @@ async def test_a_page_read_that_cannot_resolve_says_which(
 
 
 def test_the_test_plugin_claims_every_installed_app():
-    from druks.apps.loader import _workflow_packages
+    from druks.registry import get_app_name
 
     # An app's own suite imports its workflows module, and a Workflow resolves
     # its app at definition. Loading the plugin is what makes that work outside
     # this repository.
-    assert _workflow_packages["druks_field_notes"] == "field_notes"
+    assert get_app_name("druks_field_notes") == "field_notes"

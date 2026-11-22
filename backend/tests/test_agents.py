@@ -7,6 +7,7 @@ import pytest
 from conftest import connect_service, installation_key, make_agent_result
 from druks import agents
 from druks.accounts.models import Account
+from druks.apps import App
 from druks.browser import BrowserClient, BrowserSession
 from druks.chat.service import report_quota_resume, report_quota_wait
 from druks.db import db_session
@@ -36,33 +37,39 @@ class DummyOutput(agents.AgentOutput):
     ok: bool
 
 
-DUMMY_AGENT = agents.Agent(
-    id="dummy",
-    prompt="dummy/agent.md",
-    contract=DummyOutput,
-)
-
-
 class FileOutput(agents.AgentOutput):
     image: File
 
 
-FILE_AGENT = agents.Agent(
-    id="file",
-    prompt="dummy/agent.md",
-    contract=FileOutput,
-)
-
 # Declared outside an app class, so the session joins no registry.
 ATLAS = BrowserSession(site="atlas.example", read_only=True)
 
-BROWSER_AGENT = agents.Agent(
-    id="browser_probe",
-    prompt="dummy/agent.md",
-    contract=DummyOutput,
-    browser=ATLAS,
-    browser_client=BrowserClient.PINCHTAB,
-)
+
+class Probes(App):
+    name = "agent_probes"
+    dummy = agents.Agent(prompt="dummy/agent.md", contract=DummyOutput)
+    file = agents.Agent(prompt="dummy/agent.md", contract=FileOutput)
+    browser_probe = agents.Agent(
+        prompt="dummy/agent.md",
+        contract=DummyOutput,
+        browser=ATLAS,
+        browser_client=BrowserClient.PINCHTAB,
+    )
+
+
+DUMMY_AGENT = Probes.dummy
+FILE_AGENT = Probes.file
+BROWSER_AGENT = Probes.browser_probe
+
+
+def declare(**fields) -> agents.Agent:
+    """An agent of a one-off app, for a test that needs its own."""
+
+    class OneOff(App):
+        name = "one_off"
+        agent = agents.Agent(**fields)
+
+    return OneOff.agent
 
 
 @pytest.fixture(autouse=True)
@@ -106,7 +113,7 @@ def _patch_runtime(monkeypatch, tmp_path, payload):
 
     monkeypatch.setattr(agents, "get_template", _template)
     sandbox = Host(record=SimpleNamespace(id="host-test", ssh_username="root"))  # type: ignore[arg-type]
-    sandbox.run_agent = AsyncMock(return_value=make_agent_result(payload, agent="dummy"))
+    sandbox.run_agent = AsyncMock(return_value=make_agent_result(payload, agent=DUMMY_AGENT.id))
     return sandbox
 
 
@@ -183,16 +190,11 @@ async def lent_browser(druks_db, monkeypatch):
 
 def test_a_browser_agent_drives_with_the_pinchtab_client():
     with pytest.raises(TypeError, match="needs browser_client=BrowserClient.PINCHTAB"):
-        agents.Agent(id="no_client", contract=DummyOutput, browser=ATLAS)
+        agents.Agent(contract=DummyOutput, browser=ATLAS)
     with pytest.raises(TypeError, match="needs browser_client=BrowserClient.PINCHTAB"):
-        agents.Agent(
-            id="playwright_client",
-            contract=DummyOutput,
-            browser=ATLAS,
-            browser_client=BrowserClient.PLAYWRIGHT,
-        )
+        agents.Agent(contract=DummyOutput, browser=ATLAS, browser_client=BrowserClient.PLAYWRIGHT)
     with pytest.raises(TypeError, match="needs browser="):
-        agents.Agent(id="no_session", contract=DummyOutput, browser_client=BrowserClient.PINCHTAB)
+        agents.Agent(contract=DummyOutput, browser_client=BrowserClient.PINCHTAB)
 
 
 async def test_an_agent_browser_gets_its_own_box_and_the_browser_server(
@@ -240,8 +242,8 @@ async def test_run_outside_workflow_raises():
 
 
 async def test_run_refuses_an_agent_with_no_id():
-    # Built loose — never assigned to an App, never given an explicit id — so
-    # the call it would record would name nobody.
+    # Built loose — never assigned to an App — so the call it would record would
+    # name nobody.
     loose = agents.Agent(prompt="dummy/agent.md", contract=DummyOutput)
     with pytest.raises(WorkflowError, match="runs under its own id"):
         await loose(repo="acme/widget")
@@ -283,7 +285,7 @@ async def test_declaration_drives_run_agent_call(druks_db, tmp_path, monkeypatch
     assert harness.model == "anthropic/claude-opus-4-7"
     assert manifest.harness == "claude"
     kwargs = sandbox.run_agent.await_args.kwargs
-    assert kwargs["agent"] == "dummy"
+    assert kwargs["agent"] == DUMMY_AGENT.id
     assert kwargs["timeout"] == 1800
     assert kwargs["schema"] == DummyOutput.model_json_schema()
     assert kwargs["prompt"] == "PROMPT:dummy/agent.md:repo=acme/widget"
@@ -294,12 +296,7 @@ async def test_declaration_drives_run_agent_call(druks_db, tmp_path, monkeypatch
 
 
 async def test_declared_plugin_choice_is_forwarded(druks_db, tmp_path, monkeypatch, current_run):
-    agent = agents.Agent(
-        id="plugin_probe",
-        prompt="dummy/agent.md",
-        contract=DummyOutput,
-        include_plugins=False,
-    )
+    agent = declare(prompt="dummy/agent.md", contract=DummyOutput, include_plugins=False)
     sandbox = _patch_runtime(monkeypatch, tmp_path, {"ok": True})
     _patch_ephemeral(monkeypatch, sandbox)
 
@@ -311,12 +308,7 @@ async def test_declared_plugin_choice_is_forwarded(druks_db, tmp_path, monkeypat
 async def test_an_agent_without_mcp_resolves_no_server(
     druks_db, tmp_path, monkeypatch, current_run
 ):
-    agent = agents.Agent(
-        id="sealed_probe",
-        prompt="dummy/agent.md",
-        contract=DummyOutput,
-        include_mcp=False,
-    )
+    agent = declare(prompt="dummy/agent.md", contract=DummyOutput, include_mcp=False)
     sandbox = _patch_runtime(monkeypatch, tmp_path, {"ok": True})
     _patch_ephemeral(monkeypatch, sandbox)
     resolve = AsyncMock()
@@ -345,8 +337,7 @@ async def test_an_agent_holds_its_declared_service_secrets(
             api_key: SecretStr
 
     card = await connect_service("acme", identity={}, secrets={"api_key": "key-1"})
-    agent = agents.Agent(
-        id="keyed_probe",
+    agent = declare(
         prompt="dummy/agent.md",
         contract=DummyOutput,
         secrets=(Acme.fields.api_key, Spare.fields.api_key),
@@ -386,7 +377,7 @@ async def test_an_agent_holds_a_resource_secret_from_its_workspace(
 
     card = await connect_service("acme", identity={}, secrets={"api_token": "pasted"})
     monkeypatch.setattr(Workspace, "get_secrets", classmethod(get_secrets))
-    agent = agents.Agent(id="resource_probe", prompt="dummy/agent.md", contract=DummyOutput)
+    agent = declare(prompt="dummy/agent.md", contract=DummyOutput)
     sandbox = _patch_runtime(monkeypatch, tmp_path, {"ok": True})
     _patch_ephemeral(monkeypatch, sandbox)
 
@@ -417,7 +408,7 @@ async def test_runner_comes_from_workflow_workspace_factory(
 
     class ModeWorkspace(Workspace):
         prepare = AsyncMock()
-        run_agent = AsyncMock(return_value=make_agent_result({"ok": True}, agent="dummy"))
+        run_agent = AsyncMock(return_value=make_agent_result({"ok": True}, agent=DUMMY_AGENT.id))
 
     monkeypatch.setattr(current_workflow.get(), "workspace_class", ModeWorkspace)
 
@@ -426,23 +417,23 @@ async def test_runner_comes_from_workflow_workspace_factory(
     assert result == DummyOutput(ok=True)
     ModeWorkspace.prepare.assert_awaited_once()
     ModeWorkspace.run_agent.assert_awaited_once()
-    assert ModeWorkspace.run_agent.await_args.kwargs["agent"] == "dummy"
+    assert ModeWorkspace.run_agent.await_args.kwargs["agent"] == DUMMY_AGENT.id
 
 
-def test_get_loads_the_owning_app_before_it_reads_the_registry(monkeypatch):
-    monkeypatch.setattr(agents.agents, "_items", dict(agents.agents._items))
-    writer = agents.Agent(id="later.writer", prompt="dummy/agent.md", contract=DummyOutput)
-    del agents.agents._items[writer.id]
+def test_get_loads_the_owning_app_before_it_reads_the_registry(monkeypatch, declared_apps):
     loaded = []
 
     def resolve_app(name):
         loaded.append(name)
-        agents.agents.register(writer)
+
+        class Later(App):
+            name = "later"
+            writer = agents.Agent(prompt="dummy/agent.md", contract=DummyOutput)
 
     monkeypatch.setattr(agents, "resolve_app", resolve_app)
 
-    assert agents.Agent.get("later.writer") is writer
-    assert agents.Agent.get("dummy") is DUMMY_AGENT
+    assert agents.Agent.get("later.writer").id == "later.writer"
+    assert agents.Agent.get(DUMMY_AGENT.id) is DUMMY_AGENT
     assert loaded == ["later"]
     with pytest.raises(ObjectNotFound):
         agents.Agent.get("later.reader")
@@ -451,7 +442,7 @@ def test_get_loads_the_owning_app_before_it_reads_the_registry(monkeypatch):
 async def test_after_agent_hooks_answer_the_turn_from_a_box_of_their_own(
     druks_db, tmp_path, monkeypatch, current_run
 ):
-    hooked = agents.Agent(id="hooked_probe", prompt="dummy/agent.md", contract=DummyOutput)
+    hooked = declare(prompt="dummy/agent.md", contract=DummyOutput)
     seen = []
 
     @hooked.after_agent
@@ -474,7 +465,7 @@ async def test_after_agent_hooks_answer_the_turn_from_a_box_of_their_own(
 
     async def run_hooked(_harness, _manifest, **kwargs):
         answers.append(await kwargs["hooks"]["after_agent"]())
-        return make_agent_result({"ok": True}, agent="hooked_probe")
+        return make_agent_result({"ok": True}, agent=hooked.id)
 
     warm.run_agent = AsyncMock(side_effect=run_hooked)
 
@@ -487,7 +478,9 @@ async def test_after_agent_hooks_answer_the_turn_from_a_box_of_their_own(
     monkeypatch.setattr(current_run, "_lease_host", lease)
     nested_box = MagicMock()
     nested_box.id = "nested-host"
-    nested_box.run_agent = AsyncMock(return_value=make_agent_result({"ok": True}, agent="dummy"))
+    nested_box.run_agent = AsyncMock(
+        return_value=make_agent_result({"ok": True}, agent=DUMMY_AGENT.id)
+    )
     _patch_ephemeral(monkeypatch, nested_box)
 
     await hooked._run(workflow_id="wf-9")
@@ -519,7 +512,7 @@ async def test_ephemeral_acquisition_keys_idempotency_to_workflow_step(
 
     assert result == DummyOutput(ok=True)
     [identity] = await _identities("wf-9")
-    assert seen == [f"wf-9:dummy:{identity.id}"]
+    assert seen == [f"wf-9:{DUMMY_AGENT.id}:{identity.id}"]
 
 
 @pytest.mark.parametrize("billing", ["subscription", "api_key"])
@@ -540,7 +533,7 @@ async def test_running_call_visible_then_finished(
         assert row.api_key_id == (config.api_key.id if config.api_key else None)
         during["status"] = row.status
         during["host"] = row.sandbox_host_id
-        return make_agent_result({"ok": True}, agent="dummy")
+        return make_agent_result({"ok": True}, agent=DUMMY_AGENT.id)
 
     sandbox.run_agent = _run_agent
     _patch_ephemeral(monkeypatch, sandbox)
@@ -562,7 +555,9 @@ async def test_a_recovered_call_resumes_the_agent_its_box_still_runs(
     watches that agent under the same id; on another box it starts over and the
     row is abandoned."""
     sandbox = _patch_runtime(monkeypatch, tmp_path, {"ok": True})
-    sandbox.resume_agent = AsyncMock(return_value=make_agent_result({"ok": True}, agent="dummy"))
+    sandbox.resume_agent = AsyncMock(
+        return_value=make_agent_result({"ok": True}, agent=DUMMY_AGENT.id)
+    )
     _patch_ephemeral(monkeypatch, sandbox)
     config = await get_config(db_session(), DUMMY_AGENT.id, current_run.account_id)
     await AgentCall.start(
@@ -570,7 +565,7 @@ async def test_a_recovered_call_resumes_the_agent_its_box_still_runs(
         call_id="call-left",
         run_id="wf-9",
         model=config.model,
-        agent="dummy",
+        agent=DUMMY_AGENT.id,
         host_id=left_on,
         subscription_id=config.subscription.id,
         api_key_id=None,
@@ -671,8 +666,8 @@ async def test_file_output_reaches_the_next_agents_input(
     sandbox = _patch_runtime(monkeypatch, tmp_path, {"ok": True})
     sandbox.run_agent = AsyncMock(
         side_effect=[
-            make_agent_result({"image": "shots/home.png"}, agent="file"),
-            make_agent_result({"ok": True}, agent="dummy"),
+            make_agent_result({"image": "shots/home.png"}, agent=FILE_AGENT.id),
+            make_agent_result({"ok": True}, agent=DUMMY_AGENT.id),
         ]
     )
 
@@ -723,7 +718,7 @@ async def test_a_carried_failure_is_raised_with_its_code(
     overloaded = HarnessOverloadedError("claude exited with 1. API Error: 529 Overloaded.")
 
     async def _run_agent(_harness, _manifest, **_kwargs):
-        return make_agent_result(None, agent="dummy", error=overloaded)
+        return make_agent_result(None, agent=DUMMY_AGENT.id, error=overloaded)
 
     sandbox.run_agent = _run_agent
     _patch_ephemeral(monkeypatch, sandbox)
@@ -736,7 +731,8 @@ async def test_a_carried_failure_is_raised_with_its_code(
     assert call.status == "failed"
     assert call.failure_code == "overloaded"
     assert call.last_error == (
-        "dummy: HarnessOverloadedError: claude exited with 1. API Error: 529 Overloaded."
+        f"{DUMMY_AGENT.id}: HarnessOverloadedError: claude exited with 1. "
+        "API Error: 529 Overloaded."
     )
 
 
@@ -752,9 +748,9 @@ async def test_body_level_overload_retries_as_separate_durable_attempts(
     sandbox = _patch_runtime(monkeypatch, tmp_path, {"ok": True})
     sandbox.run_agent = AsyncMock(
         side_effect=[
-            make_agent_result(None, agent="dummy", error=failures[0]),
-            make_agent_result(None, agent="dummy", error=failures[1]),
-            make_agent_result({"ok": True}, agent="dummy"),
+            make_agent_result(None, agent=DUMMY_AGENT.id, error=failures[0]),
+            make_agent_result(None, agent=DUMMY_AGENT.id, error=failures[1]),
+            make_agent_result({"ok": True}, agent=DUMMY_AGENT.id),
         ]
     )
     _patch_ephemeral(monkeypatch, sandbox)
@@ -766,7 +762,7 @@ async def test_body_level_overload_retries_as_separate_durable_attempts(
 
     assert result == DummyOutput(ok=True)
     assert [awaited.args[0] for awaited in sleep.await_args_list] == [285.0, 945.0]
-    assert [options["name"] for options in checkpoints] == ["test.agent.dummy"] * 3
+    assert [options["name"] for options in checkpoints] == [f"test.agent.{DUMMY_AGENT.id}"] * 3
     assert current_run._reap_run.await_count == 2
     calls = await AgentCall.list_for_run(db_session(), "wf-9")
     assert len(calls) == 3
@@ -784,7 +780,9 @@ async def test_body_level_first_byte_retries_immediately_then_reraises(
     failures = [HarnessFirstByteTimeoutError(f"wedged {attempt}") for attempt in range(3)]
     sandbox = _patch_runtime(monkeypatch, tmp_path, {"ok": True})
     sandbox.run_agent = AsyncMock(
-        side_effect=[make_agent_result(None, agent="dummy", error=failure) for failure in failures]
+        side_effect=[
+            make_agent_result(None, agent=DUMMY_AGENT.id, error=failure) for failure in failures
+        ]
     )
     _patch_ephemeral(monkeypatch, sandbox)
     monkeypatch.setattr(agents.random, "uniform", lambda _low, _high: 1.0)
@@ -837,7 +835,9 @@ def _patch_quota(monkeypatch, tmp_path, current_run, failures, *, now):
     sandbox = _patch_runtime(monkeypatch, tmp_path, {"ok": True})
     sandbox.run_agent = AsyncMock(
         side_effect=[
-            make_agent_result(None if failure else {"ok": True}, agent="dummy", error=failure)
+            make_agent_result(
+                None if failure else {"ok": True}, agent=DUMMY_AGENT.id, error=failure
+            )
             for failure in failures
         ]
     )
@@ -921,9 +921,9 @@ async def test_body_level_quota_waits_for_the_reset_once(
         ends_at=now + timedelta(hours=1, seconds=90),
     )
     assert [options["name"] for options in checkpoints] == [
-        "test.agent.dummy",
-        "test.agent.dummy.retry_wait",
-        "test.agent.dummy",
+        f"test.agent.{DUMMY_AGENT.id}",
+        f"test.agent.{DUMMY_AGENT.id}.retry_wait",
+        f"test.agent.{DUMMY_AGENT.id}",
     ]
     calls = await AgentCall.list_for_run(db_session(), "wf-9")
     assert len(calls) == 2
@@ -973,12 +973,12 @@ async def test_a_switched_account_retries_now_and_waits_out_its_own_limit_once(
     assert current_run.sleep.await_count == 2
     assert sandbox.run_agent.await_count == 3
     assert [options["name"] for options in checkpoints] == [
-        "test.agent.dummy",
-        "test.agent.dummy.retry_wait",
-        "test.agent.dummy.wait_remaining",
-        "test.agent.dummy",
-        "test.agent.dummy.retry_wait",
-        "test.agent.dummy",
+        f"test.agent.{DUMMY_AGENT.id}",
+        f"test.agent.{DUMMY_AGENT.id}.retry_wait",
+        f"test.agent.{DUMMY_AGENT.id}.wait_remaining",
+        f"test.agent.{DUMMY_AGENT.id}",
+        f"test.agent.{DUMMY_AGENT.id}.retry_wait",
+        f"test.agent.{DUMMY_AGENT.id}",
     ]
 
 
@@ -991,7 +991,7 @@ async def test_body_level_quota_reset_over_six_hours_reraises_without_sleeping(
     failure = HarnessUsageLimitError("weekly quota")
     sandbox = _patch_runtime(monkeypatch, tmp_path, {"ok": True})
     sandbox.run_agent = AsyncMock(
-        return_value=make_agent_result(None, agent="dummy", error=failure)
+        return_value=make_agent_result(None, agent=DUMMY_AGENT.id, error=failure)
     )
     _patch_ephemeral(monkeypatch, sandbox)
     clock = MagicMock()
@@ -1038,7 +1038,7 @@ async def test_body_level_never_retry_errors_run_once(
     failure = failures[error_name]("terminal")
     sandbox = _patch_runtime(monkeypatch, tmp_path, {"ok": True})
     sandbox.run_agent = AsyncMock(
-        return_value=make_agent_result(None, agent="dummy", error=failure)
+        return_value=make_agent_result(None, agent=DUMMY_AGENT.id, error=failure)
     )
     _patch_ephemeral(monkeypatch, sandbox)
     current_run._reap_run = AsyncMock()
@@ -1049,7 +1049,7 @@ async def test_body_level_never_retry_errors_run_once(
 
     assert excinfo.value is failure
     assert failure.retry is Retry.NEVER
-    assert [options["name"] for options in checkpoints] == ["test.agent.dummy"]
+    assert [options["name"] for options in checkpoints] == [f"test.agent.{DUMMY_AGENT.id}"]
     sleep.assert_not_awaited()
     current_run._reap_run.assert_not_awaited()
     sandbox.run_agent.assert_awaited_once()
@@ -1159,12 +1159,12 @@ async def test_provisioning_failure_recovers_through_durable_retry(
     assert [awaited.args[0] for awaited in sleep.await_args_list] == [60.0]
     # Each attempt re-enters _run and asks for a fresh box under a fresh identity.
     first, second = await _identities("wf-9")
-    assert keys == [f"wf-9:dummy:{first.id}", f"wf-9:dummy:{second.id}"]
+    assert keys == [f"wf-9:{DUMMY_AGENT.id}:{first.id}", f"wf-9:{DUMMY_AGENT.id}:{second.id}"]
     # A 60s wait is under the reap-before threshold, so the (never-acquired) VM
     # isn't reaped between attempts.
     current_run._reap_run.assert_not_awaited()
     # Both attempts are separate durable steps under the agent's step name.
-    assert [options["name"] for options in checkpoints] == ["test.agent.dummy"] * 2
+    assert [options["name"] for options in checkpoints] == [f"test.agent.{DUMMY_AGENT.id}"] * 2
 
 
 async def test_provisioning_failure_recovers_in_step_retry(
@@ -1200,7 +1200,7 @@ async def test_provisioning_failure_recovers_in_step_retry(
     memory_sleep.assert_awaited_once_with(60.0)
     durable_sleep.assert_not_awaited()
     first, second = await _identities("wf-9")
-    assert keys == [f"wf-9:dummy:{first.id}", f"wf-9:dummy:{second.id}"]
+    assert keys == [f"wf-9:{DUMMY_AGENT.id}:{first.id}", f"wf-9:{DUMMY_AGENT.id}:{second.id}"]
 
 
 async def test_reused_host_retry_presents_a_stable_idempotency_key(monkeypatch, current_run):
@@ -1303,7 +1303,7 @@ async def test_api_key_billing_hands_claude_a_placeholder(
     ]
     config = await get_config(db_session(), DUMMY_AGENT.id, current_run.account_id)
     # The VM's key names the pasted key, never its value.
-    assert keys == [f"wf-9:dummy:{config.secrets_hash}"]
+    assert keys == [f"wf-9:{DUMMY_AGENT.id}:{config.secrets_hash}"]
     assert (config.billing, config.subscription) == ("api_key", None)
     [call] = await AgentCall.list_for_run(db_session(), "wf-9")
     assert (call.subscription_id, call.api_key.audience_name) == (None, "anthropic")
@@ -1411,7 +1411,7 @@ async def test_a_replay_resumes_the_ephemeral_box_through_its_identity(
         db_session(),
         account_id=(await Account.get_for_run(db_session(), None)).id,
         run_id="wf-9",
-        scoped_to="dummy",
+        scoped_to=DUMMY_AGENT.id,
         secret_refs=[SecretRef(name="anthropic", secret_id=subscription.id)],
         secrets_hash="",
     )

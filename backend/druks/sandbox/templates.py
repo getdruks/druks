@@ -4,9 +4,9 @@ from collections.abc import Sequence
 
 from drukbox_sdk import SandboxTemplate
 
-from druks.apps import loader
 from druks.durable.activity import set_run_phase
 from druks.exceptions import ObjectNotFound
+from druks.registry import iter_apps
 
 from .client import sandbox_client
 from .datastructures import Sandbox
@@ -17,8 +17,8 @@ _TEMPLATE_POLL_SECONDS = 5
 
 def get_declared_sandboxes(*, extra: tuple[Sandbox, ...] = ()) -> dict[str, Sandbox]:
     declared = {sandbox.setup_script_hash: sandbox for sandbox in extra}
-    for app in loader.iter_apps():
-        for workflow in app.workflows():
+    for app in iter_apps():
+        for workflow in app.workflows.all():
             if sandbox := workflow.sandbox:
                 declared[sandbox.setup_script_hash] = sandbox
     return declared

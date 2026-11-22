@@ -4,13 +4,13 @@ import sys
 import pytest
 from druks.accounts.enums import Role
 from druks.accounts.models import Account
-from druks.apps.loader import _workflow_packages, mount, register_workflow_package
+from druks.apps.loader import mount
 from druks.scaffolding import create_app
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 
-def test_create_app_scaffolds_a_loadable_package(tmp_path):
+def test_create_app_scaffolds_a_loadable_package(tmp_path, declared_apps):
     target = create_app("daily_quote", tmp_path)
 
     assert target == tmp_path / "druks-daily-quote"
@@ -57,10 +57,6 @@ def test_create_app_scaffolds_a_loadable_package(tmp_path):
         assert daily_quote.table_prefix == "daily_quote_"
         assert daily_quote.package == "druks_daily_quote"
 
-        # An installed app has its package claimed by the loader before any
-        # module imports; the generated workflow resolves its identity from that.
-        register_workflow_package(daily_quote.package, daily_quote.name)
-
         for role in (
             "models",
             "schemas",
@@ -95,7 +91,6 @@ def test_create_app_scaffolds_a_loadable_package(tmp_path):
         assert [page.label for page in daily_quote.navigation_pages()] == ["overview"]
     finally:
         sys.path.remove(str(target))
-        _workflow_packages.pop("druks_daily_quote", None)
         for name in [m for m in sys.modules if m.startswith("druks_daily_quote")]:
             del sys.modules[name]
 

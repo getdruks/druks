@@ -6,8 +6,8 @@ import httpx
 import pytest
 from conftest import bind_ambient_session, connect_service
 from druks.accounts.models import Account
-from druks.apps.registry import webhooks
 from druks.chat.channels.whatsapp.services import Waha
+from druks.registry import webhook_registry
 from druks.secrets.datastructures import Audience
 from druks.secrets.models import VaultSecret
 from druks.services import Service, auth
@@ -30,10 +30,10 @@ services = ["github"]
 
 @pytest.fixture
 def declared_webhooks():
-    saved = dict(webhooks._items)
+    saved = dict(webhook_registry._items)
     yield
-    webhooks._items.clear()
-    webhooks._items.update(saved)
+    webhook_registry._items.clear()
+    webhook_registry._items.update(saved)
 
 
 @pytest.fixture

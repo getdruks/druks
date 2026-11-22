@@ -1,4 +1,6 @@
 import importlib
+import subprocess
+import sys
 
 import pytest
 
@@ -131,3 +133,14 @@ def test_root_druks_stays_thin():
     import druks
 
     assert druks.__all__ == ["__version__"]
+
+
+def test_importing_the_apps_namespace_loads_no_models():
+    # Every layer imports druks.apps, the models among them. A model that
+    # druks.apps loaded would close an import cycle.
+    result = subprocess.run(
+        [sys.executable, "-c", "import sys, druks.apps; print('druks.models' in sys.modules)"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.stdout.strip() == "False", result.stderr

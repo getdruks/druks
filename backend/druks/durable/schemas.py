@@ -11,7 +11,6 @@ from pydantic import (
     computed_field,
 )
 
-from druks.apps.registry import workflows as workflow_registry
 from druks.schemas import Schema
 
 from .enums import ACTIVE_STATES, AgentCallStatus, RunState
@@ -118,7 +117,7 @@ class RunResponse(Schema):
     ) -> "RunResponse":
         return cls(
             id=run.id,
-            app=workflow_registry.get(run.kind).app,
+            app=run.app,
             kind=run.kind,
             label=get_display_label(run.kind),
             retry_from=run.retry_from,

@@ -8,7 +8,6 @@ from slack_sdk.errors import SlackApiError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from druks.accounts.models import Account
-from druks.apps.loader import iter_apps
 from druks.chat.channels.base import Channel
 from druks.chat.enums import ConversationSource
 from druks.chat.exceptions import ChannelHasNoThreadsError, FileNotInThreadError, FormError
@@ -24,6 +23,7 @@ from druks.notifications.delivery import get_blocks
 from druks.notifications.models import Notification, mint_correlation_token
 from druks.prompts import render_prompt
 from druks.redis import get_client
+from druks.registry import iter_apps
 from druks.secrets.models import VaultSecret
 from druks.settings import get_settings
 

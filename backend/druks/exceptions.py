@@ -57,6 +57,13 @@ class SettingsNotConfiguredError(DruksError):
         super().__init__("Settings are not configured. Configure them when the process starts.")
 
 
+class AppsNotRegisteredError(DruksError):
+    """``iter_apps()`` ran before the process registered its apps."""
+
+    def __init__(self) -> None:
+        super().__init__("Apps are not registered. Register them when the process starts.")
+
+
 class ObjectNotFound(DruksError):
     """Nothing matches the values a read asked for."""
 

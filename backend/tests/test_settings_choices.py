@@ -3,7 +3,6 @@ from typing import Annotated, Literal
 import pytest
 from druks.apps import App, AppSettings, Choices
 from druks.apps.exceptions import SettingsDeclarationError
-from druks.apps.loader import register_workflow_package
 from druks.apps.settings import validate_field_choice_details
 from druks.durable.exceptions import WorkflowError
 from druks.user_settings.reads import list_live_choices
@@ -105,8 +104,10 @@ def test_choices_on_a_field_that_is_not_a_str_fail_at_declaration(annotation):
                 value: annotation = None
 
 
-def test_choices_on_workflow_settings_fail_at_declaration():
-    register_workflow_package(__name__, "")
+def test_choices_on_workflow_settings_fail_at_declaration(declared_apps):
+    class Owner(App):
+        name = "choices_owner"
+        package = __name__
 
     with pytest.raises(WorkflowError, match="only to app settings"):
 

@@ -4,6 +4,7 @@ from importlib.metadata import EntryPoint
 from pathlib import Path
 
 import pytest
+from conftest import snapshot_apps
 from druks.apps import loader
 from druks.apps.exceptions import (
     AppImportError,
@@ -110,9 +111,8 @@ def external_app(tmp_path_factory):
     entry point, and restore every global its load mutates (registries, table
     metadata, signal receivers) so the suite stays clean."""
     from blinker import signal
-    from druks.apps import loader as apps_loader
-    from druks.apps.registry import agents, services, webhooks, workflows
     from druks.models import Base
+    from druks.registry import service_registry, webhook_registry
 
     root = tmp_path_factory.mktemp("external")
     _write_package(root, _PACKAGE, _FILES)
@@ -120,9 +120,9 @@ def external_app(tmp_path_factory):
 
     tables = set(Base.metadata.tables)
     registries = {
-        registry: dict(registry._items) for registry in (agents, services, webhooks, workflows)
+        registry: dict(registry._items) for registry in (service_registry, webhook_registry)
     }
-    packages = dict(apps_loader._workflow_packages)
+    restore_apps = snapshot_apps()
     finished = signal("workflow.finished")
     receivers = dict(finished.receivers)
     try:
@@ -133,8 +133,7 @@ def external_app(tmp_path_factory):
             Base.metadata.remove(Base.metadata.tables[name])
         for registry, snapshot in registries.items():
             registry._items = snapshot
-        apps_loader._workflow_packages.clear()
-        apps_loader._workflow_packages.update(packages)
+        restore_apps()
         finished.receivers = receivers
         for name in [m for m in sys.modules if m == _PACKAGE or m.startswith(f"{_PACKAGE}.")]:
             del sys.modules[name]
@@ -169,7 +168,7 @@ def test_surfaces_are_enumerable_from_the_loaded_app(installed):
     loaded app without booting the platform."""
     app = load_app("probe")
 
-    assert [workflow.__name__ for workflow in app.workflows()] == ["Inspect"]
+    assert [workflow.__name__ for workflow in app.workflows.all()] == ["Inspect"]
 
     router_prefixes = {router.prefix for router in app.routers()}
     assert "/widgets" in router_prefixes  # the app's own router
@@ -200,11 +199,11 @@ def test_get_data_dir_is_the_apps_folder_under_the_data_directory(installed, tmp
 
 def test_load_registers_the_apps_services(installed):
     """The ``services`` module is a discovered role: its declarations register on load."""
-    from druks.apps.registry import services
+    from druks.registry import service_registry
 
     load_app("probe")
 
-    assert services.get("probemail").title == "Probemail"
+    assert service_registry.get("probemail").title == "Probemail"
 
 
 def test_missing_package_raises_app_not_found(installed):
@@ -285,12 +284,12 @@ def test_entry_point_key_mismatch_raises_malformed_app(installed, monkeypatch):
 
 def test_boot_rejects_an_entry_point_key_mismatch(installed, monkeypatch, registered_apps):
     """Full boot applies the same key/name validation as the single load — an
-    aliased entry the headless path rejects must not slip through register_apps()."""
+    aliased entry the headless path rejects must not slip through load_installed_apps()."""
     aliased = EntryPoint(name="not_probe", value=f"{_PACKAGE}.app:Probe", group="druks.apps")
     monkeypatch.setattr(loader, "entry_points", lambda *, group: [aliased])
 
     with pytest.raises(MalformedApp, match="must match App.name"):
-        loader.register_apps()
+        loader.load_installed_apps()
 
 
 def test_import_error_in_entry_module_raises_app_import_error(tmp_path, monkeypatch):

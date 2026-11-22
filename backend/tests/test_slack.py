@@ -15,6 +15,7 @@ from druks.chat import service
 from druks.chat.channels.slack.channel import SlackChannel
 from druks.chat.channels.slack.constants import LINK_KEY
 from druks.chat.constants import CONVERSATION_HEADER
+from druks.chat.dependencies import current_conversation
 from druks.chat.enums import ConversationSource, MessageRole
 from druks.chat.exceptions import ChannelHasNoThreadsError
 from druks.chat.models import Automation, Conversation
@@ -741,7 +742,9 @@ async def test_chat_read_thread_reads_the_callers_own_conversation(
 ):
     configure_app_for_test(settings=make_settings(tmp_path), authenticated=False)
     api = FastAPI(dependencies=[Depends(request_session)])
-    api.add_api_route("/thread", read_thread, methods=["GET"])
+    api.add_api_route(
+        "/thread", read_thread, methods=["GET"], dependencies=[Depends(current_conversation)]
+    )
     ana = await Account.get_or_create(druks_db, "ana@example.com")
     thread_reads(monkeypatch, [{"ts": "10.0", "user": ANA, "text": "hi"}])
     conversation = await thread_conversation(druks_db, card, ana)
@@ -773,7 +776,12 @@ async def test_chat_read_file_puts_a_thread_file_in_the_agents_workspace(
     thread lives, and uploads it to the conversation's folder in the caller's sandbox."""
     configure_app_for_test(settings=make_settings(tmp_path), authenticated=False)
     api = FastAPI(dependencies=[Depends(request_session)])
-    api.add_api_route("/thread/files/{file_id}", read_file, methods=["GET"])
+    api.add_api_route(
+        "/thread/files/{file_id}",
+        read_file,
+        methods=["GET"],
+        dependencies=[Depends(current_conversation)],
+    )
     rooms = {"F1": ["C1"], "F2": ["C2"]}
 
     async def api_call(client, api_method, *, params=None, json=None, **request):
@@ -812,7 +820,12 @@ async def test_chat_read_file_answers_502_when_the_upload_to_the_sandbox_fails(
     """A failed upload answers which file failed and why, not a bare 500."""
     configure_app_for_test(settings=make_settings(tmp_path), authenticated=False)
     api = FastAPI(dependencies=[Depends(request_session)])
-    api.add_api_route("/thread/files/{file_id}", read_file, methods=["GET"])
+    api.add_api_route(
+        "/thread/files/{file_id}",
+        read_file,
+        methods=["GET"],
+        dependencies=[Depends(current_conversation)],
+    )
 
     async def api_call(client, api_method, *, params=None, json=None, **request):
         shared = {**shared_file(params["file"]), "channels": ["C1"], "groups": []}
@@ -842,7 +855,13 @@ async def test_a_person_who_requires_a_tag_is_answered_only_when_they_tag(
 ):
     configure_app_for_test(settings=make_settings(tmp_path), authenticated=False)
     api = FastAPI(dependencies=[Depends(request_session)])
-    api.add_api_route("/thread/tag", require_tag, methods=["PUT"], status_code=204)
+    api.add_api_route(
+        "/thread/tag",
+        require_tag,
+        methods=["PUT"],
+        status_code=204,
+        dependencies=[Depends(current_conversation)],
+    )
     ana = await Account.get_or_create(druks_db, "ana@example.com")
     await link_person(druks_db, ana)
     await receive(room_event())

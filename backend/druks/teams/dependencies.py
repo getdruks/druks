@@ -1,21 +1,23 @@
 from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING
 
 from fastapi import Depends, Request
 
 from druks.accounts.dependencies import current_account, current_session_account
 from druks.accounts.models import Account
 from druks.api.dependencies import SessionDep
-from druks.apps import App
-from druks.apps.loader import get_app
-from druks.apps.registry import apps, workflows
 from druks.chat.bots.service import get_bot_connection
 from druks.durable.models import AgentCall, Artifact, Run
 from druks.exceptions import ObjectNotFound, PermissionDenied
 from druks.files.models import FileRecord
 from druks.notifications.models import Notification
+from druks.registry import app_registry, get_app, get_workflow
+
+if TYPE_CHECKING:
+    from druks.apps import App
 
 
-def require_app_access(app: type[App]) -> Callable[..., Awaitable[None]]:
+def require_app_access(app: "type[App]") -> Callable[..., Awaitable[None]]:
     """The dependency in front of one app: the caller must be able to use it."""
 
     async def require_access(account: Account = Depends(current_account)) -> None:
@@ -47,7 +49,7 @@ async def require_run_access(
     """The caller must be able to use the run's app. An unknown run is the route's to answer."""
     run = await session.get(Run, request.path_params["run"])
     if run:
-        workflow = workflows.get(run.kind)
+        workflow = run.workflow
         if not workflow:
             raise ObjectNotFound("run", {"id": run.id})
         app = get_app(workflow.app)
@@ -62,7 +64,7 @@ async def require_call_access(
     route's to answer."""
     call = await session.get(AgentCall, request.path_params["call"])
     if call:
-        workflow = workflows.get(call.run.kind)
+        workflow = call.run.workflow
         if not workflow:
             raise ObjectNotFound("agent call", {"id": call.id})
         app = get_app(workflow.app)
@@ -78,7 +80,7 @@ async def require_artifact_access(
     artifact = await session.get(Artifact, request.path_params["artifact_id"])
     if artifact:
         call = await AgentCall.get(session, artifact.agent_call_id)
-        workflow = workflows.get(call.run.kind)
+        workflow = call.run.workflow
         if not workflow:
             raise ObjectNotFound("artifact", {"id": artifact.id})
         app = get_app(workflow.app)
@@ -110,8 +112,8 @@ async def require_notification_access(
     notification = await session.get(Notification, request.path_params["notification_id"])
     if notification and notification.run_id:
         run = await session.get(Run, notification.run_id)
-        workflow = workflows.get(run.kind)
-        app = apps.get(workflow.app) if workflow else None
+        workflow = run.workflow
+        app = app_registry.get(workflow.app) if workflow else None
         if not app:
             raise ObjectNotFound("notification", {"id": notification.id})
         if not await account.can_use_app(app):
@@ -123,7 +125,7 @@ async def require_schedule_access(
 ) -> None:
     """The caller must be able to use the app that declares the schedule. An unknown kind
     is the route's to answer."""
-    workflow = workflows.get(request.path_params["kind"])
+    workflow = get_workflow(request.path_params["kind"])
     if workflow:
         app = get_app(workflow.app)
         if not await account.can_use_app(app):

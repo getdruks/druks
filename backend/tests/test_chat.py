@@ -13,7 +13,6 @@ from conftest import FORM_TEXT
 from druks import ui
 from druks.accounts.enums import AccountKind
 from druks.accounts.models import Account, PersonalAccessToken
-from druks.apps.registry import channels, services
 from druks.chat import service, sockets
 from druks.chat.bots import service as bot_service
 from druks.chat.bridge import Bridge
@@ -51,6 +50,7 @@ from druks.models import Base
 from druks.notifications.constants import CLOSE_QUESTION_WORKFLOW, SEND_WORKFLOW
 from druks.notifications.models import Notification
 from druks.redis import get_client
+from druks.registry import channel_registry, service_registry
 from druks.sandbox.exceptions import IdentityDenied
 from druks.sandbox.host import Host
 from druks.sandbox.models import SandboxIdentity, SecretRef
@@ -126,7 +126,7 @@ async def sandbox(druks_db, conversation, monkeypatch):
     monkeypatch.setattr(service, "get_sandbox", AsyncMock(return_value=(host, identity)))
     monkeypatch.setattr(service, "get_running_sandbox", AsyncMock(return_value=host))
     # The box is not real, so it has no git to configure.
-    monkeypatch.setattr(services.get("github"), "prepare_sandbox", AsyncMock())
+    monkeypatch.setattr(service_registry.get("github"), "prepare_sandbox", AsyncMock())
     config = SimpleNamespace(
         harness_class=ClaudeHarness,
         model="anthropic/claude-opus-4-7",
@@ -149,7 +149,7 @@ async def thread_run(druks_db, conversation, sandbox, monkeypatch):
     conversation.source = "slack"
     conversation.connection = await VaultSecret.store(
         druks_db,
-        services.get("slack").secret_kind,
+        service_registry.get("slack").secret_kind,
         Audience.service("slack"),
         identity={},
         secrets={},
@@ -192,7 +192,7 @@ async def thread_run(druks_db, conversation, sandbox, monkeypatch):
 
     monkeypatch.setattr(Bridge, "request", request)
     monkeypatch.setattr(Bridge, "reply", AsyncMock(return_value=("Done.", [])))
-    monkeypatch.setattr(channels.get("slack"), "send_reply", AsyncMock())
+    monkeypatch.setattr(channel_registry.get("slack"), "send_reply", AsyncMock())
     monkeypatch.setattr(Conversation, "is_held", AsyncMock(return_value=False))
     return run, prompts
 
@@ -352,7 +352,7 @@ async def test_each_operator_turn_prepares_the_box_for_its_sign_ins(
 ):
     host, _identity = sandbox
     conversation.account.kind = kind
-    github = services.get("github")
+    github = service_registry.get("github")
     sign_in = await VaultSecret.connect(
         druks_db,
         Audience.service(github.slug),
@@ -547,14 +547,14 @@ async def test_a_channel_turn_with_no_answer_is_asked_once(druks_db, conversatio
     conversation.source = "slack"
     conversation.connection = await VaultSecret.store(
         druks_db,
-        services.get("slack").secret_kind,
+        service_registry.get("slack").secret_kind,
         Audience.service("slack"),
         identity={},
         secrets={},
     )
     await druks_db.commit()
     send_reply = AsyncMock()
-    monkeypatch.setattr(channels.get("slack"), "send_reply", send_reply)
+    monkeypatch.setattr(channel_registry.get("slack"), "send_reply", send_reply)
     monkeypatch.setattr(Conversation, "is_held", AsyncMock(return_value=False))
     tool_calls = [{"toolCallId": "tool-1", "textOffset": 14}]
     monkeypatch.setattr(Bridge, "reply", AsyncMock(return_value=("Still running.", tool_calls)))
@@ -593,7 +593,7 @@ async def slack_conversation(druks_db, conversation, monkeypatch):
     conversation.thread_id = "C9:1700000000.000100"
     conversation.connection = await VaultSecret.store(
         druks_db,
-        services.get("slack").secret_kind,
+        service_registry.get("slack").secret_kind,
         Audience.service("slack"),
         identity={},
         secrets={},
@@ -782,7 +782,7 @@ async def test_a_question_goes_out_with_the_reply_as_one_message(
     druks_db, slack_conversation, monkeypatch, asked, actions, fields, body, offset, reply
 ):
     send_reply = AsyncMock()
-    monkeypatch.setattr(channels.get("slack"), "send_reply", send_reply)
+    monkeypatch.setattr(channel_registry.get("slack"), "send_reply", send_reply)
     tool_calls = [{"toolCallId": "ask-1", "textOffset": offset}]
     monkeypatch.setattr(Bridge, "reply", AsyncMock(return_value=(body, tool_calls)))
     message = await slack_conversation.get_unanswered_message(druks_db)
@@ -909,8 +909,8 @@ async def test_a_reply_where_no_inputs_show_ends_with_the_numbered_fields(
     druks_db, slack_conversation, monkeypatch
 ):
     send_reply = AsyncMock()
-    monkeypatch.setattr(channels.get("slack"), "send_reply", send_reply)
-    monkeypatch.setattr(channels.get("slack"), "has_inputs", False)
+    monkeypatch.setattr(channel_registry.get("slack"), "send_reply", send_reply)
+    monkeypatch.setattr(channel_registry.get("slack"), "has_inputs", False)
     tool_calls = [{"toolCallId": "ask-1", "textOffset": 13}]
     reply = ("Let me check.I read both.", tool_calls)
     monkeypatch.setattr(Bridge, "reply", AsyncMock(return_value=reply))
@@ -948,7 +948,7 @@ async def test_a_stopped_or_held_turn_sends_no_form(
     druks_db, slack_conversation, monkeypatch, status, is_held
 ):
     send_reply = AsyncMock()
-    monkeypatch.setattr(channels.get("slack"), "send_reply", send_reply)
+    monkeypatch.setattr(channel_registry.get("slack"), "send_reply", send_reply)
     monkeypatch.setattr(Conversation, "is_held", AsyncMock(return_value=is_held))
     tool_calls = [{"toolCallId": "ask-1", "textOffset": 13}]
     reply = ("Let me check.I read both.", tool_calls)
@@ -1996,7 +1996,7 @@ async def test_a_quota_wait_tells_the_person_when_the_run_continues_without_a_tu
     run.conversation_id = conversation.id
     await druks_db.commit()
     send_reply = AsyncMock()
-    monkeypatch.setattr(channels.get("slack"), "send_reply", send_reply)
+    monkeypatch.setattr(channel_registry.get("slack"), "send_reply", send_reply)
     monkeypatch.setattr(service, "get_settings", lambda: SimpleNamespace(timezone="Europe/Madrid"))
 
     resumes_at = datetime(2026, 8, 1, 10, 31, 30, tzinfo=UTC)

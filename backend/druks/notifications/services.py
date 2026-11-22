@@ -2,8 +2,6 @@ from dbos import DBOS
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from druks.accounts.models import Account
-from druks.apps.loader import get_app
-from druks.apps.registry import workflows
 from druks.chat.constants import CLICK_ANSWER_MESSAGE
 from druks.chat.forms import get_answer
 from druks.chat.models import Conversation
@@ -21,6 +19,7 @@ from druks.notifications.exceptions import (
     UnknownTokenError,
 )
 from druks.notifications.models import Notification
+from druks.registry import get_app
 from druks.settings import get_settings
 from druks.teams.models import Team
 
@@ -61,12 +60,12 @@ async def validate_in_app_answer(
             raise AnswerNotAllowedError(
                 "Only the admin of the number that started this run can answer it."
             )
-    workflow = workflows.get(run.kind)
+    workflow = run.workflow
     if not workflow:
         raise ObjectNotFound("run", {"id": run.id})
-    app = get_app(workflow.app) if workflow.app else None
+    app = get_app(workflow.app)
     # A person with no account is on no team.
-    if app and await Team.exists_for_app(session, app):
+    if await Team.exists_for_app(session, app):
         account = await session.get(Account, account_id) if account_id else None
         if not account or not await account.can_use_app(app):
             reason = TEAM_ONLY_MESSAGE.format(app=app.name)

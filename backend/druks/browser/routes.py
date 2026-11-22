@@ -10,7 +10,6 @@ from druks.accounts.dependencies import (
 )
 from druks.accounts.models import Account
 from druks.api.dependencies import SessionDep
-from druks.apps.registry import browser_sessions
 from druks.browser import exceptions
 from druks.browser.agent_browsers import AgentBrowser
 from druks.browser.constants import MAX_PAYLOAD_BYTES, PAYLOAD_WARNING_BYTES
@@ -19,6 +18,7 @@ from druks.browser.login import LoginWindow, is_same_origin
 from druks.browser.models import StoredBrowserSession
 from druks.browser.schemas import BrowserSessionResponse
 from druks.database import session_scope
+from druks.registry import get_browser_session, iter_browser_sessions
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ agent_browser_router = APIRouter(prefix="/api/browser", tags=["browser"])
 async def list_browser_sessions(session: SessionDep, account: Account = Depends(current_account)):
     rows = {row.name: row for row in await StoredBrowserSession.list_all(session)}
     sessions = []
-    for declaration in browser_sessions.all():
+    for declaration in iter_browser_sessions():
         try:
             row = rows.pop(declaration.name)
         except KeyError:
@@ -67,7 +67,7 @@ async def upload_state(
     payload_format: Annotated[BrowserSessionPayloadFormat, Query(alias="payloadFormat")],
     request: Request,
 ) -> None:
-    if declaration := browser_sessions.get(name):
+    if declaration := get_browser_session(name):
         if declaration.anonymous:
             raise exceptions.BrowserSessionAnonymousError(name)
         row = await declaration.get_or_create_row()
@@ -89,7 +89,7 @@ async def upload_state(
 
 @router.post("/{name}/login-window", status_code=204, dependencies=[Depends(current_admin_account)])
 async def open_login_window(name: str) -> None:
-    if declaration := browser_sessions.get(name):
+    if declaration := get_browser_session(name):
         if declaration.anonymous:
             raise exceptions.BrowserSessionAnonymousError(name)
         await LoginWindow.open(await declaration.get_or_create_row())
