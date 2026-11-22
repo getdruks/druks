@@ -286,7 +286,6 @@ class _DeliverSpy:
 @pytest.fixture
 async def deliver_spy(monkeypatch):
     spy = _DeliverSpy()
-    monkeypatch.setattr(outbox, "deliver", spy)
     monkeypatch.setattr(slack_channel, "deliver_notification", spy)
     monkeypatch.setattr(slack_webhooks, "deliver", spy)
     return spy

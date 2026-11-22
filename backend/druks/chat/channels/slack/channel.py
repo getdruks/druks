@@ -2,6 +2,7 @@ import json
 import logging
 import secrets
 from datetime import timedelta
+from functools import partial
 
 from dbos import DBOS
 from slack_sdk.errors import SlackApiError
@@ -17,13 +18,13 @@ from druks.core.apis.slack import SlackClient
 from druks.core.services import Slack
 from druks.files.datastructures import File
 from druks.models import Base
-from druks.notifications.constants import CLOSED_MESSAGE, MARKDOWN_TEXT_LIMIT
-from druks.notifications.delivery import check_input, get_blocks
-from druks.notifications.delivery import deliver as deliver_notification
+from druks.notifications.constants import CLOSED_MESSAGE
+from druks.notifications.exceptions import ChannelUnavailableError
 from druks.notifications.models import Notification, mint_correlation_token
 from druks.prompts import render_prompt
 from druks.redis import get_client
 from druks.registry import iter_apps
+from druks.secrets.datastructures import Audience
 from druks.secrets.models import VaultSecret
 from druks.settings import get_settings
 
@@ -32,6 +33,7 @@ from .constants import (
     LINK_KEY,
     LINK_MESSAGE,
     LINK_TTL_SECONDS,
+    MARKDOWN_TEXT_LIMIT,
     MESSAGE_BLOCKS_LIMIT,
     THREAD_MESSAGES,
     UNACCEPTED_AUTOMATION_REPLY,
@@ -40,6 +42,8 @@ from .constants import (
     WELCOME_TEMPLATE,
     WELCOME_TTL_SECONDS,
 )
+from .delivery import check_input, get_blocks
+from .delivery import deliver as deliver_notification
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +62,7 @@ class SlackChannel(Channel):
     has_readable_threads = True
     has_buttons = True
     has_inputs = True
+    has_account_notifications = True
     reaction_ack = "eyes"
 
     @classmethod
@@ -254,20 +259,40 @@ class SlackChannel(Channel):
 
     @classmethod
     async def post_buttons(
-        cls, session: AsyncSession, conversation: Conversation, notification: Notification
-    ) -> str:
+        cls,
+        session: AsyncSession,
+        conversation: Conversation | None,
+        notification: Notification,
+    ) -> str | None:
         """Post the notification in the conversation's thread, or its DM. A notification
         that an answer closed before the post says that its question is closed, in place
-        of its buttons and inputs."""
-        client = SlackClient(token=await Slack.get_bot_token())
-        room, _, thread_ts = conversation.thread_id.partition(":")
+        of its buttons and inputs. Without a conversation, post the notification for its
+        account: in the channel that the person chose, then in the bot's DM with their
+        Slack user when the bot cannot post in that channel. An account with neither gets
+        no message."""
+        thread_ts = ""
         actions, fields, outcome = notification.actions, notification.fields, ""
-        if notification.is_acknowledged:
-            actions, fields, outcome = None, None, CLOSED_MESSAGE
-        posted = await deliver_notification(
-            client,
-            room or conversation.user_id,
-            notification.body,
+        if conversation:
+            room, _, thread_ts = conversation.thread_id.partition(":")
+            rooms = [room or conversation.user_id]
+            if notification.is_acknowledged:
+                actions, fields, outcome = None, None, CLOSED_MESSAGE
+        else:
+            account = await session.get(Account, notification.account_id)
+            sign_ins = await VaultSecret.list_account_connections(
+                session, Audience.service(Slack.slug), notification.account_id
+            )
+            rooms = []
+            if account.notification_channel_id:
+                rooms.append(account.notification_channel_id)
+            if sign_ins:
+                rooms.append(sign_ins[0].identity["subject"])
+            if not rooms:
+                return
+        post = partial(
+            deliver_notification,
+            SlackClient(token=await Slack.get_bot_token()),
+            body=notification.body,
             blocks=notification.blocks,
             thread_ts=thread_ts,
             actions=actions,
@@ -277,11 +302,21 @@ class SlackChannel(Channel):
             outcome=outcome,
             question_offset=notification.question_offset,
         )
+        try:
+            posted = await post(rooms[0])
+        except ChannelUnavailableError:
+            # The next room takes a notification that the first one refuses.
+            if not rooms[1:]:
+                raise
+            posted = await post(rooms[1])
         return f"{posted['channel']}:{posted['ts']}"
 
     @classmethod
     async def remove_buttons(
-        cls, session: AsyncSession, conversation: Conversation, notification: Notification
+        cls,
+        session: AsyncSession,
+        conversation: Conversation | None,
+        notification: Notification,
     ) -> None:
         """Edit the notification's message to say that its question is closed."""
         client = SlackClient(token=await Slack.get_bot_token())

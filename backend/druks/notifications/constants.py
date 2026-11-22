@@ -11,12 +11,6 @@ NOTE_FIELD = "note"
 # What a person reads who clicks a control that needs a note with an empty note input.
 NOTE_REQUIRED_MESSAGE = "This button needs a note. Write the note, then click the button again."
 
-# Slack's limit for the text of all the markdown blocks of one message.
-MARKDOWN_TEXT_LIMIT = 12_000
-
-# What ends a message that Druks cut to fit, in a paragraph of its own.
-TRUNCATION_MARKER = "\n\n…"
-
 # The workflow that closes the messages of a run's question, by the name a run queues it.
 CLOSE_WORKFLOW = "notifications.close"
 
