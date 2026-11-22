@@ -4,6 +4,7 @@ from pydantic import ConfigDict, Field
 
 from druks.schemas import Schema
 from druks.ui.blocks import FileSummary
+from druks.ui.fields import Field as FormField
 
 from .enums import ConversationSource, MessageRole, MessageState
 
@@ -33,6 +34,12 @@ class ConversationResponse(Schema):
     active_message_id: str | None
 
 
+class QuestionResponse(Schema):
+    question: str
+    choices: list[str]
+    fields: list[FormField]
+
+
 class MessageResponse(Schema):
     model_config = ConfigDict(from_attributes=True)
 
@@ -42,6 +49,7 @@ class MessageResponse(Schema):
     reply_to: str | None
     state: MessageState | None
     tool_calls: list[dict]
+    question: QuestionResponse | None
     is_internal: bool
     file: FileSummary | None
     transcript: str

@@ -6,7 +6,8 @@ import { Route, Router } from 'wouter'
 
 import { chatApi } from '../chat/api'
 import { api } from '../api/client'
-import type { Conversation, ConversationAction, Message } from '../chat/state'
+import type { Field } from '../api/types'
+import type { Conversation, ConversationAction, Message, Question } from '../chat/state'
 import { UserPreferencesProvider } from '../lib/preferences'
 import { ChatPage } from './ChatPage'
 
@@ -23,7 +24,7 @@ class Socket {
   receive(action: ConversationAction) { act(() => this.onmessage?.({ data: JSON.stringify(action) })) }
 }
 
-const message: Message = { id: '10', role: 'user', body: 'Check the active runs', state: 'delivered', replyTo: null, toolCalls: [], isInternal: false, file: null, transcript: '', createdAt: '2026-09-18T10:24:00Z', deliveredAt: '2026-09-18T10:24:01Z' }
+const message: Message = { id: '10', role: 'user', body: 'Check the active runs', state: 'delivered', replyTo: null, toolCalls: [], question: null, isInternal: false, file: null, transcript: '', createdAt: '2026-09-18T10:24:00Z', deliveredAt: '2026-09-18T10:24:01Z' }
 const conversation: Conversation = {
   id: '01995a3c-0000-7000-8000-000000000001', title: message.body, source: 'web', userId: null, userName: '', createdAt: message.createdAt,
   messageCount: 1, activeMessageId: '10', messages: [message],
@@ -427,5 +428,145 @@ describe('Chat page', () => {
     expect(turns[2]?.textContent).toContain('Next answer')
     expect(screen.getAllByRole('button', { name: 'Send again' })).toHaveLength(2)
     expect(chatApi.send).not.toHaveBeenCalled()
+  })
+})
+
+describe('Chat questions', () => {
+  const choices: Question = { question: 'Which database?', choices: ['Postgres', 'MySQL'], fields: [] }
+  const title: Field = { field: 'text', name: 'title', label: 'Title', helpText: '', isRequired: true, value: '', placeholder: '' }
+  const where: Field = { field: 'select', name: 'where', label: 'Where', helpText: '', isRequired: false, options: [{ value: 'staging', label: 'Staging' }, { value: 'production', label: 'Production' }], value: 'staging' }
+
+  // The turn of the person's message, whose reply asks.
+  function asked(reply: Partial<Message>): Conversation {
+    return { ...conversation, activeMessageId: null, messages: [
+      { ...message, state: 'replied' },
+      { ...message, id: '20', role: 'assistant', body: 'I read both.', state: null, replyTo: message.id, deliveredAt: null, question: choices, ...reply },
+    ] }
+  }
+
+  function answer(body: string): Message {
+    return { ...message, id: '21', body, state: 'pending', deliveredAt: null, createdAt: '2026-09-18T10:25:00Z' }
+  }
+
+  function form(...fields: Field[]): Partial<Message> {
+    return { question: { question: 'Where does it ship?', choices: [], fields } }
+  }
+
+  it('shows the question above a button for each choice, and sends the chosen label as a message', async () => {
+    vi.mocked(chatApi.get).mockResolvedValue(asked({}))
+    vi.mocked(chatApi.send).mockResolvedValue(answer('Postgres'))
+    mount()
+    await connected()
+    const turn = within(screen.getAllByRole('article')[0]!)
+    const postgres = turn.getByRole('button', { name: 'Postgres' })
+    expect(turn.getByText('Which database?').compareDocumentPosition(postgres) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(turn.getByRole('button', { name: 'MySQL' })).toBeTruthy()
+    fireEvent.click(postgres)
+    await waitFor(() => expect(turn.queryByRole('button', { name: 'Postgres' })).toBeNull())
+    expect(chatApi.send).toHaveBeenCalledExactlyOnceWith(conversation.id, 'Postgres')
+    expect(turn.getByText('Which database?')).toBeTruthy()
+    expect(turn.getByText('Your answer')).toBeTruthy()
+    expect(turn.getByText('Postgres')).toBeTruthy()
+  })
+
+  it('submits a form of three fields as a message with a line for each field', async () => {
+    const notify: Field = { field: 'checkbox', name: 'notify', label: 'Notify the owner', helpText: '', isRequired: false, value: false }
+    const body = 'Title: Fix the gate\nWhere: Production\nNotify the owner: No'
+    vi.mocked(chatApi.get).mockResolvedValue(asked(form(title, where, notify)))
+    vi.mocked(chatApi.send).mockResolvedValue(answer(body))
+    mount()
+    await connected()
+    const turn = within(screen.getAllByRole('article')[0]!)
+    fireEvent.change(turn.getByRole('textbox', { name: /Title/ }), { target: { value: 'Fix the gate' } })
+    fireEvent.change(turn.getByRole('combobox', { name: 'Where' }), { target: { value: 'production' } })
+    fireEvent.click(turn.getByRole('button', { name: 'Submit' }))
+    await waitFor(() => expect(turn.queryByRole('button', { name: 'Submit' })).toBeNull())
+    expect(chatApi.send).toHaveBeenCalledExactlyOnceWith(conversation.id, body)
+    expect(turn.queryByRole('textbox')).toBeNull()
+    expect(turn.getByText('Where does it ship?')).toBeTruthy()
+    expect(turn.getByText(/Title: Fix the gate/)).toBeTruthy()
+  })
+
+  it.each([
+    ['no text', { body: '', toolCalls: [] }],
+    ['only notes', { body: 'Let me check.', toolCalls: [{ toolCallId: 'ask', title: 'Ask', textOffset: 13 }] }],
+  ])('shows the Agent label and the question of a reply with %s', async (_reply, reply) => {
+    vi.mocked(chatApi.get).mockResolvedValue(asked(reply))
+    mount()
+    await connected()
+    const turn = within(screen.getAllByRole('article')[0]!)
+    expect(turn.getByText('Agent')).toBeTruthy()
+    expect(turn.getByText('Which database?')).toBeTruthy()
+    expect(turn.getByRole('button', { name: 'Postgres' })).toBeTruthy()
+  })
+
+  it('starts each field at its declared value and drops the edits when the fields change', async () => {
+    const budget: Field = { field: 'number', name: 'budget', label: 'Budget', helpText: '', isRequired: false, value: 10, minimum: null, maximum: null, step: null }
+    const tags: Field = { field: 'multi_select', name: 'tags', label: 'Tags', helpText: '', isRequired: false, options: [{ value: 'rack', label: 'Rack' }, { value: 'shelf', label: 'Shelf' }], value: ['rack'] }
+    const size: Field = { field: 'radio', name: 'size', label: 'Size', helpText: '', isRequired: true, options: [{ value: 's', label: 'Small' }, { value: 'l', label: 'Large' }], value: '' }
+    const region: Field = { ...where, name: 'region', label: 'Region', isRequired: true, value: '' }
+    vi.mocked(chatApi.get).mockResolvedValue(asked(form(budget, region, tags, size)))
+    mount()
+    const socket = await connected()
+    expect((screen.getByRole('spinbutton', { name: 'Budget' }) as HTMLInputElement).value).toBe('10')
+    expect((screen.getByRole('combobox', { name: /Region/ }) as HTMLSelectElement).value).toBe('staging')
+    expect((screen.getByRole('checkbox', { name: 'Rack' }) as HTMLInputElement).checked).toBe(true)
+    expect((screen.getByRole('radio', { name: 'Small' }) as HTMLInputElement).checked).toBe(true)
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Budget' }), { target: { value: '20' } })
+    socket.receive({ type: 'snapshot', ...asked(form(budget, region, tags, size)) })
+    expect((screen.getByRole('spinbutton', { name: 'Budget' }) as HTMLInputElement).value).toBe('20')
+    socket.receive({ type: 'snapshot', ...asked(form({ ...budget, name: 'cost', label: 'Cost' }, region, tags, size)) })
+    expect((screen.getByRole('spinbutton', { name: 'Cost' }) as HTMLInputElement).value).toBe('10')
+  })
+
+  it('shows an optional select with no default as blank, and sends (no answer) for it', async () => {
+    const staging: Field = { field: 'select', name: 'where', label: 'Where', helpText: '', isRequired: false, options: [{ value: 'staging', label: 'Staging' }], value: '' }
+    vi.mocked(chatApi.get).mockResolvedValue(asked(form(staging)))
+    vi.mocked(chatApi.send).mockResolvedValue(answer('Where: (no answer)'))
+    mount()
+    await connected()
+    expect((screen.getByRole('combobox', { name: 'Where' }) as HTMLSelectElement).value).toBe('')
+    fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
+    await waitFor(() => expect(chatApi.send).toHaveBeenCalledExactlyOnceWith(conversation.id, 'Where: (no answer)'))
+  })
+
+  it('sends nothing while a required field has no answer, and takes 0', async () => {
+    const count: Field = { field: 'number', name: 'count', label: 'Count', helpText: '', isRequired: true, value: 0, minimum: null, maximum: null, step: null }
+    const size: Field = { field: 'radio', name: 'size', label: 'Size', helpText: '', isRequired: true, options: [{ value: 's', label: 'Small' }, { value: 'l', label: 'Large' }], value: '' }
+    const tags: Field = { field: 'multi_select', name: 'tags', label: 'Tags', helpText: '', isRequired: true, options: [{ value: 'rack', label: 'Rack' }, { value: 'shelf', label: 'Shelf' }], value: [] }
+    const body = 'Title: Fix the gate\nCount: 0\nSize: Small\nTags: Shelf'
+    vi.mocked(chatApi.get).mockResolvedValue(asked(form(title, count, size, tags)))
+    vi.mocked(chatApi.send).mockResolvedValue(answer(body))
+    mount()
+    await connected()
+    fireEvent.change(screen.getByRole('textbox', { name: /Title/ }), { target: { value: '   ' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
+    expect(await screen.findByText('Answer "Title".')).toBeTruthy()
+    expect(screen.getByText('Answer "Tags".')).toBeTruthy()
+    expect(screen.queryByText('Answer "Count".')).toBeNull()
+    expect(screen.queryByText('Answer "Size".')).toBeNull()
+    expect(chatApi.send).not.toHaveBeenCalled()
+    fireEvent.change(screen.getByRole('textbox', { name: /Title/ }), { target: { value: 'Fix the gate' } })
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Shelf' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
+    await waitFor(() => expect(chatApi.send).toHaveBeenCalledExactlyOnceWith(conversation.id, body))
+  })
+
+  it('sends once while it waits, and keeps the controls and the answers after a failed send', async () => {
+    let fail: (error: Error) => void = () => {}
+    vi.mocked(chatApi.get).mockResolvedValue(asked(form(title, where)))
+    vi.mocked(chatApi.send).mockReturnValueOnce(new Promise((_resolve, reject) => { fail = reject }))
+    mount()
+    await connected()
+    fireEvent.change(screen.getByRole('textbox', { name: /Title/ }), { target: { value: 'Fix the gate' } })
+    const submit = screen.getByRole('button', { name: 'Submit' }) as HTMLButtonElement
+    fireEvent.click(submit)
+    await waitFor(() => expect(submit.disabled).toBe(true))
+    fireEvent.click(submit)
+    expect(chatApi.send).toHaveBeenCalledOnce()
+    await act(async () => fail(new Error('Message was not saved.')))
+    expect((await screen.findByRole('alert')).textContent).toContain('Message was not saved.')
+    expect(submit.disabled).toBe(false)
+    expect((screen.getByRole('textbox', { name: /Title/ }) as HTMLInputElement).value).toBe('Fix the gate')
   })
 })

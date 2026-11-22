@@ -6,14 +6,17 @@ import { useStickToBottom } from 'use-stick-to-bottom'
 import { Link, useLocation } from 'wouter'
 
 import { api, ApiError, UnauthorizedError } from '../api/client'
+import type { Field } from '../api/types'
 import { appLabel } from '../apps/registry'
 import { chatApi } from '../chat/api'
 import {
-  compareConversations, conversationReducer, conversationTitle, initialConversation, savedReplyRows,
-  type ActiveRun, type Conversation, type ConversationAction, type ConversationSummary, type Message, type ReplyRow,
+  compareConversations, conversationReducer, conversationTitle, formAnswer, formErrors, initialConversation, questionAnswer, savedReplyRows,
+  type ActiveRun, type Conversation, type ConversationAction, type ConversationSummary, type Message, type Question, type ReplyRow,
 } from '../chat/state'
 import { Markdown } from '../components/Markdown'
 import { Page } from '../components/Page'
+import { Fields } from '../druksui/Fields'
+import { useFieldState } from '../druksui/Form'
 import { useFormatters } from '../lib/preferences'
 import { zonedParts } from '../lib/format'
 import { phaseLine } from '../lib/phase'
@@ -347,10 +350,11 @@ function ConversationThread({ id, summary, onPin, pinPending, draft, onDraft, on
               {isQueued && <span className="chat-queued">Queued</span>}
             </div>
             <div className="chat-reply">
-              {(rows.length > 0 || isWaiting) && <div className="chat-message-meta chat-agent-meta">Agent
+              {(rows.length > 0 || isWaiting || reply?.question) && <div className="chat-message-meta chat-agent-meta">Agent
                 {reply && <time dateTime={reply.createdAt} title={format.absTime(reply.createdAt)}>{format.absTimeCompact(reply.createdAt)}</time>}
               </div>}
               <Reply rows={rows} />
+              {reply?.question && <ReplyQuestion question={reply.question} answer={questionAnswer(messages, reply)} sending={sending} onAnswer={(body) => void send(body)} />}
               {isWaiting && <p className="chat-waiting" role="status"><span className="chat-activity-dot" />{message.state === 'delivered' ? 'Agent is replying…' : 'Connecting…'}</p>}
               {stoppedTurn && <div className="chat-interrupted" role="status">
                 <strong>{stoppedTurn.title}</strong>
@@ -426,6 +430,45 @@ function Reply({ rows }: { rows: ReplyRow[] }) {
       </li>)}
     </ol>
   })
+}
+
+function ReplyQuestion({ question, answer, sending, onAnswer }: {
+  question: Question
+  answer?: Message
+  sending: boolean
+  onAnswer: (body: string) => void
+}) {
+  return <div className="chat-question">
+    <Markdown source={question.question} />
+    {answer
+      ? <div className="chat-question-answer">
+        <div className="chat-message-meta">Your answer</div>
+        <div className="chat-user-body">{answer.body}</div>
+      </div>
+      : question.fields.length > 0
+        ? <QuestionForm fields={question.fields} sending={sending} onAnswer={onAnswer} />
+        : <div className="chat-question-choices">
+          {question.choices.map((choice, index) => <button key={index} type="button" className="chat-button" disabled={sending} onClick={() => onAnswer(choice)}>{choice}</button>)}
+        </div>}
+  </div>
+}
+
+function QuestionForm({ fields, sending, onAnswer }: {
+  fields: Field[]
+  sending: boolean
+  onAnswer: (body: string) => void
+}) {
+  const fieldState = useFieldState(fields)
+  const [errors, setErrors] = useState<Record<string, string>>({})
+  return <form className="chat-question-form" onSubmit={(event) => {
+    event.preventDefault()
+    const fieldErrors = formErrors(fields, fieldState.values)
+    setErrors(fieldErrors)
+    if (Object.keys(fieldErrors).length === 0) onAnswer(formAnswer(fields, fieldState.values))
+  }}>
+    <Fields fields={fields} values={fieldState.values} errors={errors} resets={fieldState.resets} onChange={fieldState.change} />
+    <button type="submit" className="chat-button" disabled={sending}>Submit</button>
+  </form>
 }
 
 function ToolRow({ call }: { call: ToolCall }) {

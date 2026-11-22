@@ -1,6 +1,6 @@
 import type { PlanEntry, SessionNotification, SessionUpdate, ToolCall } from '@agentclientprotocol/sdk'
 
-import type { FileSummary } from '../api/types'
+import type { Field, FileSummary } from '../api/types'
 
 export interface ConversationSummary {
   id: string
@@ -24,11 +24,20 @@ export interface Message {
   createdAt: string
   deliveredAt: string | null
   toolCalls: Array<ToolCall & { textOffset: number }>
+  /** The question that the agent asked with its reply in the web chat. */
+  question: Question | null
   /** Druks wrote this message for the agent. The person on WhatsApp never sees it. */
   isInternal: boolean
   file: FileSummary | null
   /** What the person said in the message's voice note. */
   transcript: string
+}
+
+/** A question asks with its choices, or with its fields. */
+export interface Question {
+  question: string
+  choices: string[]
+  fields: Field[]
 }
 
 /** A run that the conversation started and that still works or waits. */
@@ -124,6 +133,44 @@ export function savedReplyRows(message: Message): ReplyRow[] {
   }
   if (position < characters.length) rows.push({ type: 'text', text: characters.slice(position).join('') })
   return rows
+}
+
+export function questionAnswer(messages: Message[], reply: Message): Message | undefined {
+  const index = messages.findIndex((message) => message.id === reply.replyTo)
+  return messages.slice(index + 1).find((message) => message.role === 'user' && !message.isInternal)
+}
+
+// The lines of a Slack Submit, so the agent reads the answers of a web form the same way.
+export function formAnswer(fields: Field[], values: Record<string, unknown>): string {
+  return fields.map((field) => `${field.label}: ${fieldAnswer(field, values[field.name]) || '(no answer)'}`).join('\n')
+}
+
+// A radio group and a multi-select have no native required check, and blank text passes one.
+export function formErrors(fields: Field[], values: Record<string, unknown>): Record<string, string> {
+  const errors: Record<string, string> = {}
+  for (const field of fields) {
+    if (field.isRequired && field.field === 'checkbox' && !values[field.name]) errors[field.name] = `Check "${field.label}".`
+    else if (field.isRequired && !fieldAnswer(field, values[field.name])) errors[field.name] = `Answer "${field.label}".`
+  }
+  return errors
+}
+
+function fieldAnswer(field: Field, value: unknown): string {
+  switch (field.field) {
+    case 'checkbox':
+      if (value) return 'Yes'
+      return 'No'
+    case 'select':
+    case 'radio':
+    case 'multi_select': {
+      let chosen = [value]
+      if (field.field === 'multi_select') chosen = value as string[]
+      return field.options.filter((option) => chosen.includes(option.value)).map((option) => option.label).join(', ')
+    }
+    default:
+      // A number field gives a number, or null when it is empty.
+      return String(value ?? '').trim()
+  }
 }
 
 export function conversationReducer(state: ConversationState, action: ConversationAction): ConversationState {

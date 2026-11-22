@@ -42,6 +42,8 @@ class Message(Base, Uuid7Pk):
     reply_to: Mapped[str | None] = mapped_column(ForeignKey("chat_messages.id", ondelete="CASCADE"))
     state: Mapped[str | None]
     tool_calls: Mapped[list[dict]] = mapped_column(JSONB, default=list)
+    # The question that a web reply asks: its prompt, and its choices or its fields.
+    question: Mapped[dict | None] = mapped_column(JSONB, default=None)
     # Druks wrote it for the agent. It never reaches the source.
     is_internal: Mapped[bool] = mapped_column(default=False, server_default=text("false"))
     # The message's id at its source. Druks records a reply's id before it sends the
@@ -263,6 +265,7 @@ class Conversation(Base, Uuid7Pk):
         role: MessageRole = MessageRole.USER,
         reply_to: Message | None = None,
         tool_calls: list[dict] | None = None,
+        question: dict | None = None,
         is_internal: bool = False,
         source_id: str | None = None,
         file: File | None = None,
@@ -278,6 +281,7 @@ class Conversation(Base, Uuid7Pk):
             reply_to=reply_to.id if reply_to else None,
             state=state if role == MessageRole.USER else None,
             tool_calls=tool_calls or [],
+            question=question,
             is_internal=is_internal,
             source_id=source_id,
             file=file,
