@@ -164,3 +164,24 @@ describe('request identity', () => {
     }
   })
 })
+
+describe('a repeated read', () => {
+  it('asks the server for no trace, and the first read asks for nothing', async () => {
+    const sent: Record<string, string>[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (...[, init]: [string, RequestInit]) => {
+        sent.push(init.headers as Record<string, string>)
+        return new Response('{}', { status: 200 })
+      }),
+    )
+
+    await getJSON('/api/polled')
+    await getJSON('/api/polled')
+
+    expect(sent.map((headers) => headers.traceparent)).toEqual([
+      undefined,
+      expect.stringMatching(/^00-[0-9a-f]{32}-[0-9a-f]{16}-00$/),
+    ])
+  })
+})

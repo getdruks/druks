@@ -18,6 +18,7 @@ from druks.durable.dbos_state import DBOS_SYSTEM_SCHEMA, workflow_status
 from druks.durable.exceptions import FatalError, ScheduleUnavailable
 from druks.harnesses.exceptions import HarnessError
 from druks.settings import get_settings
+from druks.tracing import is_tracing
 from druks.user_settings.models import InstallationSettings
 
 if TYPE_CHECKING:
@@ -57,6 +58,9 @@ def init_dbos() -> None:
         # workflow would strand every parked run, because one host cannot drain them.
         "enable_patching": True,
     }
+    if is_tracing():
+        config["enable_otlp"] = True
+        config["otel_attribute_format"] = "semconv"
     # DBOS logs every exception that leaves a workflow, with no opt-out;
     # _execute_run already records a classified failure on the run.
     logging.getLogger("dbos").addFilter(

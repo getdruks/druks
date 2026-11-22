@@ -636,7 +636,7 @@ class App:
         from druks.durable import reads
         from druks.durable.enums import AgentCallStatus
         from druks.durable.exceptions import AgentCallNotFound
-        from druks.durable.live import SSE_HEADERS
+        from druks.durable.live import EventStream
         from druks.durable.models import AgentCall
         from druks.durable.schemas import AgentCallFiles, TranscriptChunk
 
@@ -692,11 +692,7 @@ class App:
         ) -> StreamingResponse:
             if offset < 0:
                 raise HTTPException(status.HTTP_400_BAD_REQUEST, "offset must be >= 0.")
-            return StreamingResponse(
-                reads.stream_transcript(engine, call_id, stream, offset=offset),
-                media_type="text/event-stream",
-                headers=SSE_HEADERS,
-            )
+            return EventStream(reads.stream_transcript(engine, call_id, stream, offset=offset))
 
         @router.get("/files", response_model=AgentCallFiles, response_model_by_alias=True)
         async def list_files(session: SessionDep, call_id: str) -> AgentCallFiles:
@@ -794,7 +790,7 @@ class App:
         from druks.api.dependencies import EngineDep, SessionDep
         from druks.database import session_scope
         from druks.durable import reads
-        from druks.durable.live import SSE_HEADERS, stream
+        from druks.durable.live import EventStream, stream
         from druks.durable.schemas import SubjectList, SubjectResponse, SubjectRow
 
         subject_type = subject_class.subject_type
@@ -841,9 +837,7 @@ class App:
                 async with session_scope(engine) as session:
                     return await board(session, account_id)
 
-            return StreamingResponse(
-                stream(snapshot), media_type="text/event-stream", headers=SSE_HEADERS
-            )
+            return EventStream(stream(snapshot))
 
         # A subject id is whatever identifies it — "7" for a row, "owner/repo#7" for a
         # pull request — so the id matcher spans separators, and the subject's own
@@ -859,9 +853,7 @@ class App:
                 async with session_scope(engine) as session:
                     return await subject_response(session, subject_id, kinds)
 
-            return StreamingResponse(
-                stream(snapshot), media_type="text/event-stream", headers=SSE_HEADERS
-            )
+            return EventStream(stream(snapshot))
 
         @router.get(
             "/{subject_id:path}", response_model=SubjectResponse, response_model_by_alias=True
