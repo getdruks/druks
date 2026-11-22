@@ -58,6 +58,9 @@ FIELD_ELEMENTS = {
 # link to all of it when the installation has an address.
 OMISSION_MESSAGE = "Druks left out the end of this message because Slack limits its length."
 OMISSION_LINK = " Read all of it in Druks: {link}"
+TABLE_OMISSION_MESSAGE = (
+    "Druks left out {left:,} of the {total:,} rows of this table because Slack limits its size."
+)
 
 
 def cut_markdown(text: str, limit: int) -> str:
@@ -200,11 +203,13 @@ def get_blocks(
 
     Each Druks block takes a branch of its own. Facts and metrics take a section of fields
     for each ten, with the title on the first. A divider takes a divider, and a link takes a
-    button that opens it. Any other block, and a block past a limit of Slack, takes its text
-    form, and text that follows text joins it in one markdown block. ``blocks`` take the
-    room that the rest leaves, and when it runs out, its last block holds the text forms of
-    the blocks left. When the markdown is longer than Slack takes, Druks cuts its end, and a
-    line in place of the link says so, with the link."""
+    button that opens it. A table takes a data table of its first rows that fit, and when
+    rows do not fit, a line above it says how many Druks left out, with the link. Any other
+    block, and a block past a limit of Slack, takes its text form, and text that follows
+    text joins it in one markdown block. ``blocks`` take the room that the rest leaves, and
+    when it runs out, its last block holds the text forms of the blocks left. When the
+    markdown is longer than Slack takes, Druks cuts its end, and a line in place of the link
+    says so, with the link."""
     controls: list[dict] = []
     if fields and actions:
         inputs_by_id = {}
@@ -254,6 +259,8 @@ def get_blocks(
     if not blocks:
         return [{"type": "markdown", "text": text}, *controls]
     content: list[dict] = []
+    table_room = slack.MESSAGE_CELL_TEXT_LIMIT
+
     for index, block in enumerate(blocks):
         parts: list[dict] = []
         match block:
@@ -303,6 +310,66 @@ def get_blocks(
                         "action_id": slack.LINK_BUTTON_ACTION_ID,
                     }
                     parts = [{"type": "actions", "elements": [button]}]
+            case ui.Table(title=title, columns=columns, rows=rows) if (
+                0 < len(columns) <= slack.TABLE_COLUMNS_LIMIT
+            ):
+                labels = [column.label or slack.EMPTY_CELL_TEXT for column in columns]
+                size = len("".join(labels))
+                kept_cells = []
+
+                for row in rows[: slack.TABLE_ROWS_LIMIT]:
+                    texts = [cell.to_markdown() or slack.EMPTY_CELL_TEXT for cell in row.cells]
+
+                    if size + len("".join(texts)) > table_room:
+                        break
+                    size += len("".join(texts))
+                    kept_cells += zip(row.cells, texts, strict=True)
+                cells = []
+
+                for value, text in kept_cells:
+                    elements, end = [], 0
+
+                    for link in _MARKDOWN_LINK.finditer(text):
+                        escaped_words, address = link.groups()
+                        words = escaped_words.replace("\\[", "[").replace("\\]", "]")
+                        elements.append({"type": "text", "text": text[end : link.start()]})
+                        elements.append({"type": "link", "url": address, "text": words})
+                        end = link.end()
+                    match value:
+                        case ui.NumberValue(number=number):
+                            # Slack sorts a column of number cells as numbers.
+                            cells.append({"type": "raw_number", "value": number, "text": text})
+                        case _ if elements:
+                            elements.append({"type": "text", "text": text[end:]})
+                            # Slack takes no text element without text.
+                            section = {
+                                "type": "rich_text_section",
+                                "elements": [element for element in elements if element["text"]],
+                            }
+                            cells.append({"type": "rich_text", "elements": [section]})
+                        case _:
+                            cells.append({"type": "raw_text", "text": text})
+                body = [
+                    cells[start : start + len(columns)]
+                    for start in range(0, len(cells), len(columns))
+                ]
+
+                if body:
+                    # Slack draws a data table only with a row under its header.
+                    table_room -= size
+                    header = [{"type": "raw_text", "text": label} for label in labels]
+                    caption = title or labels[0]
+                    parts = [{"type": "data_table", "caption": caption, "rows": [header, *body]}]
+                if 0 < len(body) < len(rows):
+                    notice = TABLE_OMISSION_MESSAGE.format(
+                        left=len(rows) - len(body), total=len(rows)
+                    )
+
+                    if deep_link:
+                        notice += OMISSION_LINK.format(link=deep_link)
+                    # The line goes above the table, so its link never comes right before
+                    # the link that ends the message.
+                    parts.insert(0, {"type": "markdown", "text": notice})
         written = "" if parts else block.to_markdown()
         # One block of the room stays free for the link. When the room runs out, its last
         # block takes the blocks left as their text forms.

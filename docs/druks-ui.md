@@ -503,6 +503,7 @@ Slack draws these blocks of an approval with its own blocks:
 | `Facts`, `Metrics` | A grid of two columns: each label in bold above its value, under the title in bold. A section of Slack holds 10 of them, so more start a new section. |
 | `Divider` | A divider. |
 | `Link` | A button that opens the address of the link. |
+| `Table` | A data table that the person can sort and page through. The title is its caption, or the first column label when the table has no title. A `NumberValue` is a number cell, and Slack sorts a column of number cells as numbers. A value with a link is a link, and any other value shows its text form. An empty value or column label shows a dash. The row detail stays on the dashboard. |
 
 Every other block shows its text form. A value in a fact or a metric shows its
 text form, and a value with a link stays a link. Slack has no coloured label,
@@ -518,9 +519,18 @@ in the last block. The markdown of a message holds 12,000 characters. When there
 is more, Druks cuts its end. The last line then says that Druks left out the
 end, and links to the run's page when the installation has an endpoint.
 
+A data table holds 200 rows under its header, and 20 columns. The cells of all
+the data tables of a message hold 20,000 characters, with the column labels.
+Druks counts each cell by its text form, and an empty cell by its dash. Druks
+keeps the first rows of a table that fit. A line above the table then says how
+many rows Druks left out, and links to the run's page when the installation has
+an endpoint. A table shows its text form when it has no columns, more than 20
+columns, or no rows, or when no row fits.
+
 When Slack refuses the blocks, Druks sends the text of the approval in the same
-place, with the same buttons. An answer or a close edits the message. The edit
-draws the blocks again, with the outcome in place of the buttons.
+place, with the same buttons, so a table shows as a markdown table. An answer or
+a close edits the message. The edit draws the blocks again, with the outcome in
+place of the buttons.
 
 ## Actions and links
 
