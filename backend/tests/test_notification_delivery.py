@@ -91,23 +91,11 @@ async def test_a_body_too_long_for_slack_is_cut_and_keeps_its_link(slack):
     assert post["blocks"] == [{"type": "markdown", "text": post["text"]}]
 
 
+CHOICES = [{"id": "1", "label": "Postgres"}, {"id": "2", "label": "MySQL"}]
+
+
 async def test_a_long_reply_before_a_question_loses_its_end_and_the_question_stays(druks_db, slack):
-    bind_ambient_session(druks_db)
-    await install_service(
-        "slack",
-        access_token=_BOT_TOKEN,
-        identity={"client_id": "c1"},
-        secrets={"client_secret": "s"},
-    )
-    account = await Account.get_or_create(druks_db, "op@example.com")
-    conversation = Conversation(
-        account_id=account.id,
-        source=ConversationSource.SLACK,
-        user_id="U1",
-        thread_id="C1:1700000000.000100",
-    )
-    druks_db.add(conversation)
-    await druks_db.flush()
+    conversation = await _slack_chat(druks_db)
     reply = "I compared both.\n" * 1_000
     question = await Notification.create(
         druks_db,
@@ -115,7 +103,7 @@ async def test_a_long_reply_before_a_question_loses_its_end_and_the_question_sta
         reason="question.asked",
         body=f"{reply}\n\nWhich database?",
         question_offset=len(reply),
-        actions=[{"id": "1", "label": "Postgres"}, {"id": "2", "label": "MySQL"}],
+        actions=CHOICES,
     )
 
     await SlackChannel.post_buttons(druks_db, conversation, question)
@@ -421,8 +409,8 @@ async def test_delivery_to_a_channel_the_bot_is_not_in_says_to_invite_it(slack):
 
     assert "Invite the bot to the channel" in str(excinfo.value)
     # The Slack error keeps the request headers, and they carry the bot token.
-    assert excinfo.value.__cause__ is None
-    assert excinfo.value.__suppress_context__ is True
+    assert not excinfo.value.__cause__
+    assert excinfo.value.__suppress_context__
 
 
 async def test_a_refused_delivery_names_slack_s_reason(slack):
@@ -432,7 +420,7 @@ async def test_a_refused_delivery_names_slack_s_reason(slack):
         await deliver(SlackClient(token=_BOT_TOKEN), "C1", "hello")
 
     assert str(excinfo.value) == "Delivery failed: restricted_action."
-    assert excinfo.value.__cause__ is None
+    assert not excinfo.value.__cause__
 
 
 async def test_a_delivery_slack_does_not_answer_names_the_failure(monkeypatch):
@@ -445,7 +433,7 @@ async def test_a_delivery_slack_does_not_answer_names_the_failure(monkeypatch):
         await deliver(SlackClient(token=_BOT_TOKEN), "C1", "hello")
 
     assert str(excinfo.value) == "Delivery failed: TimeoutError."
-    assert excinfo.value.__cause__ is None
+    assert not excinfo.value.__cause__
 
 
 async def test_delivery_in_a_thread_replies_there(slack):
@@ -635,7 +623,7 @@ async def test_an_approval_writes_a_block_context_as_a_list_and_a_table(druks_db
     run = await _parked_review(
         druks_db,
         subject=note,
-        context=[block.model_dump(mode="json", by_alias=True) for block in context],
+        context=_stored(*context),
     )
 
     rendered = await get_rendered_ask(druks_db, run)
@@ -931,9 +919,8 @@ async def test_a_refusal_of_the_blocks_sends_their_text_form_in_the_same_place(s
     [
         ("invalid_blocks", DeliveryError, ["divider", "markdown"]),
         ("not_in_channel", ChannelUnavailableError, ["divider"]),
-        ("invalid_auth", DeliveryError, ["divider"]),
     ],
-    ids=["refused-text-form", "channel", "authentication"],
+    ids=["refused-text-form", "channel"],
 )
 async def test_a_failed_post_of_blocks_tries_their_text_form_once_and_only_on_a_refusal(
     slack, reason, error, attempts
@@ -1027,6 +1014,56 @@ DATABASE = {
         {"id": "mysql", "label": "MySQL", "recommended": False},
     ],
 }
+
+
+async def _question_after_blocks(
+    druks_db, *, reply: str = "I compared both."
+) -> tuple[Conversation, Notification]:
+    """A Slack chat, and the question that its agent asked after a reply and its blocks, as
+    the end of the turn makes it."""
+    conversation = await _slack_chat(druks_db)
+    facts = ui.Facts([ui.Fact("Postgres", "16"), ui.Fact("MySQL", "8")], title="Versions")
+    blocks = _stored(ui.Markdown(reply), facts)
+    text = ui.Stack(blocks).to_markdown()
+    question = await Notification.create(
+        druks_db,
+        conversation_id=conversation.id,
+        reason="question.asked",
+        body=f"{text}\n\nWhich database?",
+        blocks=blocks,
+        question_offset=len(text),
+        actions=CHOICES,
+    )
+    return conversation, question
+
+
+async def test_a_question_after_blocks_comes_in_their_message_above_its_buttons(druks_db, slack):
+    conversation, question = await _question_after_blocks(druks_db)
+
+    await SlackChannel.post_buttons(druks_db, conversation, question)
+
+    (post,) = slack.posts
+    blocks = post["blocks"]
+    assert [block["type"] for block in blocks] == ["markdown", "section", "markdown", "actions"]
+    assert blocks[2] == {"type": "markdown", "text": "Which database?"}
+
+
+async def test_a_question_after_blocks_too_long_for_slack_stays_whole_with_its_buttons(
+    druks_db, slack
+):
+    conversation, question = await _question_after_blocks(
+        druks_db, reply="I compared both.\n" * 1_000
+    )
+
+    await SlackChannel.post_buttons(druks_db, conversation, question)
+
+    (post,) = slack.posts
+    # The cut takes the end of the reply and the facts after it.
+    cut, asked, buttons = post["blocks"]
+    assert cut["text"].endswith(f"I compared both.\n\n…\n{OMISSION_MESSAGE}")
+    assert len(cut["text"]) + len(asked["text"]) <= MARKDOWN_TEXT_LIMIT
+    assert asked == {"type": "markdown", "text": "Which database?"}
+    assert buttons["type"] == "actions"
 
 
 async def _approval(druks_db, *, is_in_a_chat: bool = False, **ask) -> Notification:

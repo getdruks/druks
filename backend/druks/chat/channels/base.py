@@ -25,6 +25,8 @@ class Channel:
     # Whether the channel shows the agent's form and a parked run's questions and note as
     # inputs. Only without them does a click on a control that needs more reach the agent.
     has_inputs: ClassVar[bool] = False
+    # Whether the channel draws the blocks that the agent shows.
+    has_blocks: ClassVar[bool] = False
     # Whether the channel posts the notifications of an account that have no conversation.
     has_account_notifications: ClassVar[bool] = False
     # The reaction that acknowledges a person's message, as the channel names it.

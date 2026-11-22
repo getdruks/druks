@@ -187,6 +187,7 @@ def get_blocks(
     text: str,
     *,
     blocks: Sequence[ui.Block] = (),
+    question: str = "",
     deep_link: str | None = None,
     actions: list[dict] | None = None,
     fields: list[dict] | None = None,
@@ -194,22 +195,23 @@ def get_blocks(
     outcome: str = "",
 ) -> list[dict]:
     """The blocks of a notification's message: ``text`` as markdown, or ``blocks`` as Slack
-    draws them with ``deep_link`` on the line after them, then an input for each of
-    ``fields``, a button that carries ``token`` for each action, then ``outcome``. Fields
-    without actions are a form, and its one button is its Submit button. Fields with actions
-    are a run's questions and note: an input shows the start of a label that is too long for
-    it, and the content holds the whole label. An input that Slack refuses stays out, so the
-    message still goes out with its question in the content.
+    draws them with ``deep_link`` on the line after them and a chat agent's ``question``
+    after that, then an input for each of ``fields``, a button that carries ``token`` for
+    each action, then ``outcome``. Fields without actions are a form, and its one button is
+    its Submit button. Fields with actions are a run's questions and note: an input shows
+    the start of a label that is too long for it, and the content holds the whole label. An
+    input that Slack refuses stays out, so the message still goes out with its question in
+    the content.
 
     Each Druks block takes a branch of its own. Facts and metrics take a section of fields
     for each ten, with the title on the first. A divider takes a divider, and a link takes a
     button that opens it. A table takes a data table of its first rows that fit, and when
     rows do not fit, a line above it says how many Druks left out, with the link. Any other
     block, and a block past a limit of Slack, takes its text form, and text that follows
-    text joins it in one markdown block. ``blocks`` take the room that the rest leaves, and
-    when it runs out, its last block holds the text forms of the blocks left. When the
-    markdown is longer than Slack takes, Druks cuts its end, and a line in place of the link
-    says so, with the link."""
+    text joins it in one markdown block. ``blocks`` take the room that the rest leaves, the
+    question included, and when it runs out, its last block holds the text forms of the
+    blocks left. When the markdown is longer than Slack takes, Druks cuts the end of the
+    blocks, and a line in place of the link says so, with the link."""
     controls: list[dict] = []
     if fields and actions:
         inputs_by_id = {}
@@ -258,6 +260,9 @@ def get_blocks(
         controls.append({"type": "section", "text": section})
     if not blocks:
         return [{"type": "markdown", "text": text}, *controls]
+    # The question stays whole above its inputs and buttons.
+    if question:
+        controls.insert(0, {"type": "markdown", "text": question})
     content: list[dict] = []
     table_room = slack.MESSAGE_CELL_TEXT_LIMIT
 
@@ -387,9 +392,9 @@ def get_blocks(
     line = deep_link or ""
     markdown = sum(len(part["text"]) for part in content if part["type"] == "markdown")
     # A line takes a newline before it.
-    if markdown + bool(line) + len(line) > slack.MARKDOWN_TEXT_LIMIT:
+    if markdown + bool(line) + len(line) + len(question) > slack.MARKDOWN_TEXT_LIMIT:
         line = OMISSION_MESSAGE + (OMISSION_LINK.format(link=deep_link) if deep_link else "")
-        room = slack.MARKDOWN_TEXT_LIMIT - len(line) - 1
+        room = slack.MARKDOWN_TEXT_LIMIT - len(line) - 1 - len(question)
         kept = []
         # The content keeps its start, as a cut body does, and what follows the cut goes.
         for part in content:
@@ -423,17 +428,21 @@ async def deliver(
     deep_link: str | None = None,
     outcome: str = "",
     question_offset: int | None = None,
+    username: str | None = None,
+    icon_url: str | None = None,
 ) -> dict:
     """Post ``body`` as markdown, with ``deep_link`` on the line after it. ``blocks`` are
-    the Druks blocks whose text form is ``body``: Slack draws them in its place, and when
-    Slack refuses them, the body goes out in their place once. Each action becomes a button
-    that carries ``token``, so a click answers this notification. Each of ``fields``
-    becomes an input above the buttons. Without actions, the button below the inputs is a
-    Submit button that carries ``token``. With
+    the Druks blocks whose text form is ``body`` up to its question: Slack draws them in
+    its place, and when Slack refuses them, the body goes out in their place once. Each
+    action becomes a button that carries ``token``, so a click answers this notification.
+    Each of ``fields`` becomes an input above the buttons. Without actions, the button
+    below the inputs is a Submit button that carries ``token``. With
     ``message_ts``, Druks edits that posted message, and ``outcome`` takes the place of its
     buttons and inputs. With ``user``, only that person sees the message.
-    ``question_offset`` is where a chat agent's question starts in ``body``. Returns
-    Slack's answer, which names the message's channel and ts."""
+    ``question_offset`` is where a chat agent's question starts in ``body``. The question
+    keeps its room when Druks cuts the rest to fit, with blocks and without.
+    ``username`` and ``icon_url`` replace the app's name and picture on a new message.
+    Returns Slack's answer, which names the message's channel and ts."""
     link = f"\n{deep_link}" if deep_link else ""
     reply, question = body, ""
     if question_offset:
@@ -460,7 +469,12 @@ async def deliver(
                 )
             else:
                 response = await client.chat_postMessage(
-                    channel=channel, text=text, blocks=drawn, thread_ts=thread_ts or None
+                    channel=channel,
+                    text=text,
+                    blocks=drawn,
+                    thread_ts=thread_ts or None,
+                    username=username,
+                    icon_url=icon_url,
                 )
         except SlackApiError as error:
             reason = error.response.get("error") or f"HTTP {error.response.status_code}"
@@ -477,7 +491,14 @@ async def deliver(
 
     if blocks:
         try:
-            return await post(message(blocks=ui.Stack(blocks).blocks, deep_link=deep_link))
+            # In a block of its own, the question needs no blank line before it.
+            return await post(
+                message(
+                    blocks=ui.Stack(blocks).blocks,
+                    question=question.lstrip("\n"),
+                    deep_link=deep_link,
+                )
+            )
         except BlocksRefusedError as error:
             # Slack can refuse a block that Druks draws. The text form then goes in its place.
             logger.warning("Slack refused the blocks of a message, so it goes as text. %s", error)

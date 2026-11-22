@@ -110,3 +110,35 @@ REFUSED_FIELDS = {
 CHECKED_ANSWER = "Yes"
 UNCHECKED_ANSWER = "No"
 EMPTY_ANSWER = "(no answer)"
+# A reply's blocks can hold a long table, so they take more text than a form.
+BLOCKS_TEXT_LIMIT = 50_000
+BLOCKS_DEPTH_LIMIT = 20
+REFUSED_BLOCKS = {
+    "Form": (
+        "A reply takes no Form. A form runs an operation of an app. To ask for answers, "
+        "call chat_ask with fields."
+    ),
+    "Action": (
+        "A reply takes no Action. An action runs an operation of an app, and a reply runs "
+        "none. Give a Link, or tell the person what to do."
+    ),
+    "GateControls": (
+        "A reply takes no GateControls. A run's question comes with its own buttons. Tell "
+        "the person where to answer it."
+    ),
+    "SubjectStatus": (
+        "A reply takes no SubjectStatus. Druks reads no status for a reply, so the value "
+        "shows nothing. Write the status as a StatusValue."
+    ),
+    "subject": (
+        "A reply takes no subject=. A reply opens no page of a subject. Give the link its "
+        "url= instead."
+    ),
+    "page": (
+        "A reply takes no page=. A reply opens no page of an app. Give the link its url= instead."
+    ),
+    "follows": (
+        "A reply takes no follows=. A reply does not change after Druks sends it. Leave "
+        "follows= out."
+    ),
+}
