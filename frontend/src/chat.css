@@ -104,6 +104,13 @@
 .chat-plan li { padding: 3px 0; }
 .chat-plan-status { margin-left: 12px; font-size: 12px; color: var(--druks-color-text-secondary); }
 .chat-plan li[data-state="completed"] .chat-plan-status { color: var(--druks-color-status-success); }
+/* The dashboard's field styles read their control tokens from an app page, which the chat is not. */
+.chat-question { --dui-control-height: 36px; --dui-radius-control: 6px; --dui-primary: var(--druks-color-accent); display: flex; flex-direction: column; gap: 12px; max-width: 75ch; min-width: 0; padding: 14px 16px; border: 1px solid var(--druks-color-border-default); border-radius: 6px; background: var(--druks-color-surface); overflow-wrap: anywhere; }
+.chat-question-choices { display: flex; flex-wrap: wrap; gap: 8px; }
+.chat-question-choices .chat-button { flex-shrink: 1; max-width: 100%; }
+.chat-question-form { display: flex; flex-direction: column; align-items: flex-start; }
+.chat-question-form .dui-field { align-self: stretch; }
+.chat-question-answer { display: flex; flex-direction: column; gap: 6px; padding-left: 12px; border-left: 2px solid var(--druks-color-border-default); }
 .chat-interrupted { font-size: 14px; }
 .chat-interrupted strong { font-weight: 500; color: var(--druks-color-status-warning); }
 .chat-interrupted p { margin: 4px 0 12px; color: var(--druks-color-text-secondary); }
@@ -161,6 +168,8 @@
   .chat-tool summary { padding: 12px; gap: 8px; }
   .chat-tool-status { font-size: 12px; }
   .chat-tool-details { padding: 12px; }
+  .chat-question { --dui-control-height: 44px; padding: 12px; }
+  .chat-question .dui-input { font-size: 16px; }
   .chat-pin-error { flex-wrap: wrap; }
   .chat-intro { margin-top: 16px; }
 }

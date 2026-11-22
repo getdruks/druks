@@ -1649,9 +1649,10 @@ ui.SelectField(
 A non-empty `group` nests the option in an `<optgroup>` of that name.
 Consecutive options that share a group share one group. An empty `group` is a
 flat choice. Radio and multi-select ignore `group`. A required select whose
-`value` is not among the options starts on the first option. The browser already
-paints that choice; submitting the empty declared value would send a blank to
-the operation.
+`value` is not among the options starts on the first option. Submitting the
+empty declared value would send a blank to the operation. An optional select
+whose `value` is not among the options shows a blank choice, `—`, until the
+operator picks an option.
 
 ### MultiSelectField
 

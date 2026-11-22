@@ -725,16 +725,14 @@ async def finish_turn(
     status: dict,
 ) -> None:
     """Save the reply and the agent's session files, and send a channel's reply to its
-    person. The question that the agent asked in the turn follows the reply. A channel
-    with buttons gets both in one message, with a button for each choice, and a channel
-    with inputs gets a form's fields as inputs. Elsewhere the reply ends with the question
-    and its numbered choices or fields."""
+    person. The question that the agent asked in the turn follows the reply. A web reply
+    keeps the question, and the web chat shows its choices or its fields. A channel with
+    buttons gets both in one message, with a button for each choice, and a channel with
+    inputs gets a form's fields as inputs. Elsewhere the reply ends with the question and
+    its numbered choices or fields."""
     body, tool_calls = await bridge.reply(conversation.id, message.id)
     state = MessageState(status["status"])
     await conversation.end_turn(session, state)
-    reply = await conversation.create_message(
-        session, body, role=MessageRole.ASSISTANT, reply_to=message, tool_calls=tool_calls
-    )
     redis = get_client()
     saved = await redis.get(question_key(conversation.id, message.id))
     ask = {}
@@ -742,12 +740,24 @@ async def finish_turn(
     if saved and state == MessageState.REPLIED:
         # A question that the release before forms staged has no fields.
         ask = {"fields": [], **json.loads(saved)}
-    separator = "\n\n" if reply.answer else ""
     channel = conversation.channel
+    question = None
+    # A web conversation has no channel. Its reply keeps the question for the web chat.
+    if ask and not channel:
+        question = ask
+    reply = await conversation.create_message(
+        session,
+        body,
+        role=MessageRole.ASSISTANT,
+        reply_to=message,
+        tool_calls=tool_calls,
+        question=question,
+    )
+    separator = "\n\n" if reply.answer else ""
     is_shown = False
     if ask and channel:
         is_shown = channel.has_inputs if ask["fields"] else channel.has_buttons
-    if ask and not is_shown:
+    if ask and channel and not is_shown:
         # The person answers in their own words, with a choice's number or field by field.
         questions = ask["choices"] or [
             field["label"]

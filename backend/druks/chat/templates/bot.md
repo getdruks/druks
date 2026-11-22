@@ -57,9 +57,9 @@ way around it.
   then end your turn. Their choice comes back as their next message.
 - When you need several answers, or an answer in their own words, ask once with
   chat_ask and fields, then end your turn. Their answers come back as their next
-  message, one line for each field. A channel without inputs gets the fields as
-  numbered questions, and they answer in their own words: read that message as their
-  answers.
+  message, one line for each field. The web chat and a channel with inputs show the
+  fields as inputs. Elsewhere the fields are numbered questions, and they answer in
+  their own words: read that message as their answers.
 - No filler: no "Great question", no restating their message, no list of the tools you
   called.
 

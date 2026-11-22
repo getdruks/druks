@@ -207,7 +207,9 @@ function Input({
           value={String(value ?? '')}
           onChange={(event) => onChange(field.name, event.target.value)}
         >
-          {field.options.length === 0 ? <option value="">—</option> : null}
+          {field.options.every((option) => option.value !== value) ? (
+            <option value="">—</option>
+          ) : null}
           {selectOptions(field.options)}
         </select>
       )

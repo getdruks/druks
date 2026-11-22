@@ -315,20 +315,23 @@ async def ask(
 ) -> None:
     """Ask the person of the conversation this call comes from one question, with two to
     four choices or with a form of fields. Give choices or fields, not both. Druks sends
-    the question after your reply, when your turn ends. A channel with buttons shows a
-    button for each choice. A channel with inputs shows an input for each field and a
-    Submit button. Elsewhere the choices or the fields are a numbered list, and the person
-    answers in their own words. Write the fields as one Python list of TextField,
-    TextAreaField, NumberField, SelectField, MultiSelectField, RadioField, and
-    CheckboxField calls of druks.ui. Give each argument by its druks.ui name, except the
-    label of an Option, as in [TextField(name="title", label="Title"), SelectField(name="where",
-    label="Where", options=[Option("Staging", value="staging")])]. Druks reads the fields
-    and runs no code. A form takes no SecretField, UploadField, or MultiUploadField. Make
-    this your last tool call, and write any reply after it: the text before it stays your
-    notes. Do not repeat the question, its choices, or its fields in the reply. Then end
-    your turn, and do not wait for the answer. The person's choice, their answers with one
-    line for each field, or what they write instead, reaches you as their next message. A
-    second call in the turn replaces the question."""
+    the question after your reply, when your turn ends. The web chat and a channel with
+    buttons show a button for each choice. The web chat and a channel with inputs show an
+    input for each field and a Submit button. Elsewhere the choices or the fields are a
+    numbered list, and the person answers in their own words. In Slack, Druks checks a
+    form's answers against its fields. In the web chat, the browser checks that each
+    required field has an answer, and Druks does not check the answers again. Write the
+    fields as one Python list of TextField, TextAreaField, NumberField, SelectField,
+    MultiSelectField, RadioField, and CheckboxField calls of druks.ui. Give each argument
+    by its druks.ui name, except the label of an Option, as in [TextField(name="title",
+    label="Title"), SelectField(name="where", label="Where", options=[Option("Staging",
+    value="staging")])]. Druks reads the fields and runs no code. A form takes no
+    SecretField, UploadField, or MultiUploadField. Make this your last tool call, and write
+    any reply after it: the text before it stays your notes. Do not repeat the question,
+    its choices, or its fields in the reply. Then end your turn, and do not wait for the
+    answer. The person's choice, their answers with one line for each field, or what they
+    write instead, reaches you as their next message. A second call in the turn replaces
+    the question."""
     if bool(choices) == bool(fields):
         raise HTTPException(422, "Give choices or fields. Give only one of them.")
     if len(choices) == 1:

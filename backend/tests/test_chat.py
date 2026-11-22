@@ -817,25 +817,14 @@ async def test_a_question_goes_out_with_the_reply_as_one_message(
 
 
 @pytest.mark.parametrize(
-    ("body", "status", "saved"),
-    [
-        (
-            "Let me check.I read both.",
-            "replied",
-            "Let me check.I read both.\n\nWhich database?\n1. Postgres\n2. MySQL\n3. SQLite",
-        ),
-        (
-            "Let me check.",
-            "replied",
-            "Let me check.Which database?\n1. Postgres\n2. MySQL\n3. SQLite",
-        ),
-        ("Let me check.I read both.", "cancelled", "Let me check.I read both."),
-    ],
-    ids=["reply-then-question", "question-only", "stopped"],
+    ("status", "question"),
+    [("replied", QUESTION), ("cancelled", None)],
+    ids=["replied", "stopped"],
 )
-async def test_a_web_reply_ends_with_the_question_and_its_numbered_choices(
-    druks_db, conversation, monkeypatch, body, status, saved
+async def test_a_web_reply_keeps_its_question_apart_from_the_agent_s_text(
+    druks_db, conversation, monkeypatch, status, question
 ):
+    body = "Let me check.I read both."
     tool_calls = [{"toolCallId": "ask-1", "textOffset": 13}]
     monkeypatch.setattr(Bridge, "reply", AsyncMock(return_value=(body, tool_calls)))
     message = await conversation.get_unanswered_message(druks_db)
@@ -846,7 +835,8 @@ async def test_a_web_reply_ends_with_the_question_and_its_numbered_choices(
         druks_db, conversation, message, Bridge(None), {"status": status, "archivePath": ""}
     )
 
-    assert (await list_messages(druks_db, conversation))[-1].body == saved
+    reply = (await list_messages(druks_db, conversation))[-1]
+    assert (reply.body, reply.question) == (body, question)
 
 
 async def test_a_question_that_the_release_before_forms_staged_still_ends_its_turn(
@@ -861,21 +851,64 @@ async def test_a_question_that_the_release_before_forms_staged_still_ends_its_tu
         druks_db, conversation, message, Bridge(None), {"status": "replied", "archivePath": ""}
     )
 
-    assert (await list_messages(druks_db, conversation))[-1].body == (
-        "Let me check.\n\nWhich database?\n1. Postgres\n2. MySQL\n3. SQLite"
+    reply = (await list_messages(druks_db, conversation))[-1]
+    assert (reply.body, reply.question) == ("Let me check.", QUESTION)
+
+
+async def test_the_conversation_read_gives_a_reply_its_question(druks_db, conversation, tmp_path):
+    message = await conversation.get_unanswered_message(druks_db)
+    form = {
+        "question": "Where does it ship?",
+        "choices": [],
+        "fields": parse_fields(
+            '[MultiSelectField(name="tags", label="Tags", help_text="Where it goes", '
+            'options=[Option("Rack", value="rack")], is_searchable=True)]'
+        ),
+    }
+    for question in (QUESTION, form):
+        await conversation.create_message(
+            druks_db, "", role=MessageRole.ASSISTANT, reply_to=message, question=question
+        )
+    api = configure_app_for_test(
+        settings=make_settings(tmp_path, identity={"mode": "header", "header": "X-User"}),
+        authenticated=False,
     )
+    async with asgi_client(api) as client:
+        response = await client.get(
+            f"/api/chat/conversations/{conversation.id}", headers={"X-User": "owner@example.com"}
+        )
+
+    assert response.status_code == 200
+    questions = [message["question"] for message in response.json()["messages"]]
+    # The fields take the names of the dashboard's field contract.
+    assert questions == [
+        None,
+        QUESTION,
+        {
+            "question": "Where does it ship?",
+            "choices": [],
+            "fields": [
+                {
+                    "field": "multi_select",
+                    "name": "tags",
+                    "label": "Tags",
+                    "helpText": "Where it goes",
+                    "isRequired": False,
+                    "options": [{"value": "rack", "label": "Rack", "group": ""}],
+                    "value": [],
+                    "isSearchable": True,
+                },
+            ],
+        },
+    ]
 
 
-@pytest.mark.parametrize("has_channel", [False, True], ids=["web", "buttons-without-inputs"])
 async def test_a_reply_where_no_inputs_show_ends_with_the_numbered_fields(
-    druks_db, slack_conversation, monkeypatch, has_channel
+    druks_db, slack_conversation, monkeypatch
 ):
     send_reply = AsyncMock()
     monkeypatch.setattr(channels.get("slack"), "send_reply", send_reply)
     monkeypatch.setattr(channels.get("slack"), "has_inputs", False)
-    if not has_channel:
-        slack_conversation.source = ConversationSource.WEB
-        slack_conversation.connection = None
     tool_calls = [{"toolCallId": "ask-1", "textOffset": 13}]
     reply = ("Let me check.I read both.", tool_calls)
     monkeypatch.setattr(Bridge, "reply", AsyncMock(return_value=reply))
@@ -900,8 +933,10 @@ async def test_a_reply_where_no_inputs_show_ends_with_the_numbered_fields(
         "Let me check.I read both.\n\nWhere does it ship?\n1. Title\n2. Where\n"
         "    - Staging\n    - Production"
     )
+    # Only a web reply keeps its question for the web chat's controls.
+    assert not saved.question
     assert not list(await druks_db.scalars(select(Notification)))
-    assert send_reply.await_count == has_channel
+    send_reply.assert_awaited_once()
 
 
 @pytest.mark.parametrize(

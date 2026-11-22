@@ -139,24 +139,35 @@ names, so they do not have it.
 
 When the turn ends, Druks sends the question after the agent's reply:
 
+- In the web chat, the question shows under the reply, with a button for each
+  choice. A form shows an input for each field and one **Submit** button. The reply
+  keeps only the agent's own text.
 - In Slack, the reply, the question, and a button for each choice come in one
   message. A form comes the same way, with an input for each field and a
   **Submit** button. A reply too long for one message loses its end. The question,
   the buttons, and the inputs stay whole.
-- In the web chat, WhatsApp, and GitHub, the reply ends with the question and its
-  choices or fields as a numbered list, with the options of a field below it.
-  Answer with a number or in your own words. The agent reads your message as your
-  answer.
+- In WhatsApp and GitHub, the reply ends with the question and its choices or
+  fields as a numbered list, with the options of a field below it. Answer with a
+  number or in your own words. The agent reads your message as your answer.
 
-Select a button, and its choice reaches the agent as your next message. The
-message then shows your choice in place of the buttons. Only the person of the
+In the web chat, select a button, and its choice is your next message, as if you
+wrote it. You can also write your answer in the message field. The agent reads one
+message in each turn, so your first message after the one that the reply answers is
+your answer. That message can be one that you sent while the agent replied, which
+waits as **Queued**. The reply then shows the question with your answer in place of
+the buttons. A message that Druks writes for the agent answers nothing. The page
+finds the answer in the saved messages, so a reload shows the same answer.
+
+In Slack, select a button, and its choice reaches the agent as your next message.
+The message then shows your choice in place of the buttons. Only the person of the
 conversation can select one. When you write an answer instead, it reaches the
 agent as any message does. When your message reaches the agent, Druks takes the
 buttons off each open question of the conversation, and its message says that the
 question is closed. When you write while the agent asks, your message can close
 the question before Druks posts it. Druks then posts the reply and the question
-with no buttons, and the message says that the question is closed. A turn that you
-stop asks nothing, and neither does a turn of a paused conversation.
+with no buttons, and the message says that the question is closed.
+
+A turn that you stop asks nothing, and neither does a turn of a paused conversation.
 
 ### Forms
 
@@ -188,6 +199,17 @@ its label, then your answer. A checkbox reads Yes or No, and a field that you
 leave empty reads (no answer). The message then shows your answers in place of
 the inputs. Only the person of the conversation can submit the form. When you
 write an answer instead, the form closes as a question with buttons does.
+
+In the web chat, fill in the inputs and select **Submit**. A required field needs
+an answer, and a required checkbox needs a check. The browser checks the inputs
+first. It shows its own message at an empty required input, at a required checkbox
+that is not checked, and at a number outside its minimum, its maximum, or its step.
+The page then checks the answers that the browser lets through, such as text of
+only spaces or a multi-select with no option checked, and says so under the field.
+In both cases, the page sends nothing. Druks does not check the answers again: they
+go as an ordinary message, with the same lines as a Slack Submit. The reply then
+shows your answers in place of the inputs. When the message is not sent, the inputs
+keep your answers, and you can select **Submit** again.
 
 ## Agent access
 

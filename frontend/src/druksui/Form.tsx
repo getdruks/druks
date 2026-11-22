@@ -314,7 +314,8 @@ function FieldAction({ action }: { action: Action }) {
   )
 }
 
-function useFieldState(fields: Field[]) {
+// eslint-disable-next-line react-refresh/only-export-components -- the chat's question form keeps its fields the same way
+export function useFieldState(fields: Field[]) {
   // A refresh can put different fields in the same React position. Reset the
   // edits so the next operation carries the fields that are on screen.
   const shape = fields.map((one) => `${one.field}:${one.name}`).join('|')
@@ -609,9 +610,7 @@ function startingValue(field: Field): [string, unknown] {
     if (field.options.some((option) => option.value === field.value)) {
       return [field.name, field.value]
     }
-    // A required select with no matching value still paints the first option
-    // in the browser. Submitting the empty declared value would send a label
-    // or a blank to a door that wants the option's id.
+    // A door wants a required select's option id, not its empty declared value.
     if (field.isRequired) {
       const first = field.options[0]
       if (first) return [field.name, first.value]
