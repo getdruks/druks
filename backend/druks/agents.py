@@ -4,7 +4,7 @@ import functools
 import random
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -114,6 +114,11 @@ class Agent:
     # ``include_mcp=False`` gives the call no MCP server and its sandbox no
     # server entry, for an agent that reads untrusted content.
     include_mcp: bool = True
+    # True lets a call continue this agent's last call in the run: ``await agent(resume=...)``.
+    # The first call then writes the model's prompt cache for an hour, not five minutes, so
+    # the resume reads the cache after a pause. The templates read ``can_resume``, true
+    # when the call's harness can resume too.
+    resumable: bool = False
     # The service secrets the call's sandbox holds, ``(Acme.fields.api_key,)``.
     # Each is a placeholder that the secrets proxy swaps at the service's host.
     secrets: "tuple[ServiceField, ...]" = ()
@@ -191,14 +196,22 @@ class Agent:
         return await get_config(db_session(), self.id, workflow.account_id)
 
     async def __call__(
-        self, *, contract: type[AgentOutput] | None = None, **context: object
+        self,
+        *,
+        contract: type[AgentOutput] | None = None,
+        resume: Callable[..., Awaitable[str]] | None = None,
+        **context: object,
     ) -> Any:
         """Run the agent — ``await SoftwareFactory.implement(...)`` — as a durable step in the
         current workflow and return its parsed output. An agent run is always memoized —
         this picks which step does it: its own, or the @step it's already inside.
         workflow_id comes from the workflow context, not the caller; everything
         else (repo, …) is prompt context. ``contract`` overrides the output
-        contract for this call, including schema generation and validation."""
+        contract for this call, including schema generation and validation.
+        ``resume`` continues the agent's last call in this run, on its box, as the same
+        conversation: Druks calls ``resume(workspace=...)`` with the checkout as the agent
+        left it, and sends the text it returns as the agent's next message. The agent must
+        be ``resumable``, and its harness must be able to resume."""
         if not self.id:
             # Built loose — never assigned to an App, never given an explicit
             # id — so its settings, its registry entry and the call it would record
@@ -215,7 +228,9 @@ class Agent:
             )
 
         async def _invoke() -> Any:
-            return await self._run(workflow_id=workflow.workflow_id, contract=contract, **context)
+            return await self._run(
+                workflow_id=workflow.workflow_id, contract=contract, resume=resume, **context
+            )
 
         if _in_step.get():
             transient_retry_index = 0
@@ -335,6 +350,7 @@ class Agent:
         *,
         workflow_id: str,
         contract: type[AgentOutput] | None = None,
+        resume: Callable[..., Awaitable[str]] | None = None,
         **context: Any,
     ) -> Any:
         """The raw execution: read what the call needs, provision or attach a host,
@@ -359,6 +375,16 @@ class Agent:
             config = await get_config(session, self.id, workflow.account_id)
             call_id = config.harness_class.mint_run_id(None)
             running = await AgentCall.lookup_running(session, workflow_id, self.id)
+            previous = None
+            if resume:
+                if not (self.resumable and config.harness_class.can_resume):
+                    raise WorkflowError(
+                        f"agent {self.id!r} cannot resume: declare it resumable, and run it "
+                        f"on a harness that resumes, which {config.harness_class.name!r} is not"
+                    )
+                previous = await AgentCall.lookup_last_succeeded(session, workflow_id, self.id)
+                if not previous:
+                    raise WorkflowError(f"agent {self.id!r} has no finished call to resume")
         model = config.model
         subscription_id = config.subscription.id if config.subscription else None
         api_key_id = config.api_key.id if config.api_key else None
@@ -462,11 +488,19 @@ class Agent:
                     resume_from = running
                 else:
                     resume_from = None
+                # The session is a file on the box that ran it, and that box holds the checkout
+                # as the agent left it. A long wait releases the box, so a retry can land on
+                # another one. The session and the checkout went with the old box, and the
+                # call starts over with its full prompt.
+                resuming = bool(previous) and previous.sandbox_host_id == runner.host_id
 
                 context_on_box = await self._upload_files(prompt_context, runner.host, call_id)
                 context_on_box.setdefault("workflow", workflow)
                 context_on_box["workspace"] = runner
-                prompt = await template.render_async(**context_on_box)
+                context_on_box["can_resume"] = self.resumable and harness.can_resume
+                prompt = ""
+                if not resuming:
+                    prompt = await template.render_async(**context_on_box)
                 hooks = {}
                 if self._after_agent:
                     hooks["after_agent"] = functools.partial(
@@ -487,7 +521,16 @@ class Agent:
                         hooks=hooks,
                     )
                 else:
-                    await runner.prepare()
+                    session = {}
+                    if self.resumable and harness.can_resume:
+                        session["resumable"] = True
+                    if resuming:
+                        # Preparing the workspace would discard the agent's uncommitted work.
+                        await set_run_phase("running_check")
+                        prompt = await resume(workspace=runner)
+                        session["resume_session"] = previous.id
+                    else:
+                        await runner.prepare()
                     await set_run_phase("agent_running")
                     await AgentCall.start(
                         engine,
@@ -513,12 +556,18 @@ class Agent:
                         include_plugins=self.include_plugins,
                         mcp_servers=mcp_servers,
                         hooks=hooks,
+                        **session,
                     )
                 try:
                     result = await attempt
                 except BaseException as error:
                     await AgentCall.fail(engine, call_id=call_id, error=error)
                     raise
+                if resuming:
+                    cost_usd, cost_metadata = harness.get_own_cost(
+                        result.cost_usd, result.cost_metadata, previous.cost_metadata
+                    )
+                    result = replace(result, cost_usd=cost_usd, cost_metadata=cost_metadata)
                 if result.error:
                     await AgentCall.finish(engine, call_id=call_id, result=result)
                     raise result.error

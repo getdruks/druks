@@ -1,4 +1,5 @@
 import asyncio
+import functools
 import logging
 import time
 from typing import Any
@@ -29,10 +30,15 @@ from druks.workspaces import RepoWorkspace
 
 from .app import SoftwareFactory
 from .constants import (
+    CHECK_LINE_CHARS,
+    CHECK_LOG_PATH,
+    CHECK_TAIL_LINES,
+    CHECK_TIMEOUT_SECONDS,
     CI_POLL_SECONDS,
     CI_TTL_SECONDS,
     GITHUB_MCP_NAME,
     GITHUB_MCP_URL,
+    MAX_CHECK_RUNS,
     RERUN_CONCLUSIONS,
     RERUN_POLL_SECONDS,
     RERUN_START_POLLS,
@@ -525,11 +531,73 @@ class Build(Workflow):
     # journal. On replay a @step would skip them, and the journal would stay empty.
     async def implement(self) -> ImplementationOutput:
         delivery = await SoftwareFactory.implement()
+        # The implementer ended its turn to have a declared test command run. Druks runs it
+        # on the implementer's box and resumes the same session with the result.
+        check_runs = 0
+        while delivery.status == "needs_check":
+            check_runs += 1
+            if check_runs > MAX_CHECK_RUNS:
+                raise FatalError(
+                    f"the implementer asked for {check_runs} test runs without delivering"
+                )
+            delivery = await SoftwareFactory.implement(
+                resume=functools.partial(self._run_check, delivery.check_command)
+            )
         # The implementer found a contradiction in the binding requirements and stopped.
         # The run fails with that reason, so the dashboard shows it.
         if delivery.status == "needs_clarification":
             raise FatalError(f"implementation needs clarification: {delivery.summary}")
         return delivery
+
+    async def _run_check(self, command: str, *, workspace: BuildWorkspace) -> str:
+        """Run the declared test ``command`` in the checkout as the implementer left it, and
+        return the message that continues its session: the exit code and the tail of the
+        output. The full output stays in a log on the box."""
+        declared = [
+            entry["command"]
+            for entry in (self._profile.get("verification") or {}).get("test_commands", [])
+        ]
+        if command not in declared:
+            return (
+                f"`{command}` is not one of this repo's declared test commands, so Druks did "
+                "not run it. Run it yourself, or name one of these:\n"
+                + "\n".join(f"- `{declared_command}`" for declared_command in declared)
+            )
+        result = await workspace.host.exec(
+            # The kill after the limit stops a command that ignores the first signal, and the
+            # newline lets a command end in a comment.
+            [
+                "timeout",
+                "-k",
+                "30",
+                str(CHECK_TIMEOUT_SECONDS),
+                "sh",
+                "-c",
+                f"({command}\n) > {CHECK_LOG_PATH} 2>&1",
+            ],
+            cwd=workspace.repo_path,
+            timeout=CHECK_TIMEOUT_SECONDS + 120,
+        )
+        # One long line must not fill the agent's context.
+        tail = await workspace.host.exec(
+            [
+                "sh",
+                "-c",
+                f"tail -n {CHECK_TAIL_LINES} {CHECK_LOG_PATH} | cut -c1-{CHECK_LINE_CHARS}",
+            ],
+            cwd=workspace.repo_path,
+            timeout=30,
+        )
+        outcome = f"exit code {result.returncode}"
+        if result.returncode == 124:
+            outcome = f"killed after {CHECK_TIMEOUT_SECONDS // 60} minutes"
+        return (
+            f"Druks ran `{command}` on your box: {outcome}.\n\n"
+            f"The last {CHECK_TAIL_LINES} lines of its output:\n\n```\n{tail.stdout}```\n\n"
+            f"The whole output is in {CHECK_LOG_PATH}. Read only what you need from it. "
+            "Fix what the result shows, then name a test command again, or finish and "
+            "return your result as before."
+        )
 
     @step
     async def _create_branch(self) -> None:

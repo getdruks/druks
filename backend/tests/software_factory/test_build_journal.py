@@ -25,6 +25,7 @@ def _implementation(
         {
             "type": "result",
             "status": status,
+            "check_command": "uv run pytest" if status == "needs_check" else None,
             "base_sha": base_sha if delivered else None,
             "head_sha": head_sha if delivered else None,
             "commit_sha": head_sha if delivered else None,
@@ -48,7 +49,11 @@ def test_plan_is_the_latest_or_an_empty_stand_in():
 
 
 def test_only_shipped_deliveries_count_as_implementations():
-    journal = _journal(_implementation(), _implementation(status="needs_clarification"))
+    journal = _journal(
+        _implementation(),
+        _implementation(status="needs_clarification"),
+        _implementation(status="needs_check"),
+    )
     assert len(journal.implementations) == 1
     assert journal.implementation_revision == 1
     last = journal.last_implementation

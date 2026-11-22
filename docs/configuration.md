@@ -535,6 +535,16 @@ still red goes back to the implementer, and so does a red that has no Actions ru
 to rerun, such as `druks-house-rules`. The pull request leaves draft when the review
 of a head with green CI requests no changes, or when a person approves it.
 
+A test command can take minutes. When the implementer runs on Claude, it can end its
+turn and name one of the repo's declared test commands, `verification.test_commands`,
+instead of running it. Druks runs the command in the implementer's checkout on its
+box, and resumes the same Claude session with the exit code and the last 200 lines of
+the output. The whole output stays in `/tmp/druks-check.log` on the box. The
+resume reads the prompt cache, which the first call wrote for an hour. Druks runs no
+command that is not declared. The implementer chooses between this and running the
+command itself, and Druks blocks neither. A harness that cannot resume is never
+offered it. A round fails after ten such runs.
+
 When Druks receives a push to the default branch that changes `config.yml`, the
 next build uses the new file. When a team lists Software Factory, this happens
 only for a push by a person who can use Software Factory. Druks refuses a push by

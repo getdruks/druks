@@ -33,5 +33,16 @@ RUN_ACTIVE_STATUSES = frozenset({"queued", "in_progress"})
 RERUN_POLL_SECONDS = 5
 # Stop waiting for the rerun to start after this many polls, and read CI anyway.
 RERUN_START_POLLS = 24
+# The implementer ends its turn to have Druks run a declared test command, and Druks resumes it
+# with the result. A round that asks for more runs than this has stopped converging.
+MAX_CHECK_RUNS = 10
+# A test command that runs longer than this is killed, and the implementer is told so.
+CHECK_TIMEOUT_SECONDS = 30 * 60
+# The result keeps this many trailing lines of the command's output. The agent reads the
+# rest from the log on its box.
+CHECK_TAIL_LINES = 200
+# Each of those lines keeps this many characters.
+CHECK_LINE_CHARS = 1000
+CHECK_LOG_PATH = "/tmp/druks-check.log"
 # A Linear issue in a state of these types is finished or dropped, so it blocks nothing.
 LINEAR_CLOSED_STATE_TYPES = frozenset({"completed", "canceled"})

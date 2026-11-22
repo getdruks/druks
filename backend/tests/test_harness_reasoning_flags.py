@@ -495,3 +495,58 @@ def test_claude_mcp_flags_emit_env_ref_header_not_literal_token():
     # No servers → no flags, on both harnesses.
     assert ClaudeHarness(model="x", fast_mode=False, effort=None)._mcp_flags(()) == ()
     assert CodexHarness(model=_CODEX_MODEL, fast_mode=False, effort=None)._mcp_flags(()) == ()
+
+
+async def _claude_wrapper(**options):
+    invocation = await ClaudeHarness(
+        model="anthropic/claude-x", fast_mode=False, effort="high"
+    ).build_invocation(
+        _MANIFEST,
+        prompt="p",
+        schema={"type": "object"},
+        run_id="run-2",
+        ssh_username="exedev",
+        **options,
+    )
+    return invocation.args[2], invocation.env
+
+
+async def test_claude_resumes_a_session_as_a_fork_that_keeps_the_cache_an_hour():
+    wrapper, env = await _claude_wrapper(resume_session="run-1", resumable=True)
+
+    argv = shlex.split(wrapper)
+    assert argv[argv.index("--resume") : argv.index("--resume") + 4] == [
+        "--resume",
+        "run-1",
+        "--fork-session",
+        "--session-id",
+    ]
+    assert argv[argv.index("--session-id") + 1] == "run-2"
+    assert env == {"CLAUDE_CODE_PROMPT_CACHE_TTL": "1h"}
+
+
+async def test_claude_writes_the_first_call_of_a_resumable_agent_for_an_hour():
+    wrapper, env = await _claude_wrapper(resumable=True)
+
+    assert "--resume" not in shlex.split(wrapper)
+    assert env == {"CLAUDE_CODE_PROMPT_CACHE_TTL": "1h"}
+
+
+async def test_claude_leaves_the_cache_and_the_session_alone_by_default():
+    wrapper, env = await _claude_wrapper()
+
+    assert "--resume" not in shlex.split(wrapper)
+    assert env is None
+
+
+def test_a_resumed_claude_call_costs_what_it_added_to_the_session():
+    parent = {"output_tokens": 10, "session_total": {"cost_usd": 1.0, "output_tokens": 10}}
+    totals = {"output_tokens": 25, "session_total": {"cost_usd": 1.5, "output_tokens": 25}}
+
+    cost_usd, metadata = ClaudeHarness.get_own_cost(1.5, totals, parent)
+
+    assert cost_usd == 0.5
+    assert metadata["output_tokens"] == 15
+    # The session's totals ride on for the next call to take off.
+    assert metadata["session_total"] == totals["session_total"]
+    assert ClaudeHarness.get_own_cost(1.5, totals, None) == (1.5, totals)

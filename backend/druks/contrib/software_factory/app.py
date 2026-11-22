@@ -212,6 +212,7 @@ class SoftwareFactory(App):
         description="plan → diff, in a drukbox",
         prompt="software_factory/build/implement.md",
         contract=ImplementationOutput,
+        resumable=True,
     )
     triage_human_feedback = Agent(
         description="routes a human's PR feedback back into the workflow",
