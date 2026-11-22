@@ -8,7 +8,11 @@ from unittest.mock import AsyncMock, Mock, call
 import druks.core.apis.github as github_api
 import pytest
 from conftest import connect_service
-from druks.core.apis.exceptions import GitHubAppNotActiveError, GitHubAppNotInstalledError
+from druks.core.apis.exceptions import (
+    GitHubAppNotActiveError,
+    GitHubAppNotInstalledError,
+    GitHubRerunRefusedError,
+)
 from druks.core.apis.github import GitHubAppClient, GitHubClient
 from druks.core.services import Github
 from druks.services import Connection, ServiceNotConnectedError
@@ -150,6 +154,16 @@ async def test_update_pull_request_branch_accepts_already_current_branch() -> No
     await client.update_pull_request_branch("ClawHaven/example", 7)
 
     pulls.async_update_branch.assert_awaited_once_with("ClawHaven", "example", 7)
+
+
+@pytest.mark.parametrize("status_code", [403, 404])
+async def test_rerun_failed_jobs_raises_when_github_refuses_the_rerun(status_code) -> None:
+    error = _make_request_failed(status_code)
+    actions = SimpleNamespace(async_re_run_workflow_failed_jobs=AsyncMock(side_effect=error))
+    client = _TestGitHubClient(SimpleNamespace(rest=SimpleNamespace(actions=actions)))
+
+    with pytest.raises(GitHubRerunRefusedError):
+        await client.rerun_failed_jobs("ClawHaven/example", 7)
 
 
 async def test_update_pull_request_branch_raises_other_failures() -> None:
