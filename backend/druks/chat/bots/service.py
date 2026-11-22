@@ -13,6 +13,7 @@ from druks.chat.service import deliver, report_outcome
 from druks.durable.constants import PAUSE_QUEUE
 from druks.durable.engine import step_session
 from druks.durable.models import Run
+from druks.durable.reads import read_ask
 from druks.redis import get_client
 from druks.registry import get_app
 from druks.secrets.enums import SecretKind
@@ -255,7 +256,7 @@ async def ask_for_answer(session: AsyncSession, run: Run) -> str | None:
     if not run.input_request:
         return
     conversation = await session.get(Conversation, run.conversation_id)
-    request = to_json(await run.get_ask()).decode()
+    request = to_json(await read_ask(session, run)).decode()
     if not conversation.admin_account_id:
         return await report_outcome(
             session, run, PARKED_MESSAGE.format(run=run.id, request=request)
@@ -277,7 +278,7 @@ async def request_approval(session: AsyncSession, run: Run) -> None:
     started it, when the chat's thread holds its buttons. The buttons ask the person, so
     no turn starts now."""
     conversation = await session.get(Conversation, run.conversation_id)
-    request = to_json(await run.get_ask()).decode()
+    request = to_json(await read_ask(session, run)).decode()
     await conversation.create_message(
         session,
         PARKED_BUTTONS_MESSAGE.format(run=run.id, request=request),

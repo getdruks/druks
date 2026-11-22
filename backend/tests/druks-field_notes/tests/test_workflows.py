@@ -4,6 +4,7 @@ from unittest import mock
 from conftest import connect_service
 from dbos import DBOS
 from druks import ui
+from druks.notifications.services import get_rendered_ask
 from druks.sandbox import SandboxSecret
 from druks.sandbox.layout import get_repo_root
 from druks.testing import run_workflow, seed_run
@@ -41,7 +42,7 @@ async def test_a_review_shows_its_facts_and_table_on_the_dashboard_and_in_the_ap
         # What the dashboard and the approval read while the run waits.
         await druks_db.refresh(run)
         shown["ask"] = await run.get_ask()
-        shown["approval"] = await run.get_rendered_ask(has_chat=False)
+        shown["approval"] = await get_rendered_ask(druks_db, run, has_chat=False)
         return {"action": "approve"}
 
     monkeypatch.setattr(DBOS, "run_step_async", call_through)

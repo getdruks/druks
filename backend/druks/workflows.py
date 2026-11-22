@@ -90,6 +90,7 @@ from druks.models import StoredSubject, snake_name
 from druks.notifications.constants import RUN_FAILED_MESSAGE
 from druks.notifications.models import Notification
 from druks.notifications.outbox import send_notification
+from druks.notifications.services import create_park_notification
 from druks.registry import get_app, get_app_by_module, get_app_name
 from druks.sandbox.client import provisioning_key, sandbox_client
 from druks.sandbox.constants import WORKFLOW_HOST_LEASE_SECONDS
@@ -102,7 +103,7 @@ from druks.settings import get_settings
 from druks.signals import publish
 from druks.teams.models import Team
 from druks.tracing import record_gate_wait
-from druks.ui.blocks import Block, list_context_blocks
+from druks.ui.blocks import Block, Stack
 from druks.user_settings.models import SettingsOverride
 from druks.workspaces import Workspace
 
@@ -406,18 +407,17 @@ async def _park(
         # include note.
         input_request = {"questions": [], **input_request, "reply_fields": list(gate.model_fields)}
         context = input_request.get("context", "")
-        if blocks := list_context_blocks(context):
+        if stack := Stack.from_context(context):
             # An approval writes the blocks as text. A part with no text form fails here,
             # before the run parks.
-            for block in blocks:
-                block.to_markdown()
+            stack.to_markdown()
             input_request["context"] = [
-                block.model_dump(mode="json", by_alias=True) for block in blocks
+                block.model_dump(mode="json", by_alias=True) for block in stack.blocks
             ]
         if action := gate.model_fields.get("action"):
             # A request for changes needs a note to guide the next pass, unless the ask
             # carries its own context. Every place that takes an answer reads this.
-            is_guided = bool(blocks or context and context.strip())
+            is_guided = bool(stack or context and context.strip())
             input_request["controls"] = [
                 {"id": control, "note_required": control == "request_changes" and not is_guided}
                 for control in input_request.get("controls", get_args(action.annotation))
@@ -467,8 +467,12 @@ async def _notify_account(workflow_id: str, subject: dict[str, Any]) -> None:
         async with step_session() as session:
             run = await session.get(Run, workflow_id)
             if run.input_request and not run.conversation_id:
-                return await run.create_park_notification(
-                    subject, account_id=run.account_id, deep_link=_get_run_link(run.id)
+                return await create_park_notification(
+                    session,
+                    run,
+                    subject,
+                    account_id=run.account_id,
+                    deep_link=_get_run_link(run.id),
                 )
 
     notification_id = await DBOS.run_step_async(
@@ -489,8 +493,12 @@ async def _notify_conversation(workflow_id: str, subject: dict[str, Any]) -> boo
             channel = conversation.channel
             ask = run.input_request or {}
             if channel and channel.has_buttons and ask.get("presentation") == "in_app":
-                return await run.create_park_notification(
-                    subject, conversation_id=conversation.id, deep_link=_get_run_link(run.id)
+                return await create_park_notification(
+                    session,
+                    run,
+                    subject,
+                    conversation_id=conversation.id,
+                    deep_link=_get_run_link(run.id),
                 )
 
     notification_id = await DBOS.run_step_async(

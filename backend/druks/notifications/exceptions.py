@@ -41,6 +41,10 @@ class ChannelUnavailableError(DeliveryError):
     or the channel is archived or gone."""
 
 
+class BlocksRefusedError(DeliveryError):
+    """Slack refuses the blocks of the message. The same message can still go as text."""
+
+
 class MalformedButtonError(NotificationError):
     # A button action_id embeds the respond token, so the message never echoes
     # the input.

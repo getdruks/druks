@@ -1,5 +1,4 @@
 from collections.abc import Sequence
-from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -23,7 +22,6 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, column_property, mapped_column, relationship, selectinload
 
-from druks import ui
 from druks.accounts.models import Account
 from druks.chat.constants import POST_CANCEL_WORKFLOW
 from druks.core.models import Uuid7Pk
@@ -51,13 +49,11 @@ from druks.events.models import Event
 from druks.harnesses.artifacts import normalize_token_usage
 from druks.models import Base
 from druks.notifications.constants import CLOSE_WORKFLOW
-from druks.notifications.models import Notification
-from druks.registry import get_app, get_workflow
+from druks.registry import get_workflow
 from druks.secrets.models import VaultSecret
 from druks.settings import get_settings
 from druks.signals import publish
 from druks.tracing import record_gate_wait
-from druks.ui.blocks import iter_parts, list_context_blocks
 
 if TYPE_CHECKING:
     from druks.sandbox.datastructures import AgentResult
@@ -428,100 +424,20 @@ class Run(Base):
         )
 
     async def get_ask(self) -> dict[str, Any]:
-        # The parked ask, ready to serve. An in-app review's ask names neither
-        # label nor artifact — a parked run can't produce new artifacts, so the
-        # latest resolves here on demand; fields the gate declared win.
+        # The parked ask with its label and its artifact. An in-app review's ask names
+        # neither — a parked run can't produce new artifacts, so the latest resolves
+        # here on demand; fields the gate declared win.
         ask = self.input_request
         if not ask:
             raise ValueError(f"run {self.id} is not parked on an ask")
         if ask.get("presentation") != "in_app":
             return ask
         artifact = await Artifact.get_latest_for_run(self.session, self.id)
-        resolved_ask = {
+        return {
             "label": f"Review: {artifact.title}" if artifact else "Review",
             "artifact_id": artifact.id if artifact else None,
             **ask,
         }
-        if blocks := list_context_blocks(ask.get("context", "")):
-            subjects = [
-                (part.subject.subject_type, part.subject.subject_id)
-                for part in iter_parts(blocks, ui.SubjectStatus)
-            ]
-            app = get_app(self.app)
-            statuses = await app.get_statuses_for_subjects(self.session, subjects)
-            resolved_ask["context"] = [
-                block.model_dump(mode="json", by_alias=True, context={"statuses": statuses})
-                for block in blocks
-            ]
-        return resolved_ask
-
-    async def get_rendered_ask(self, *, has_chat: bool) -> dict[str, Any]:
-        # The parked ask as notification content. The body is the ask as
-        # markdown (never a template); actions are data — deliver()
-        # renders the buttons and encodes the token. Shape-dispatch on
-        # presentation happens before any subscripting, so the external branch
-        # never touches in-app-only keys.
-        ask = await self.get_ask()
-        if ask["presentation"] == "in_app":
-            sections = [f"# {ask['label']}"]
-            context = ask.get("context", "")
-            if blocks := list_context_blocks(context):
-                app = get_app(self.app)
-                pages = app.pages()
-                # A link names a page or a subject of the run's app, and text needs its address.
-                for link in iter_parts(blocks, ui.Link):
-                    link.url = link.get_address(app.name, pages)
-                context = ui.Stack(blocks).to_markdown()
-            if context:
-                sections.append(context)
-            for question in ask["questions"]:
-                lines = [question["prompt"]]
-                for option in question["options"]:
-                    mark = " (recommended)" if option.get("recommended") else ""
-                    lines.append(f"- {option['label']}{mark}")
-                sections.append("\n".join(lines))
-            body = "\n\n".join(sections)
-            if ask["artifact_id"]:
-                artifact = await self.session.get(Artifact, ask["artifact_id"])
-                with suppress(ArtifactContentMissing):
-                    body = f"{body}\n\n{await artifact.read_content()}"
-            # A click sends only its control. In a chat, the chat's agent asks for the note.
-            actions = [
-                {"id": control["id"], "label": control["id"].replace("_", " ").capitalize()}
-                for control in ask["controls"]
-                if has_chat or not control["note_required"]
-            ]
-            return {"body": body, "actions": actions, "deep_link": None}
-        # External asks are informational — answered on their source, so no
-        # actions; url is an optional gate-author-declared view-link.
-        return {"body": ask["label"], "actions": None, "deep_link": ask.get("url")}
-
-    async def create_park_notification(
-        self,
-        subject: dict[str, Any],
-        *,
-        account_id: str | None = None,
-        conversation_id: str | None = None,
-        deep_link: str | None = None,
-    ) -> str:
-        # Create the notification for the round this run just parked on — the
-        # caller supplies the run's subject and enqueues delivery. run_id +
-        # run_parked_at snapshot the round so a click on an old button can be
-        # refused once the run re-parks.
-        rendered = await self.get_rendered_ask(has_chat=bool(conversation_id))
-        notification = await Notification.create(
-            self.session,
-            account_id=account_id,
-            conversation_id=conversation_id,
-            reason="gate.parked",
-            body=rendered["body"],
-            subject=subject,
-            actions=rendered["actions"],
-            run_id=self.id,
-            run_parked_at=self.input_requested_at,
-            deep_link=rendered["deep_link"] or deep_link,
-        )
-        return notification.id
 
     async def close_park_notifications(self) -> None:
         """Queue the close of the messages that ask the question this run is parked on, in

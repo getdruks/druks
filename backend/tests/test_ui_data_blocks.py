@@ -10,9 +10,12 @@ from druks.ui import (
     ChartSeries,
     Columns,
     ControlsValue,
+    Divider,
     EmptyState,
     Fact,
     Facts,
+    Follows,
+    GateControls,
     Image,
     Link,
     List,
@@ -23,6 +26,7 @@ from druks.ui import (
     Section,
     Stack,
     StatusValue,
+    SubjectStatus,
     Table,
     TableColumn,
     TableRow,
@@ -434,3 +438,22 @@ def test_cards_with_none_and_nothing_to_say_carries_no_empty_state():
     assert Cards().layout == "wrap"
     assert Cards().drop is None
     assert Card().drag == {}
+
+
+def test_a_stack_is_true_only_when_it_holds_a_block():
+    assert not Stack()
+    assert Stack([Divider()])
+
+
+def test_a_stack_from_a_context_holds_its_blocks_and_none_for_text():
+    assert not Stack.from_context("Keep the scope small.")
+    assert Stack.from_context([{"block": "divider"}]).blocks == [Divider()]
+
+
+def test_a_block_and_a_page_list_the_subjects_of_their_statuses_and_gates():
+    note = Follows(subject_type="note", subject_id="7")
+    other = Follows(subject_type="note", subject_id="8")
+    stack = Stack([Facts([Fact("Work", SubjectStatus(note))]), GateControls(other)])
+
+    assert stack.subjects() == [("note", "7"), ("note", "8")]
+    assert Page("Notes", blocks=[stack], follows=other).subjects() == stack.subjects()

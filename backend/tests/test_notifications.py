@@ -21,7 +21,11 @@ from druks.notifications.exceptions import (
     InvalidChoiceError,
 )
 from druks.notifications.models import Notification
-from druks.notifications.services import respond_to_notification
+from druks.notifications.services import (
+    create_park_notification,
+    get_rendered_ask,
+    respond_to_notification,
+)
 from druks.teams.models import Team
 from druks.testing import configure_app_for_test, make_settings, seed_dbos_status, seed_run
 from druks_field_notes.workflows import Summarize
@@ -210,8 +214,9 @@ async def test_a_control_that_needs_a_note_gets_a_button_only_in_a_chat(druks_db
     approve = {"id": "approve", "label": "Approve"}
     request_changes = {"id": "request_changes", "label": "Request changes"}
 
-    assert (await run.get_rendered_ask(has_chat=False))["actions"] == [approve]
-    assert (await run.get_rendered_ask(has_chat=True))["actions"] == [approve, request_changes]
+    assert (await get_rendered_ask(druks_db, run, has_chat=False))["actions"] == [approve]
+    rendered = await get_rendered_ask(druks_db, run, has_chat=True)
+    assert rendered["actions"] == [approve, request_changes]
 
     run.input_request = {
         **_IN_APP_ASK,
@@ -220,7 +225,8 @@ async def test_a_control_that_needs_a_note_gets_a_button_only_in_a_chat(druks_db
             {"id": "request_changes", "note_required": False},
         ],
     }
-    assert (await run.get_rendered_ask(has_chat=False))["actions"] == [approve, request_changes]
+    rendered = await get_rendered_ask(druks_db, run, has_chat=False)
+    assert rendered["actions"] == [approve, request_changes]
 
 
 async def _thread_notification(druks_db, *, ask):
@@ -245,8 +251,8 @@ async def _thread_notification(druks_db, *, ask):
     druks_db.add(run)
     await druks_db.flush()
     await seed_dbos_status(druks_db, run.id, "parked")
-    notification_id = await run.create_park_notification(
-        {"type": "notification_probe", "id": 1}, conversation_id=conversation.id
+    notification_id = await create_park_notification(
+        druks_db, run, {"type": "notification_probe", "id": 1}, conversation_id=conversation.id
     )
     return run, await druks_db.get(Notification, notification_id)
 

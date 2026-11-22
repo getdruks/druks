@@ -26,7 +26,7 @@ from druks.durable.constants import RUN_QUEUE
 from druks.durable.enums import WorkflowEvent
 from druks.durable.exceptions import AgentCallNotFound
 from druks.durable.models import AgentCall, Artifact, Run
-from druks.durable.reads import read_slice
+from druks.durable.reads import get_run_response, read_slice
 from druks.mcp.gateway import exceptions, services
 from druks.testing import seed_call, seed_dbos_status, seed_run
 from druks.usage.models import UsageScrape
@@ -162,6 +162,21 @@ async def test_get_gate_serves_a_block_context_with_where_its_work_stands(druks_
     value = facts["facts"][0]["value"]
     assert value["subject"] == {"subjectType": "note", "subjectId": str(item.id)}
     assert (value["status"]["run"], value["status"]["gate"]) == (run.id, "review")
+
+
+async def test_a_run_response_serves_a_block_context_with_where_its_work_stands(druks_db):
+    item = await make_test_note()
+    context = [ui.Facts([ui.Fact("Work", ui.SubjectStatus(item))])]
+    stored = [block.model_dump(mode="json", by_alias=True) for block in context]
+    run = await _park(druks_db, item, ask={**_in_app_ask(), "context": stored})
+    await druks_db.refresh(run)
+    await druks_db.refresh(run, ["agent_calls"])
+
+    response = await get_run_response(run)
+
+    (facts,) = response.input_request["context"]
+    status = facts["facts"][0]["value"]["status"]
+    assert (status["run"], status["gate"]) == (run.id, "review")
 
 
 async def test_get_gate_refuses_when_not_parked(druks_db):

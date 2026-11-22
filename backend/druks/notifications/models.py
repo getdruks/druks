@@ -42,6 +42,9 @@ class Notification(Base, Uuid7Pk):
     reason: Mapped[str]
     # Markdown written by the caller — never a template.
     body: Mapped[str]
+    # The Druks blocks whose text form is the body, as JSON. A channel that draws blocks
+    # draws these, and a channel that draws none sends the body. None for a body of text.
+    blocks: Mapped[list[dict] | None] = mapped_column(JSONB, default=None)
     # Where a chat agent's question starts in the body, after its reply.
     question_offset: Mapped[int | None] = mapped_column(default=None)
     # The offered choices [{id, label}]; None for a one-way notification.
@@ -91,6 +94,7 @@ class Notification(Base, Uuid7Pk):
         account_id: str | None = None,
         reason: str,
         body: str,
+        blocks: list[dict] | None = None,
         question_offset: int | None = None,
         subject: dict | None = None,
         actions: list[dict] | None = None,
@@ -107,6 +111,7 @@ class Notification(Base, Uuid7Pk):
             account_id=account_id,
             reason=reason,
             body=body,
+            blocks=blocks,
             question_offset=question_offset,
             subject=subject,
             actions=actions,
@@ -139,7 +144,8 @@ class Notification(Base, Uuid7Pk):
         if since:
             stmt = stmt.where(cls.created_at >= since)
         if kinds is not None:  # ast-grep-ignore: rule-2
-            # The durable models import this module, so this import cannot be at the top.
+            # The durable models load the chat models, and the chat models import this module.
+            # Thus this import cannot be at the top.
             from druks.durable.models import Run  # noqa: PLC0415
 
             stmt = stmt.outerjoin(Run, Run.id == cls.run_id).where(

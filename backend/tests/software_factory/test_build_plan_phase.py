@@ -19,6 +19,7 @@ from druks.contrib.software_factory.journal import BuildJournal
 from druks.contrib.software_factory.policy import PlanGate, RepoPolicy
 from druks.contrib.software_factory.ticketing.base import Tracker
 from druks.contrib.software_factory.workflows import Build, PullRequestReview
+from druks.notifications.services import get_rendered_ask
 from druks.workflows import FatalError, OperatorReply, Run
 
 from software_factory.factories import make_test_work_item
@@ -775,7 +776,7 @@ async def test_blocked_redraft_fails_the_run_instead_of_implementing(monkeypatch
     assert [passing["reviewer_notes"] for passing in passes] == ["", "name the wire schema"]
 
 
-async def test_review_work_ask_renders_a_notification_body(monkeypatch):
+async def test_review_work_ask_renders_a_notification_body(druks_db, monkeypatch):
     workflow = _flow()
     workflow.subject = SimpleNamespace(repo="org/repo")
     workflow.journal = BuildJournal()
@@ -796,7 +797,7 @@ async def test_review_work_ask_renders_a_notification_body(monkeypatch):
     await workflow._work_gate()
 
     run = Run(input_request=input_requests[0])
-    assert (await run.get_rendered_ask(has_chat=False))["body"]
+    assert (await get_rendered_ask(druks_db, run, has_chat=False))["body"]
     assert input_requests[0]["url"] == "https://github.com/org/repo/pull/42"
     assert input_requests[0]["label"] == "Review implementation on GitHub: PR #42"
 

@@ -35,6 +35,7 @@ if TYPE_CHECKING:
     from druks.agents import Bot
     from druks.doctor import CheckResult
     from druks.durable.datastructures import Subject
+    from druks.durable.models import Run
     from druks.durable.schemas import SubjectStatus, SubjectSummary
     from druks.models import StoredSubject
     from druks.ui import Page
@@ -258,6 +259,25 @@ class App:
         return await reads.get_statuses_for_subjects(
             session, identities, workflows=cls.workflows.all()
         )
+
+    @classmethod
+    async def read_ask(cls, session: AsyncSession, run: "Run") -> dict:
+        """The ask that ``run`` is parked on, as Druks shows it. Each status in the blocks of
+        its context holds where the work on its subject stands at this read, from the runs
+        of this app."""
+        from druks import ui
+
+        ask = await run.get_ask()
+        # Only an in-app ask holds blocks, and a context of text holds none.
+        if ask.get("presentation") == "in_app" and (
+            stack := ui.Stack.from_context(ask.get("context", ""))
+        ):
+            statuses = await cls.get_statuses_for_subjects(session, stack.subjects())
+            ask["context"] = [
+                block.model_dump(mode="json", by_alias=True, context={"statuses": statuses})
+                for block in stack.blocks
+            ]
+        return ask
 
     @classmethod
     def subjects(cls) -> "list[type[Subject] | type[StoredSubject]]":
@@ -590,7 +610,7 @@ class App:
         from fastapi.responses import JSONResponse
 
         from druks.db import db_session
-        from druks.ui import Action, EmptyState, GateControls, Link, Page, SubjectStatus
+        from druks.ui import Action, EmptyState, Link, Page
 
         controls = []
         if back and back is not declaration:
@@ -617,11 +637,7 @@ class App:
                     action.check_operation(cls.name, operations)
             except ValueError as error:
                 raise PageContractError(cls.name, declaration.name, str(error)) from error
-            subjects = [
-                (part.subject.subject_type, part.subject.subject_id)
-                for part in page.iter_parts(SubjectStatus, GateControls)
-            ]
-            statuses = await cls.get_statuses_for_subjects(db_session(), subjects)
+            statuses = await cls.get_statuses_for_subjects(db_session(), page.subjects())
             return JSONResponse(
                 page.model_dump(mode="json", by_alias=True, context={"statuses": statuses})
             )
