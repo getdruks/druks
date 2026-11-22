@@ -64,7 +64,7 @@ export function SlackPane() {
         </div>
       )}
       {slack && connections.isSuccess && (
-        <div className="set-card svc-facts">
+        <div className="druks-panel svc-facts">
           <div className="svc-fact">
             <span className="svc-fact-key">Workspace</span>
             <span className="svc-fact-val">{slack.facts.team}</span>
@@ -81,7 +81,7 @@ export function SlackPane() {
             <span className="svc-actions">
               {account ? (
                 <button
-                  className="set-btn danger"
+                  className="druks-button druks-button--danger"
                   onClick={() => disconnect(account.id)}
                   disabled={isBusy}
                 >
@@ -89,7 +89,7 @@ export function SlackPane() {
                 </button>
               ) : (
                 <a
-                  className="set-btn primary"
+                  className="druks-button druks-button--primary"
                   href={`/api/oauth/slack/connect?next=${encodeURIComponent(window.location.pathname)}`}
                 >
                   Connect Slack
@@ -127,7 +127,7 @@ export function SlackPane() {
             Each one is another app's bot or a workflow that tagged the bot in a room. The agent
             answers an accepted one on the default account.
           </span>
-          <div className="set-card svc-facts">
+          <div className="druks-panel svc-facts">
             {automations.data.map((automation) => (
               <div className="svc-fact" key={automation.id}>
                 <span className="svc-fact-key">{automation.name}</span>
