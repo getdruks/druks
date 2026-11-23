@@ -23,7 +23,7 @@ function conversationRoot(id) {
 function readState(directory) {
   const filename = path.join(directory, "state.json");
   if (fs.existsSync(filename)) return JSON.parse(fs.readFileSync(filename, "utf8"));
-  return { status: "missing", sequence: 0, messageId: "", sessionId: "", harness: "", epoch: randomUUID(), archivePath: "" };
+  return { status: "missing", sequence: 0, messageId: "", sessionId: "", harness: "", epoch: randomUUID(), archivePath: "", error: "" };
 }
 
 // An adapter can repeat a whole file in rawOutput, content and _meta of a tool call.
@@ -86,7 +86,7 @@ class Conversation {
   }
 
   beginTurn(messageId, status, stopReason) {
-    Object.assign(this.state, { messageId, status, stopReason, archivePath: "" });
+    Object.assign(this.state, { messageId, status, stopReason, archivePath: "", error: "" });
     this.events = [];
     fs.writeFileSync(this.eventsFile, "", { mode: 0o600 });
     this.save();
@@ -258,6 +258,10 @@ class Conversation {
       } catch (error) {
         console.error(error);
         this.state.status = this.state.stopReason === "cancelled" ? "cancelled" : "interrupted";
+        // Keep the CLI's error text with the interrupted status, so the backend can tell a
+        // usage or rate limit from other stops and say so in the person's channel. The ACP
+        // RequestError carries the adapter's own words in data.details; message is generic.
+        this.state.error = String(error?.data?.details ?? error?.message ?? error);
       } finally {
         clearTimeout(timer);
         this.save();

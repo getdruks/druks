@@ -76,6 +76,7 @@ test("The bridge streams detached turns, isolates archives, cancels, and reloads
     " const permission = await client.requestPermission({sessionId,toolCall:{toolCallId:'permission',title:'Read'},options:[{optionId:'no',name:'Deny',kind:'reject_once'},{optionId:'yes',name:'Allow',kind:'allow_once'}]});",
     " if (permission.outcome.optionId !== 'yes') throw Error('permission');",
     " const text = p.prompt.map(block => block.text ?? block.type).join(' ');",
+    " if(text==='boom') throw Error('boom: usage limit reached');",
     " await client.sessionUpdate({sessionId,update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:memory+text}}});",
     " if(text==='large'){ const output='x'.repeat(100000);",
     "  await client.sessionUpdate({sessionId,update:{sessionUpdate:'tool_call',toolCallId:'read',title:'Read'}});",
@@ -176,6 +177,9 @@ test("The bridge streams detached turns, isolates archives, cancels, and reloads
   assert.equal(result._meta.claudeCode.toolResponse.file.content, shortened);
   await request(port, { method: "prompt", conversationId: id(2), messageId: message(7), content: text("wait"), timeout: 0.2 });
   await until(() => status(id(2)), result => result.status === "interrupted");
+  // A CLI error interrupts the turn and keeps its text, so the backend can tell a usage limit.
+  await request(port, { method: "prompt", conversationId: id(2), messageId: message(8), content: text("boom") });
+  assert.match((await until(() => status(id(2)), result => result.status === "interrupted")).error, /usage limit reached/);
 
   await request(port, { method: "prompt", conversationId: id(1), messageId: message(3), content: text("wait") });
   await until(() => status(id(1)), result => result.status === "running");

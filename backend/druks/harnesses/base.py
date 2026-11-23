@@ -83,17 +83,23 @@ class Harness(ABC):
         available cost sidecar before a run failure raises."""
 
     @classmethod
+    def classify_failure(cls, text: str) -> "type[exceptions.HarnessError] | None":
+        """The failure ``text`` names, by the first marker found in declaration order, or
+        None when none matches. The one place that reads this CLI's terminal vocabulary."""
+        lowered = text.lower()
+        for marker, error in cls.failure_markers.items():
+            if marker in lowered:
+                return error
+        return None
+
+    @classmethod
     def check_returncode(cls, result: HarnessRunResult) -> None:
         if result.timed_out:
             raise exceptions.HarnessTimeoutError(f"{cls.name} timed out.")
         if result.returncode != 0:
             detail = _terminal_detail(result)
             message = f"{cls.name} exited with {result.returncode}.{detail}"
-            lowered = detail.lower()
-            for marker, error in cls.failure_markers.items():
-                if marker in lowered:
-                    raise error(message)
-            raise exceptions.HarnessError(message)
+            raise (cls.classify_failure(detail) or exceptions.HarnessError)(message)
 
     @classmethod
     def get_acp_session(
