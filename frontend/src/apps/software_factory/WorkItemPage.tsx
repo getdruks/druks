@@ -525,8 +525,10 @@ function RunStatus({
   return (
     <span className={`wic-op-sub wic-sub-${run.state}`}>
       <span className="wic-op-sub-dot" />
-      {runSubLine(run, phase, collapsed, phaseEndsAt, timezone)}
-      {!isRunning(run) && <span> · {relTime(secondsSince(run.updatedAt))}</span>}
+      <span>
+        {runSubLine(run, phase, collapsed, phaseEndsAt, timezone)}
+        {!isRunning(run) && ` · ${relTime(secondsSince(run.updatedAt))}`}
+      </span>
     </span>
   )
 }
