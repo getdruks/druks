@@ -937,6 +937,8 @@ export interface WorkflowSettingField {
   /** The value has newlines that matter, such as a pasted PEM. The shell shows a text area. */
   multiline: boolean
   overridden: boolean
+  /** A secret file sets the field, so the form cannot change or clear it. */
+  managed: boolean
 }
 
 export interface WorkflowSettings {

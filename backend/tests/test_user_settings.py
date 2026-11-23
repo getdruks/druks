@@ -63,7 +63,7 @@ def _resolved() -> dict:
 
 def _field(name: str, *, value: object) -> dict:
     field = SettingsFieldResponse.from_field(
-        name, _Declared.model_fields[name], value=value, overridden=False
+        name, _Declared.model_fields[name], value=value, overridden=False, managed=False
     )
     return field.model_dump(by_alias=True)
 
@@ -135,7 +135,7 @@ class _RichlyDeclared(BaseModel):
 def test_union_of_separate_literals_collects_every_member():
     field = _RichlyDeclared.model_fields["split_enum"]
     projected = SettingsFieldResponse.from_field(
-        "split_enum", field, value="b", overridden=False
+        "split_enum", field, value="b", overridden=False, managed=False
     ).model_dump(by_alias=True)
     assert projected["type"] == "enum"
     assert projected["choices"] == ["a", "b"]
@@ -144,7 +144,7 @@ def test_union_of_separate_literals_collects_every_member():
 def test_secret_inside_a_container_is_redacted():
     field = _RichlyDeclared.model_fields["secret_list"]
     projected = SettingsFieldResponse.from_field(
-        "secret_list", field, value=["sk-one", "sk-two"], overridden=False
+        "secret_list", field, value=["sk-one", "sk-two"], overridden=False, managed=False
     ).model_dump(by_alias=True)
     assert projected["type"] == "secret"
     assert projected["value"] is None

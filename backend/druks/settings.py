@@ -167,7 +167,23 @@ class _SecretsSource(NestedSecretsSettingsSource):
     def __call__(self) -> dict[str, Any]:
         # Each file in the table of a configured service is a secret of its card.
         tables = tuple(f"services.{slug}" for slug in self.current_state.get("services", {}))
-        return _pick(super().__call__(), Settings.secret_keys() + tables)
+        values = _pick(super().__call__(), (*Settings.secret_keys(), *tables))
+        # Each file apps.<name>.<field> is a secret setting of an app, and its value is
+        # the text it holds: decoded as JSON, 12345 or a key file in JSON is no string.
+        apps: dict[str, dict[str, str]] = {}
+        for name, text in self.env_vars.items():
+            if not name.startswith("apps."):
+                continue
+            table, _, field = name.removeprefix("apps.").partition(".")
+            if field == "enabled":
+                raise ValueError(
+                    f"The secret file {name} switches the app {table!r}, which only "
+                    f"druks.toml does. Remove the file, and set [apps.{table}] enabled."
+                )
+            apps.setdefault(table, {})[field] = text
+        if apps:
+            values["apps"] = apps
+        return values
 
 
 class Manager(BaseModel):
@@ -338,7 +354,9 @@ class Settings(BaseSettings):
     providers: Providers = Providers()
     traces: Traces = Traces()
     # An [apps.<name>] table with enabled = false leaves that app out of this installation.
-    apps: dict[str, dict] = {}
+    # A file apps.<name>.<field> puts a secret setting of the app in its table as plain
+    # text, so no output shows the field.
+    apps: dict[str, dict] = Field(default={}, repr=False, exclude=True)
     # A [services.<slug>] table makes the card of that service managed, or leaves the
     # service out of this installation when enabled = false. Each table holds its
     # secrets as plain text, so no output shows the field.

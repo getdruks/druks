@@ -197,10 +197,10 @@ def validate_setting_override(
     try:
         model.model_validate({**current, field: value})
     except ValidationError as error:
-        raise ValueError(_redacted_validation_message(model, error)) from error
+        raise ValueError(redacted_validation_message(model, error)) from error
 
 
-def _redacted_validation_message(model: type[BaseModel], error: ValidationError) -> str:
+def redacted_validation_message(model: type[BaseModel], error: ValidationError) -> str:
     # A Pydantic error echoes the submitted value, so rebuild the message from safe keys.
     # A custom validator can put a raw value in ``msg``, so a secret field error and a
     # model-level error get a generic line.

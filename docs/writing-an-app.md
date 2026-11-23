@@ -2393,6 +2393,12 @@ Supported display shapes are scalar values, `Literal` choices, and
 It redacts secret values and submitted validation errors. Declare a secret
 field as `Secret`.
 
+A deployment can also set a `Secret` field from a file in `DRUKS_SECRETS_DIR`
+named `apps.<app>.<field>`. The file's value replaces the stored one, and the
+form shows the field as **Managed by configuration**. Your app needs no change
+to support it: `await NightWatch.settings()` returns the file's value. See
+[Secret files](configuration.md#secret-files).
+
 A `Literal` field can give each value a label and description through
 `json_schema_extra`. `choice_details` maps each value to its `label` and `help`.
 Druks rejects a key outside the declared choices when it loads the declaration.

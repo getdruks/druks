@@ -1,6 +1,7 @@
 from pathlib import Path
 from unittest.mock import AsyncMock
 
+import pytest
 from conftest import settings_client
 from druks.accounts.enums import Role
 from druks.accounts.models import Account
@@ -287,6 +288,7 @@ def test_apps_surface_build_agents_and_workflow_defaults(tmp_path: Path):
         "secretSet": None,
         "multiline": False,
         "overridden": False,
+        "managed": False,
     }
 
 
@@ -482,6 +484,26 @@ async def test_clearing_a_secret_deletes_its_override_and_stays_coherent(tmp_pat
     assert not (await FieldNotes.settings()).sync_token
     assert fields["sync_token"]["secretSet"] is False
     assert fields["sync_signing_key"]["secretSet"] is False
+
+
+async def test_app_secret_the_app_refuses_stays_out_of_the_error(tmp_path: Path):
+    # The proof app's validator quotes the token it refuses.
+    await SettingsOverride.set_app_setting(
+        db_session(), "field_notes", "sync_token", "not-a-token", is_secret=True
+    )
+
+    with settings_client(tmp_path) as client:
+        # Clearing a field validates nothing until the route's last check of the app.
+        cleared = client.patch(
+            "/api/settings/apps", json={"appSettings": {"field_notes": {"board_size": None}}}
+        )
+        with pytest.raises(ValueError) as refused:
+            await FieldNotes.settings()
+
+    assert cleared.status_code == 422
+    assert "not-a-token" not in cleared.text
+    assert "not-a-token" not in str(refused.value)
+    assert refused.value.__suppress_context__
 
 
 def test_apps_override_agent_model_persists(tmp_path: Path):
