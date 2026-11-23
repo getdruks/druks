@@ -16,7 +16,7 @@
 #
 # Env knobs:
 #   DRUKS_INSTALL_DIR     default ~/druks
-#   DRUKS_REPO            default czpython/druks — GitHub repository to fetch
+#   DRUKS_REPO            default getdruks/druks — GitHub repository to fetch
 #                         deploy files from
 #   DRUKS_REF             default main — tag or full SHA to fetch deploy files from
 #   DRUKS_TAG             image tag to pull/run; defaults to the v* DRUKS_REF,
@@ -52,7 +52,7 @@ set_env_var() {
 
 main() {
   INSTALL_DIR="${DRUKS_INSTALL_DIR:-$HOME/druks}"
-  REPO="${DRUKS_REPO:-czpython/druks}"
+  REPO="${DRUKS_REPO:-getdruks/druks}"
   REF="${DRUKS_REF:-main}"
   SKIP_PULL="${DRUKS_SKIP_PULL:-}"
   # Validated by ``druks setup`` (the single authority on provider names).
@@ -94,7 +94,7 @@ main() {
   mkdir -p caddy
   fetch_from_repo deploy/caddy/Caddyfile caddy/Caddyfile
 
-  BACKEND_IMAGE="ghcr.io/czpython/druks:$IMAGE_TAG"
+  BACKEND_IMAGE="ghcr.io/getdruks/druks:$IMAGE_TAG"
   if [ -z "$SKIP_PULL" ]; then
     echo "→ pulling $BACKEND_IMAGE"
     docker pull -q "$BACKEND_IMAGE" >/dev/null
@@ -270,7 +270,7 @@ MSG
     cat <<MSG
 
 Remote shape ($PROVIDER): configure public ingress and identity per:
-  https://github.com/czpython/druks/tree/main/deploy
+  https://github.com/getdruks/druks/tree/main/deploy
 ------------------------------------------------------------
 MSG
   fi
