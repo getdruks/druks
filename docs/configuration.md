@@ -676,6 +676,22 @@ command that is not declared. The implementer chooses between this and running t
 command itself, and Druks blocks neither. A harness that cannot resume is never
 offered it. A round fails after ten such runs.
 
+A repository can also set the commands that the agent runs to check its work, in
+a `verification:` block:
+
+```yaml
+verification:
+  test_commands: ["make test"]
+  lint_commands: []
+```
+
+The repository profiler detects the lint, typecheck, and test commands of a
+repository. A list that `verification:` writes replaces the detected list, even
+an empty one. A list that it leaves out stays as detected. A command that the
+block writes keeps the CI check that the profiler found for it. A key that
+`config.yml` does not know, such as the old `sandbox:` section, fails the build
+with an error that names it.
+
 When Druks receives a push to the default branch that changes `config.yml`, the
 next build uses the new file. When a team lists Software Factory, this happens
 only for a push by a person who can use Software Factory. Druks refuses a push by

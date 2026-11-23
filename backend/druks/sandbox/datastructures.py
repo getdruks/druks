@@ -7,8 +7,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, Field
-
 from druks.settings import get_settings
 
 from .exceptions import SetupScriptError
@@ -20,15 +18,6 @@ if TYPE_CHECKING:
     from .host import Host
 
 Hook = Callable[[], Awaitable[str]]
-
-
-class Profile(BaseModel):
-    """A repo's VM image + env, from ``.druks/<app>/config.yml``."""
-
-    model_config = {"frozen": True, "extra": "forbid"}
-
-    image: str | None = None
-    env: dict[str, str] = Field(default_factory=dict)
 
 
 @dataclass(frozen=True)
