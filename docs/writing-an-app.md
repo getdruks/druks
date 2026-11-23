@@ -486,7 +486,8 @@ An instruction belongs to the app class. Which CLI runs it, which model, which
 login it bills, and at what effort are the operator's choices: defaults in
 **Settings → Instructions**, overridden per instruction on the app's own page. `timeout`
 is the one declarable knob, because how long a step may take is a fact about
-the task.
+the task. A call can pass `effort="high"` to run at a lower effort than the
+setting for that one call. The setting is the ceiling: a call never runs above it.
 
 ```python
 from druks.workflows import Instruction, InstructionOutput

@@ -105,7 +105,7 @@ async def test_an_implementer_that_asks_for_a_check_is_resumed_with_its_result(m
     answers = iter([_asked_for_check(), delivered])
     resumes = []
 
-    async def implement(*, resume=None):
+    async def implement(*, effort=None, resume=None):
         resumes.append(resume)
         return next(answers)
 
@@ -126,7 +126,7 @@ async def test_an_implementer_that_keeps_asking_for_checks_fails_the_run(monkeyp
     flow = _build()
     asked = []
 
-    async def implement(*, resume=None):
+    async def implement(*, effort=None, resume=None):
         asked.append(resume)
         return _asked_for_check()
 
@@ -136,3 +136,22 @@ async def test_an_implementer_that_keeps_asking_for_checks_fails_the_run(monkeyp
         await flow.implement()
 
     assert len(asked) == MAX_CHECK_RUNS + 1
+
+
+@pytest.mark.parametrize(
+    ("size", "effort"), [("small", "high"), ("medium", "high"), ("large", None), (None, None)]
+)
+async def test_the_implement_effort_follows_the_size_of_the_change(monkeypatch, size, effort):
+    flow = _build()
+    flow.journal = SimpleNamespace(plan_size=size)
+    seen = []
+
+    async def implement(*, effort=None, resume=None):
+        seen.append(effort)
+        return SimpleNamespace(status="success", check_command=None)
+
+    monkeypatch.setattr(SoftwareFactory, "implement", implement)
+
+    await flow.implement()
+
+    assert seen == [effort]

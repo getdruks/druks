@@ -38,6 +38,7 @@ from .constants import (
     CI_TTL_SECONDS,
     GITHUB_MCP_NAME,
     GITHUB_MCP_URL,
+    IMPLEMENT_EFFORT_BY_SIZE,
     MAX_CHECK_RUNS,
     RERUN_CONCLUSIONS,
     RERUN_POLL_SECONDS,
@@ -530,7 +531,8 @@ class Build(Workflow):
     # Body code, never @step. The agent calls inside memoize themselves and write the
     # journal. On replay a @step would skip them, and the journal would stay empty.
     async def implement(self) -> ImplementationOutput:
-        delivery = await SoftwareFactory.implement()
+        effort = IMPLEMENT_EFFORT_BY_SIZE.get(self.journal.plan_size)
+        delivery = await SoftwareFactory.implement(effort=effort)
         # The implementer ended its turn to have a declared test command run. Druks runs it
         # on the implementer's box and resumes the same session with the result.
         check_runs = 0
@@ -541,7 +543,7 @@ class Build(Workflow):
                     f"the implementer asked for {check_runs} test runs without delivering"
                 )
             delivery = await SoftwareFactory.implement(
-                resume=functools.partial(self._run_check, delivery.check_command)
+                effort=effort, resume=functools.partial(self._run_check, delivery.check_command)
             )
         # The implementer found a contradiction in the binding requirements and stopped.
         # The run fails with that reason, so the dashboard shows it.

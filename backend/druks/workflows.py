@@ -107,7 +107,7 @@ from druks.files.datastructures import File
 from druks.files.exceptions import FileUnavailableError
 from druks.files.models import FileRecord
 from druks.harnesses.artifacts import normalize_token_usage
-from druks.harnesses.config import AgentConfig, get_config
+from druks.harnesses.config import AgentConfig, cap_effort, get_config
 from druks.harnesses.exceptions import (
     HarnessError,
     HarnessInvalidOutputError,
@@ -1835,6 +1835,7 @@ class Instruction:
         *,
         contract: type[InstructionOutput] | None = None,
         agent_id: str | None = None,
+        effort: str | None = None,
         resume: Callable[..., Awaitable[str]] | None = None,
         **context: object,
     ) -> Any:
@@ -1845,7 +1846,9 @@ class Instruction:
         else (repo, …) is prompt context. ``contract`` overrides the output
         contract for this call, including schema generation and validation. ``agent_id``
         runs the call as that saved agent: with its instructions, its model, its billing,
-        and only its skills. ``resume`` continues the instruction's last call in this run, on
+        and only its skills. ``effort`` runs the call at a lower effort than the operator's
+        setting; the setting is the ceiling, and a higher ``effort`` runs at the setting.
+        ``resume`` continues the instruction's last call in this run, on
         its box, as the same conversation: Druks calls ``resume(workspace=...)`` with the
         checkout as the agent left it, and sends the text it returns as the agent's next
         message. The instruction must be ``resumable``, and its harness must be able to resume."""
@@ -1870,6 +1873,7 @@ class Instruction:
                     workflow_id=workflow.workflow_id,
                     contract=contract,
                     agent_id=agent_id,
+                    effort=effort,
                     resume=resume,
                     **context,
                 )
@@ -2004,6 +2008,7 @@ class Instruction:
         workflow_id: str,
         contract: type[InstructionOutput] | None = None,
         agent_id: str | None = None,
+        effort: str | None = None,
         resume: Callable[..., Awaitable[str]] | None = None,
         **context: Any,
     ) -> Any:
@@ -2106,7 +2111,9 @@ class Instruction:
                 # The override lookup reads the GitHub credential from a row.
                 template = await get_template(self.prompt, repo=prompt_context.get("repo"))
                 harness = config.harness_class(
-                    model=config.model, fast_mode=config.fast_mode, effort=config.effort
+                    model=config.model,
+                    fast_mode=config.fast_mode,
+                    effort=cap_effort(config.effort, effort),
                 )
                 agent_instructions = ""
                 if agent_id:

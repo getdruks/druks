@@ -10,6 +10,7 @@ from drukbox_sdk import Secret
 from druks.harnesses.base import Harness
 from druks.harnesses.claude import ClaudeHarness
 from druks.harnesses.codex import CodexHarness
+from druks.harnesses.config import cap_effort
 from druks.harnesses.constants import CLAUDE_STRUCTURED_OUTPUT_INSTRUCTION
 from druks.harnesses.datastructures import Manifest
 from druks.sandbox.datastructures import McpServer
@@ -550,3 +551,21 @@ def test_a_resumed_claude_call_costs_what_it_added_to_the_session():
     # The session's totals ride on for the next call to take off.
     assert metadata["session_total"] == totals["session_total"]
     assert ClaudeHarness.get_own_cost(1.5, totals, None) == (1.5, totals)
+
+
+@pytest.mark.parametrize(
+    ("configured", "requested", "runs_at"),
+    [
+        ("max", "high", "high"),
+        ("high", "max", "high"),
+        ("high", None, "high"),
+        ("high", "high", "high"),
+    ],
+)
+def test_a_requested_effort_lowers_the_setting_and_never_raises_it(configured, requested, runs_at):
+    assert cap_effort(configured, requested) == runs_at
+
+
+def test_an_unknown_effort_fails_loudly():
+    with pytest.raises(ValueError):
+        cap_effort("high", "turbo")

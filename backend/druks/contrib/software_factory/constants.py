@@ -36,6 +36,9 @@ RERUN_START_POLLS = 24
 # The implementer ends its turn to have Druks run a declared test command, and Druks resumes it
 # with the result. A round that asks for more runs than this has stopped converging.
 MAX_CHECK_RUNS = 10
+# The effort an implement call runs at for a change of this size. A size left out, a large one,
+# runs at the operator's setting. The setting is also the ceiling: a call never runs above it.
+IMPLEMENT_EFFORT_BY_SIZE = {"small": "high", "medium": "high"}
 # A test command that runs longer than this is killed, and the implementer is told so.
 CHECK_TIMEOUT_SECONDS = 30 * 60
 # The result keeps this many trailing lines of the command's output. The agent reads the

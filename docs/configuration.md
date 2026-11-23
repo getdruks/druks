@@ -1059,6 +1059,10 @@ are sandbox entries. Provider credentials do not belong in this root. OpenCode
 and Pi do not read it.
 The default harness, model, billing, effort, and timeout live in
 **Settings → Instructions**. Each instruction can override any of them on its app's page.
+Software Factory's planner sizes each change as small, medium or large. A small or
+medium change runs its implement call at `high` effort, and a large one at the
+effort in Settings. The setting is the ceiling: a build never runs above it, so an
+instruction set to `medium` stays at `medium`.
 **Unattended runs use** names the default account. Shared execution settings
 select subscription or API key billing. Subscription billing uses the run
 account's subscription. API key billing uses the installation key. A call refuses

@@ -1590,6 +1590,21 @@ def _session_result(cost_usd, output_tokens):
     )
 
 
+async def test_a_call_runs_at_a_lower_effort_than_the_setting_and_never_a_higher_one(
+    druks_db, tmp_path, monkeypatch, current_run
+):
+    sandbox = _patch_runtime(monkeypatch, tmp_path, {"ok": True})
+    _patch_ephemeral(monkeypatch, sandbox)
+    configured = (await get_config(druks_db, DUMMY_INSTRUCTION.id, None)).effort
+
+    await DUMMY_INSTRUCTION._run(workflow_id="wf-9", effort="low")
+    await DUMMY_INSTRUCTION._run(workflow_id="wf-9", effort="max")
+
+    lower, higher = [call.args[0].effort for call in sandbox.run_agent.await_args_list]
+    assert lower == "low"
+    assert higher == configured
+
+
 async def test_a_resumed_call_continues_the_last_session_on_its_box(
     druks_db, tmp_path, monkeypatch, current_run
 ):

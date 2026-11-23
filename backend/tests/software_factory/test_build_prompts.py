@@ -239,6 +239,20 @@ async def test_implement_prompt_hands_over_the_previous_round():
     assert "- The old flag name stays in the changelog." in prompt
 
 
+async def test_implement_prompt_reads_regions_not_whole_files():
+    prompt = await render_prompt(
+        "software_factory/build/implement.md",
+        build=_build(),
+        verification="VERIFICATION-BLOCK",
+        workspace=_workspace(),
+        can_resume=False,
+    )
+
+    flat = " ".join(prompt.split())
+    assert "Read a region with the Read tool and its line range, not a whole file" in flat
+    assert "only when the plan depends on it" in flat
+
+
 async def test_implement_prompt_has_no_previous_round_on_the_first_round():
     prompt = await render_prompt(
         "software_factory/build/implement.md",

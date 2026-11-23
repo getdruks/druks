@@ -153,6 +153,14 @@ you made a real bet the operator should see. Under the adaptive gate a `high` pl
 the operator park entirely — calibrate accordingly: a wrong `high` costs an unwanted PR, a
 wrong `low` only costs a park.
 
+SIZE — the `size` schema field. Report how large the change is, because Druks runs the implementer
+at less effort on a small or medium change. `small` is a change to one or two files with no new
+design: a config or CI edit, a one-line fix, a test. `medium` is a change that follows a pattern the
+repo already has, across several files. `large` is anything with a new design, a migration, a new
+public contract, or a change that touches many layers. When it is close, choose the larger size: a
+small change run at too little effort costs a revision round, and a large one run at too much
+costs only tokens.
+
 RULED OUT — the `rejected_approaches` schema field. Name each approach you considered and
 dropped, with the reason you dropped it. Every agent after you reads the list and takes it as
 settled, so an approach you rejected silently is one they will propose again. A rejection's

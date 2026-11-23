@@ -79,6 +79,7 @@ def _blocked_plan(reason: str) -> PlanData:
         questions=[],
         rejected_approaches=[],
         confidence="low",
+        size="medium",
         status="blocked",
         assignee_github_login=None,
         tickets=[],
@@ -863,7 +864,7 @@ async def test_needs_clarification_delivery_stops_the_run(monkeypatch):
     reason — the stop is a workflow decision now, not a contract side effect."""
     flow = Build()
 
-    async def bailed():
+    async def bailed(*, effort=None):
         return SimpleNamespace(
             status="needs_clarification",
             summary="AC-3 requires a pure function that performs I/O",
