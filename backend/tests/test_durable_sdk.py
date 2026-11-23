@@ -1782,6 +1782,74 @@ async def test_retry_reruns_the_step_whose_result_the_body_refused(runtime, decl
     assert retried.failure == "delivery refused"
 
 
+async def test_retry_replays_a_failed_attempt_that_a_later_step_moved_past(
+    runtime, declared_workflows
+):
+    calls = []
+
+    class RetriedWork(Workflow):
+        subject = Widget
+
+        @step
+        async def implement(self) -> None:
+            calls.append("implement")
+            if calls.count("implement") == 1:
+                raise RuntimeError("first attempt")
+
+        @step
+        async def nudge(self) -> None:
+            calls.append("nudge")
+
+        async def run_multistep(self) -> None:
+            try:
+                await self.implement()
+            except RuntimeError:
+                await self.implement()
+            await self.nudge()
+            raise FatalError("review wait failed")
+
+    first_id = await RetriedWork.start(subject=Widget(id=9))
+    await _wait_for_run(runtime.engine, first_id, lambda run: run.state == RunState.FAILED)
+    async with session_scope(runtime.engine) as session:
+        first_run = await session.get(Run, first_id)
+        retry_id = await first_run.retry()
+    await _wait_for_run(runtime.engine, retry_id, lambda run: run.state == RunState.FAILED)
+
+    assert calls == ["implement", "implement", "nudge", "nudge"]
+
+
+async def test_retry_reruns_a_failed_step_that_a_later_step_followed(runtime, declared_workflows):
+    calls = []
+
+    class LimitedWork(Workflow):
+        subject = Widget
+
+        @step
+        async def call(self) -> None:
+            calls.append("call")
+            raise RuntimeError("usage limit")
+
+        @step
+        async def wait(self) -> None:
+            calls.append("wait")
+
+        async def run_multistep(self) -> None:
+            try:
+                await self.call()
+            except RuntimeError:
+                await self.wait()
+                raise
+
+    first_id = await LimitedWork.start(subject=Widget(id=10))
+    await _wait_for_run(runtime.engine, first_id, lambda run: run.state == RunState.FAILED)
+    async with session_scope(runtime.engine) as session:
+        first_run = await session.get(Run, first_id)
+        retry_id = await first_run.retry()
+    await _wait_for_run(runtime.engine, retry_id, lambda run: run.state == RunState.FAILED)
+
+    assert calls == ["call", "wait", "call", "wait"]
+
+
 async def test_failed_retry_attempts_keep_separate_terminal_records(runtime, declared_workflows):
     class FailingAttempt(Workflow):
         subject = Widget
