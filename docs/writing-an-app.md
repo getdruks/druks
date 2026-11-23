@@ -433,7 +433,7 @@ class Engage(Workflow):
         ...
 ```
 
-A scheduled `dispatch()` fires with no arguments, so each of its parameters needs
+A scheduled `dispatch()` fires with no arguments. Each of its parameters needs
 a default. Druks evaluates cron expressions in the installation timezone. An
 operator can change the cadence or pause a declared schedule on the Schedules
 page or in the app settings. Druks cannot add a schedule to a workflow that
@@ -462,13 +462,12 @@ async def sync_labels(pull_request_id: int) -> None:
 
 Call `await sync_labels.enqueue(pull_request_id=7)` from a route, a webhook's
 subscriber, or a workflow body. Never call it inside a `@step`, or in a subscriber of
-a `WorkflowEvent` or of an announced event: Druks notifies those subscribers inside a
+a `WorkflowEvent` or of an announced event. Druks notifies those subscribers inside a
 step of the run. As with a workflow, the task's signature is the wire contract. Each
 parameter carries a type annotation. `enqueue()` validates the parameters and stores
-JSON. A task keeps no run row
-and never reaches the timeline. Outside a workflow, `enqueue()` puts the task in
-the queue when the caller's transaction commits. If the transaction rolls back,
-the task does not run.
+JSON. A task keeps no run row and never reaches the timeline. Outside a workflow,
+`enqueue()` puts the task in the queue when the caller's transaction commits. If
+the transaction rolls back, the task does not run.
 
 A task has no subject, gate, or operator settings. It cannot make agent calls.
 `every=` on a task is a fixed UTC cadence that the code owns. An operator can
@@ -1159,7 +1158,7 @@ from druks.workflows import Gate, Workflow
 class ApproveReport(Gate):
     name = "approve_report"
     action: Literal["approve", "revise", "cancel"]
-    note: str | None = None
+    note: str = ""
 
     @classmethod
     async def on_wait(cls, workflow: Workflow) -> None:
@@ -1222,13 +1221,14 @@ metrics, dividers, links, tables, and charts of an approval with its own blocks.
 It shows the other blocks as their [text forms](druks-ui.md#text-forms). See
 [Approvals in Slack](druks-ui.md#approvals-in-slack). An `Action` in the blocks
 names one of the app's own writes. At the top of the blocks and with no fields,
-it is a button in Slack. A click runs the operation through its route, as the
-person who clicks. Slack honors the action's `label` and `confirm`. `tone`,
-`refresh`, and `link` have no effect there. Any other action shows in Slack as
-its label, linked to the run's page, where it is a button. See
-[Actions in Slack](druks-ui.md#actions-in-slack). The operator also acts through
-a `Form` or a `GateControls`. These two blocks have no text form. `review`
-refuses them anywhere in the blocks. An agent's tools send no action. The
+it is a button in Slack. An action with no fields alone in a cell of a table is a
+button too. The table must be at the top of the blocks and select no rows. A
+click runs the operation through its route, as the person who clicks. Slack
+honors the action's `label` and `confirm`. `tone`, `refresh`, and `link` have no
+effect there. Any other action shows in Slack as its label, linked to the run's
+page, where it is a button. See [Actions in Slack](druks-ui.md#actions-in-slack).
+The operator also acts through a `Form` or a `GateControls`. These two blocks
+have no text form. `review` refuses them anywhere in the blocks. An agent's tools send no action. The
 `context` of a gate's in-app ask obeys the same rules. A `SubjectStatus` in the
 blocks shows where the work stands each time Druks reads the ask. The ask that
 Druks stores holds no status.
@@ -1334,14 +1334,14 @@ await self.report(
 
 Each call replaces the status. The status is one notification with the reason
 `run.status`, which keeps the blocks and their
-[text form](druks-ui.md#text-forms). Every block must have a text form, so
+[text form](druks-ui.md#text-forms). Every block must have a text form. So
 `report` raises `NoTextFormError` for a `Form`, an `Action`, or a
 `GateControls` anywhere in the blocks, before it saves anything.
 
 `report` is a checkpoint. A replay reports nothing again and sends nothing
-again. Druks does not send a message exactly once: when a worker stops after
-Slack took a post and before Druks recorded it, the send runs again and can post
-the message a second time.
+again. Druks does not send a message exactly once. When a worker stops after
+Slack took a post and before Druks recorded it, the send runs again. It can then
+post the message a second time.
 
 ### Where the status goes
 
@@ -1356,24 +1356,24 @@ the message a second time.
 - A workflow that no chat started shows its status where its approvals go: the
   Slack channel that its account chose, else the account's direct message. See
   [Notifications](configuration.md#notifications).
-- A web chat, a chat on a channel that cannot edit a message, such as WhatsApp,
-  and an account with no Slack channel and no linked Slack account keep the
-  status in Druks. No message goes out. Druks does not send the status of a chat
-  to the account instead.
+- A web chat keeps the status in Druks. So does a chat on a channel that cannot
+  edit a message, such as WhatsApp. So does an account with no Slack channel and
+  no linked Slack account. No message goes out. Druks does not send the status of
+  a chat to the account instead.
 
-The first report posts the message, and each later report edits it. The bell in
+The first report posts the message. Each later report edits it. The bell in
 the dashboard does not show a status, because the workflow changes it in place.
 
 ### How the edits go out
 
 Druks sends the status a few seconds after its last change. Thus changes that
-come close together go out in one edit, and the last change always goes out. A
+come close together go out in one edit. The last change always goes out. A
 status that keeps changing goes out every few seconds.
 
-A post or an edit that fails is tried again, and its failure never fails the
+Druks tries a post or an edit that fails again. Its failure never fails the
 workflow. When the tries run out, the status records the failure. The next
-report sends the newest status: it posts the message when no post reached Slack,
-and it edits the message when one did.
+report sends the newest status. It posts the message when no post reached
+Slack. It edits the message when one did.
 
 ### Waits and the end
 
@@ -1382,15 +1382,15 @@ message shows that report and nothing more. When the workflow waits or ends,
 Druks draws the message again and adds where the workflow stands:
 
 - When the workflow parks on a gate, a callout at the end of the message says
-  what it waits for, for example "Waiting for an answer: Review". A gate that
+  what it waits for. An example is "Waiting for an answer: Review". A gate that
   waits with no ask gives "Waiting for an answer.". Each `ProgressStep` whose
   status has the tone `active`, at any depth, shows "waiting" and keeps its tone.
 - When the workflow continues, the message shows your report again, with your
   own words for each step and no callout.
-- When the workflow finishes, fails, or is cancelled, Druks edits the message
-  one last time. The callout says "Finished.", "Failed.", or "Cancelled.". Each
-  step that is still in progress shows that end, with a tone that is not
-  `active`. A step that settled keeps its status.
+- When the workflow finishes or fails, or someone cancels it, Druks edits the
+  message one last time. The callout says "Finished.", "Failed.", or
+  "Cancelled.". Each step that is still in progress shows that end, with a tone
+  that is not `active`. A step that settled keeps its status.
 
 When a person retries a workflow that failed, it keeps the message. The message
 shows the last report again, as you wrote it, until the workflow reports, waits,
@@ -1401,7 +1401,7 @@ approval, or its close, edits only the message of the approval.
 
 The final status is in addition to what Druks already sends when a workflow
 ends. Druks still tells the chat that started the workflow its result, its
-failure, or its cancel, and still tells the account when a workflow that no chat
+failure, or its cancel. It still tells the account when a workflow that no chat
 started fails.
 
 ## Give runs a subject read-side
@@ -1659,8 +1659,9 @@ Each carries `repo`, `pr_number`, and a `payload` with `branch`, `is_fork`,
 on `branch` then filters with `payload__is_fork=False`.
 
 A comment on a pull request or on a line of its diff publishes `pr.commented`
-with `repo`, `pr_number`, and a `payload` with `comment_id`, `body`, `author`,
-`author_is_bot`, `author_can_write`, `actor_id`, and `review_thread_id`.
+with `repo`, `pr_number`, and a `payload`. The payload holds `comment_id`,
+`body`, `author`, `author_is_bot`, `author_can_write`, `actor_id`, and
+`review_thread_id`.
 `review_thread_id` is the review comment that GitHub takes replies under. It is
 `null` for a comment outside a review thread. A comment on an issue publishes
 `ticket.commented` instead, one of the [tracker events](#tracker-events). Both
@@ -1810,8 +1811,8 @@ reports = await db_session().scalars(
 )
 ```
 
-A page that names a missing row by id answers an empty state that links back to
-its parent page, or to the app's landing page.
+A page that names a missing row by id answers an empty state. The empty state
+links back to its parent page, or to the app's landing page.
 
 A `Mapped[datetime]` column stores UTC. A `Mapped[SomeStrEnum]` or
 `Mapped[SomeLiteral]` column stores its value as text under a CHECK constraint of
@@ -2009,11 +2010,11 @@ platform never echoes what the operator pasted:
 ```python
 @classmethod
 async def verify(cls, settings: Settings) -> dict:
-    if not await probe(settings):
-        raise ServiceConnectError(
-            "The provider did not accept these credentials. Check them and paste them again."
-        )
-    return {}
+    if await probe(settings):
+        return {}
+    raise ServiceConnectError(
+        "The provider did not accept these credentials. Check them and paste them again."
+    )
 ```
 
 If the appliance is healthy without the service, set `required = False` on the
@@ -2407,9 +2408,9 @@ It redacts secret values and submitted validation errors. Declare a secret
 field as `Secret`.
 
 A deployment can also set a `Secret` field from a file in `DRUKS_SECRETS_DIR`
-named `apps.<app>.<field>`. The file's value replaces the stored one, and the
-form shows the field as **Managed by configuration**. Your app needs no change
-to support it: `await NightWatch.settings()` returns the file's value. See
+named `apps.<app>.<field>`. The file's value replaces the stored one. The form
+shows the field as **Managed by configuration**. Your app needs no change to
+support it. `await NightWatch.settings()` returns the file's value. See
 [Secret files](configuration.md#secret-files).
 
 A `Literal` field can give each value a label and description through
@@ -2850,7 +2851,7 @@ Import from concern namespaces, not from `druks.durable` or internal modules:
 | `druks.services` | `Service`, `Connection`, `auth`, `Resource`, `ResourceError`, `ServiceConnectError`, `ServiceNotConnectedError`, `OauthClient`, `OauthExchangeError`, `OauthRefreshError` |
 | `druks.browser` | `BrowserClient`, `BrowserCommandError`, `BrowserSession`, `BrowserSessionSignedOutError`, `BrowserSessionStatus` |
 | `druks.chat` | `Bot`, `BotUser` |
-| `druks.workflows` | `Workflow`, `Instruction`, `InstructionOutput`, `Gate`, `YesNo`, `GateTimeout`, `WaitTimeout`, `WaitFailed`, `step`, `task`, `Journal`, `Subject`, `SubjectSummary`, run/agent response types, lifecycle enums and workflow errors |
+| `druks.workflows` | `Workflow`, `Instruction`, `InstructionOutput`, `Gate`, `YesNo`, `GateTimeout`, `WaitTimeout`, `WaitFailed`, `step`, `task`, `Journal`, `Subject`, `SubjectSummary`, `SubjectStatus`, `OperatorReply`, `RunResponse`, `AgentCall`, `AgentCallResponse`, `AgentCallStatus`, `WorkflowEvent`, `WorkflowError`, `FatalError` |
 | `druks.sandbox` | `Sandbox`, `SandboxMcpServer`, `SandboxSecret` |
 | `druks.workspaces` | `Workspace`, `RepoWorkspace` |
 | `druks.db` | `Model`, `StoredSubject`, `atomic`, `db_session` |
@@ -2862,7 +2863,7 @@ Import from concern namespaces, not from `druks.durable` or internal modules:
 | `druks.events` | `Event` |
 | `druks.files` | `File`, `FileField` |
 | `druks.prompts` | `render_prompt` |
-| `druks.webhooks` | `Webhook`, `verify_hmac_sha256` |
-| `druks.testing` | `run_workflow`, `seed_run`, `seed_call`, `init_db`, and the fixtures that the plugin registers |
+| `druks.webhooks` | `Webhook`, `InvalidWebhookError`, `verify_hmac_sha256` |
+| `druks.testing` | `run_workflow`, `seed_run`, `seed_call`, `init_db`, `asgi_client`, and the fixtures that the plugin registers |
 
 The root `druks` package deliberately exports only its version.

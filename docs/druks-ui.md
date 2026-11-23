@@ -498,9 +498,9 @@ An `Action` has a text form only in a review's context. When `review` stores
 the context, Druks gives each action the page of the run. That page shows the
 action as a button. The text form of the action is its label, linked to that
 page. An installation with no endpoint has no address for the page. The action
-then shows only its label. A table that selects rows, a `Cards` list with a
-`drop` action, and a block with an action in its controls write their actions
-in the same way. Slack draws some actions as buttons: see
+then shows only its label. A table that selects rows writes its actions in the
+same way. So do a `Cards` list with a `drop` action and a block with an action
+in its controls. Slack draws some actions as buttons: see
 [Actions in Slack](#actions-in-slack).
 
 In any other place, the `to_markdown()` of an `Action` raises `NoTextFormError`
@@ -516,7 +516,7 @@ Slack draws these blocks of an approval with its own blocks:
 | `Facts`, `Metrics` | A grid of two columns: each label in bold above its value, under the title in bold. A section of Slack holds 10 of them. More start a new section. |
 | `Divider` | A divider. |
 | `Link` | A button that opens the address of the link. |
-| `Table` | A data table that the person can sort and page through. The title is its caption, or the first column label when the table has no title. A `NumberValue` is a number cell. Slack sorts a column of number cells as numbers. A value with a link is a link. Any other value shows its text form. An empty value or column label shows a dash. The row detail stays on the dashboard. A table that selects rows shows its text form. |
+| `Table` | A data table that the person can sort and page through. The title is its caption, or the first column label when the table has no title. A `NumberValue` is a number cell. Slack sorts a column of number cells as numbers. A value with a link is a link. A cell that holds only an `Action` with no fields is a button. See [Actions in Slack](#actions-in-slack). Any other value shows its text form. An empty value or column label shows a dash. The row detail stays on the dashboard. A table that selects rows shows its text form. |
 | `Chart` | A chart of the same kind: line, bar, area, or pie. A line, bar, or area chart has the categories along the axis, in their order. Each series has a point for each category. The category label and the value label are the titles of the axes. A pie has no axes. It has a segment for each category, in their order, with the label of the category and its value. A chart with no title takes its value label as its title. An empty category or series label shows a dash. |
 | `Image` | An image that Slack fetches from the address of the image. The alternative text is its alt text. The caption is its title. An image with no caption has no title. |
 | `ImageGallery` | An image for each image of the gallery, in their order. The title of the gallery is a heading above them, as in its text form. A gallery with no title has no heading. |
@@ -532,7 +532,7 @@ A block that breaks a limit of Slack shows its text form:
 - a fact or a metric of more than 2,000 characters, with its label in bold on a
   line of its own;
 - the title of a `Facts` or a `Metrics` of more than 3,000 characters, in bold;
-- a link or an action label of more than 75 characters;
+- a link or an action label that is empty or longer than 75 characters;
 - a link address of more than 3,000 characters;
 - an action that asks to confirm, when its label passes 30 characters or its
   `confirm` passes 300;
@@ -540,6 +540,7 @@ A block that breaks a limit of Slack shows its text form:
 - the alternative text or the caption of an image, of more than 2,000
   characters.
 
+In a table, an action past one of these limits shows its text form in its cell.
 A link with no address shows its words, as in text. A message holds 50 blocks,
 its buttons included. When the message has no room for more blocks, the blocks
 that are left show their text forms in the last block. The markdown of a message
@@ -549,11 +550,11 @@ installation has an endpoint.
 
 A data table holds 200 rows under its header, and 20 columns. The cells of all
 the data tables of a message hold 20,000 characters, the column labels included.
-Druks counts each cell by its text form, and an empty cell by its dash. Druks
-keeps the first rows of a table that fit. A line above the table then says how
-many rows Druks left out. It links to the run's page when the installation has
-an endpoint. A table shows its text form when it has no columns, more than 20
-columns, or no rows, or when no row fits.
+Druks counts each cell by its text form, a button by its label, and an empty
+cell by its dash. Druks keeps the first rows of a table that fit. A line above
+the table then says how many rows Druks left out. It links to the run's page
+when the installation has an endpoint. A table shows its text form when it has
+no columns, more than 20 columns, or no rows, or when no row fits.
 
 A message holds 2 charts. The first 2 charts that Slack can draw show as
 charts. Each chart after them shows its text form. Slack requires a title. A
@@ -573,8 +574,8 @@ categories, or a category label of more than 20 characters.
 
 Slack fetches an image from its address. Druks does not fetch it. Slack draws a
 png, a jpg, or a gif. Druks knows the format only from the address. An image
-shows as an image when its `url` is an outside `http(s)` address, and the path
-of the address ends in `.png`, `.jpg`, `.jpeg`, or `.gif`, in capitals or not.
+shows as an image when its `url` is an outside `http(s)` address. The path of
+the address must end in `.png`, `.jpg`, `.jpeg`, or `.gif`, in capitals or not.
 The query and the fragment do not count. Any other image shows its text form.
 This holds for an svg, an address with no extension, a path on the dashboard,
 and a `data:` address. A Druks file shows its text form too. Slack cannot read
@@ -591,9 +592,10 @@ heading and the lines of a gallery count in the 12,000 characters of markdown.
 When Slack refuses the blocks, Druks sends the text of the approval in the same
 place, with the same buttons. Slack refuses them, for example, when it cannot
 download an image, or when the channel takes no images. A table or a chart then
-shows as a markdown table, and an image as a link. Druks edits the message when
-the approval gets an answer or closes. The edit draws the blocks again, with the
-outcome in place of the buttons. An action then shows its text form.
+shows as a markdown table, an image as a link, and an action as its text form.
+Druks edits the message when the approval gets an answer or closes. The edit
+draws the blocks again, with the outcome in place of the buttons. An action then
+shows its text form.
 
 ### Actions in Slack
 
@@ -609,17 +611,23 @@ reply = await self.review(
 )
 ```
 
+An action with no fields that is alone in a cell of a table is a button too. The
+table must be at the top of the context and select no rows.
+
 The `operation` of each action in the context names a write of the run's own
 app. `review` checks the operation when the run parks, as a page read checks it.
-A button shows the `label`. With `confirm`, Slack asks first: its dialog shows
+A button shows the `label`. With `confirm`, Slack asks first. Its dialog shows
 the confirm text, the label, and **Back**. `tone`, `refresh`, and `link` have no
-effect in Slack. Any other action of the context, such as an action with fields
-or an action in a table, shows its [text form](#text-forms) in Slack: its
-label, linked to the run's page. The person runs it there.
+effect in Slack. Any other action of the context shows its
+[text form](#text-forms) in Slack: its label, linked to the run's page. The
+person runs it there. This is true for an action with fields and for an action
+beside another control in a cell. It is also true for the actions of a table
+that selects rows.
 
 The button names only the notification and the position of the action in its
-blocks. Druks reads the operation and the arguments from the blocks that it
-stored, so a click runs only an action that the review offers. On a click,
+blocks. In a table, the position is the index of the table, the row, and the
+cell. Druks reads the operation and the arguments from the blocks that it
+stored. Thus, a click runs only an action that the review offers. On a click,
 Druks finds the account of the Slack user, as for an answer:
 
 - A person whose Slack account is not connected gets a direct message with the
@@ -631,29 +639,31 @@ Druks finds the account of the Slack user, as for an answer:
 
 Druks answers Slack at once. After that, it calls the route of the operation in
 its own process, as the account. The request has the shape that the dashboard
-sends: see [Request shape](#request-shape). The request names the account in a
-place that only Druks's own process can write, so no client can copy it. The
+sends. See [Request shape](#request-shape). The request names the account in a
+place that only Druks's own process can write. Thus, no client can copy it. The
 route runs `current_account`, `require_app_access`, and its own dependencies, as
 for the dashboard. A route that takes only the identity of the signed-in person
 refuses the request.
 
 When the route answers with any 2xx status, a line with the account and the
-label takes the place of the action. The line replaces the action in the message
-and in the notification, so a second click runs nothing. While the run waits,
-its page in Druks shows the action as a button too. That page keeps no record of
-a run from Slack. A recorded request on the Activity page shows each button and
-input of its context disabled. The inputs and the buttons of the approval stay,
-and the run still waits for its answer. When the route refuses, only the person
-who clicked reads why. A refused value names its field. A refusal that gives no
-reason Druks can read names its HTTP status. One action of a message runs at a
-time. A click while one runs gets a reply that says so.
+label takes the place of the action. In a table, the line takes the place of the
+cell. The other rows keep their buttons. The line replaces the action in the
+message and in the notification. Thus, a second click runs nothing. While the
+run waits, its page in Druks shows the action as a button too. That page
+keeps no record of a run from Slack. A recorded request on the Activity page
+shows each button and input of its context disabled. The inputs and the buttons
+of the approval stay. The run still waits for its answer. When the route
+refuses, only the person who clicked reads why. A refused value names its field.
+A refusal that gives no reason that Druks can read names its HTTP status. One
+action of a message runs at a time. A click while one runs gets a reply that
+says so.
 
 Druks does not try a refused or failed action again. When Druks stops after the
 route answers and before it records the line, the action can run once more.
 
 ## Status in Slack
 
-A workflow shows where it stands with blocks: see
+A workflow shows where it stands with blocks. See
 [Report status](writing-an-app.md#report-status). Slack draws the blocks of a
 status as it draws the blocks of an approval, with no buttons. The link to the
 run page follows them when `urls.endpoint` is set. Each edit draws them again.
@@ -773,9 +783,9 @@ ui.Link("History", page="peer_history", arguments={"peer_id": peer.id})
 ui.Link("Provider status", url="https://status.example.com")
 ```
 
-A `Link` sets `page` or `url`, never both and never neither. Druks rejects a
-`Link` that sets neither or both when it builds the page. An argument can be a
-number. The link carries it as text.
+A `Link` sets exactly one of `page`, `url`, and `subject`. Druks rejects a
+`Link` that sets none or more than one when it builds the page. An argument can
+be a number. The link carries it as text.
 
 A link on a value shows the value's words. It needs no label:
 
@@ -986,7 +996,7 @@ class Card:
   "description": "Last answered 4 minutes ago.",
   "blocks": [{"block": "text", "text": "Healthy."}],
   "controls": [],
-  "link": {"block": "link", "label": "peer-7", "page": "peer", "arguments": {"peer_id": "7"}, "url": ""},
+  "link": {"block": "link", "label": "peer-7", "page": "peer", "arguments": {"peer_id": "7"}, "url": "", "subject": null},
   "drag": {}
 }
 ```
@@ -1015,7 +1025,7 @@ class Cards:
 {
   "block": "cards",
   "title": "Peers",
-  "cards": [{"block": "card", "title": "peer-7", "description": "", "blocks": [], "controls": [], "drag": {}}],
+  "cards": [{"block": "card", "title": "peer-7", "description": "", "blocks": [], "controls": [], "link": null, "drag": {}}],
   "empty": null,
   "layout": "wrap",
   "drop": null
@@ -1153,6 +1163,7 @@ class Action:
     confirm: str = ""
     refresh: Literal["none", "page", "region"] = "page"
     link: Link | None = None
+    url: str = ""
 ```
 
 ```json
@@ -1168,6 +1179,10 @@ class Action:
   "link": null
 }
 ```
+
+`url` is the page where a person runs the action. Druks sets it when `review`
+stores the context: see [Text forms](#text-forms). The JSON leaves out an empty
+`url`.
 
 `arguments` keys are the operation's own parameter names. Druks serializes
 them unchanged. A route parameter keeps its Python spelling on the wire.
@@ -1241,6 +1256,7 @@ Druks refuses the form when the page function builds it.
     "refresh": "page",
     "link": null
   },
+  "extraActions": [],
   "submit": "button",
   "layout": "stack"
 }
@@ -1276,7 +1292,7 @@ class Timeline:
       "when": "2026-08-29T09:14:02Z",
       "title": "Run started",
       "description": "",
-      "status": {"value": "status", "label": "active", "tone": "active"}
+      "status": {"value": "status", "label": "active", "tone": "active", "link": null}
     }
   ]
 }
@@ -1458,7 +1474,7 @@ ui.Chart(
 )
 ```
 
-A pie has one series, and each of its points is above zero. Druks refuses
+A pie has one series. Each of its points is above zero. Druks refuses
 another shape when it builds the block. The error names the chart by its title,
 or by its categories when it has no title. The dashboard colours the slices
 with the four chart series colours in turn, clockwise from the top. A line in
@@ -1506,7 +1522,7 @@ class Metrics:
   "metrics": [
     {
       "label": "Open peers",
-      "value": {"value": "number", "number": 12.0, "unit": ""},
+      "value": {"value": "number", "number": 12.0, "unit": "", "tone": "neutral"},
       "description": "Peers with an unanswered sweep."
     }
   ]
@@ -1532,8 +1548,8 @@ class Facts:
   "block": "facts",
   "title": "Peer",
   "facts": [
-    {"label": "Name", "value": {"value": "text", "text": "peer-7", "link": null}},
-    {"label": "State", "value": {"value": "status", "label": "parked", "tone": "warning"}}
+    {"label": "Name", "value": {"value": "text", "text": "peer-7", "description": "", "link": null}},
+    {"label": "State", "value": {"value": "status", "label": "parked", "tone": "warning", "link": null}}
   ]
 }
 ```
@@ -1573,12 +1589,16 @@ class Table:
   "rows": [
     {
       "cells": [
-        {"value": "text", "text": "peer-7", "link": {"block": "link", "label": "peer-7", "page": "peer", "arguments": {"peer_id": "7"}, "url": ""}},
-        {"value": "number", "number": 12.0, "unit": ""}
-      ]
+        {"value": "text", "text": "peer-7", "description": "", "link": {"block": "link", "label": "peer-7", "page": "peer", "arguments": {"peer_id": "7"}, "url": "", "subject": null}},
+        {"value": "number", "number": 12.0, "unit": "", "tone": "neutral"}
+      ],
+      "detail": "",
+      "key": ""
     }
   ],
-  "empty": {"block": "empty_state", "title": "No peers yet.", "description": "", "controls": []}
+  "empty": {"block": "empty_state", "title": "No peers yet.", "description": "", "controls": []},
+  "select": "",
+  "actions": []
 }
 ```
 
@@ -1609,7 +1629,7 @@ class List:
 {
   "block": "list",
   "title": "Recent notes",
-  "items": [{"value": "text", "text": "Fan noise on rack 3.", "link": null}]
+  "items": [{"value": "text", "text": "Fan noise on rack 3.", "description": "", "link": null}]
 }
 ```
 
@@ -2105,7 +2125,7 @@ Every other field keeps the server's own words.
 ```python
 class Follows:
     subject_type: str
-    subject_id: str
+    subject_id: str = ""
 
 
 class Page:
@@ -2135,7 +2155,8 @@ action in `blocks` stays with the body content.
 the URL query and rereads the page. Empty `value` means any. They are not
 actions. They do not call an operation.
 
-`Page`, `Section`, `Card` and `EmptyState` all take `controls` the same way.
+`Page`, `Section`, `Card`, `Callout`, and `EmptyState` all take `controls` the
+same way.
 `controls` is a list of `Action` and `Link`, in the order the app wants them
 read. An `Action` calls one of the app's operations. A `Link` navigates. Both
 are things an operator presses. They share the row. A `Card` can also take

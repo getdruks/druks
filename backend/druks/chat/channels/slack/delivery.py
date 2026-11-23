@@ -211,6 +211,32 @@ def get_image_block(image: ui.Image) -> dict:
     return {}
 
 
+def get_button(action: ui.Action, action_id: str) -> dict:
+    """The button that runs ``action``, with Slack's dialog when it asks to confirm. Empty
+    when its label is empty, or when its label or its confirm text is too long for Slack."""
+    label, confirm = action.label, action.confirm
+    if (
+        label
+        and len(label) <= slack.BUTTON_TEXT_LIMIT
+        and len(confirm) <= slack.CONFIRM_TEXT_LIMIT
+        and (not confirm or len(label) <= slack.CONFIRM_BUTTON_LIMIT)
+    ):
+        button = {
+            "type": "button",
+            "text": {"type": "plain_text", "text": label},
+            "action_id": action_id,
+        }
+        if confirm:
+            button["confirm"] = {
+                "title": {"type": "plain_text", "text": label},
+                "text": {"type": "plain_text", "text": confirm},
+                "confirm": {"type": "plain_text", "text": label},
+                "deny": {"type": "plain_text", "text": slack.CONFIRM_DENY_TEXT},
+            }
+        return button
+    return {}
+
+
 def get_blocks(
     text: str,
     *,
@@ -239,17 +265,18 @@ def get_blocks(
     Druks cuts each long title of a chart, and each long label of a line, bar, or area
     chart. A pie takes a segment for each category. Druks cuts no label of a pie. A message
     draws the first two charts that Slack can draw. An action with no fields takes a
-    button that carries ``token`` and its position, with Slack's dialog when it asks to
-    confirm, while there is no ``outcome``. An image at an outside address of a png, a
-    jpg, or a gif takes an image block. A gallery takes one for each such image, under its
-    title. Each other image of a gallery keeps its line of the text form, in its place. Any
-    other block, and a block past a limit of Slack, takes its text form. A table that
-    selects rows takes its text form, which holds its actions. Text that follows text joins
-    it in one markdown block. ``blocks`` take the room that the rest leaves, the question
-    included. When the room runs out, the last block holds the text forms of the blocks
-    left. A gallery that does not fit whole is one of them. When the markdown is longer
-    than Slack takes, Druks cuts the end of the blocks. A line in place of the link then
-    says so, with the link."""
+    button that carries ``token`` and its position, while there is no ``outcome``. The
+    button opens Slack's dialog when the action asks to confirm. An action with no fields
+    alone in a cell of a table takes the same button. An image at an outside address of a
+    png, a jpg, or a gif takes an image block. A gallery takes one for each such image,
+    under its title. Each other image of a gallery keeps its line of the text form, in its
+    place. Any other block, and a block past a limit of Slack, takes its text form. A table
+    that selects rows takes its text form, which holds its actions. Text that follows text
+    joins it in one markdown block. ``blocks`` take the room that the rest leaves, the
+    question included. When the room runs out, the last block holds the text forms of the
+    blocks left. A gallery that does not fit whole is one of them. When the markdown is
+    longer than Slack takes, Druks cuts the end of the blocks. A line in place of the link
+    then says so, with the link."""
     controls: list[dict] = []
     if fields and actions:
         inputs_by_id = {}
@@ -359,44 +386,55 @@ def get_blocks(
             ):
                 labels = [column.label or slack.EMPTY_CELL_TEXT for column in columns]
                 size = len("".join(labels))
-                kept_cells = []
+                body = []
 
-                for row in rows[: slack.TABLE_ROWS_LIMIT]:
-                    texts = [cell.to_markdown() or slack.EMPTY_CELL_TEXT for cell in row.cells]
+                for row_index, row in enumerate(rows[: slack.TABLE_ROWS_LIMIT]):
+                    cells, texts = [], []
+
+                    for cell_index, value in enumerate(row.cells):
+                        text = value.to_markdown() or slack.EMPTY_CELL_TEXT
+                        elements, end = [], 0
+
+                        for link in _MARKDOWN_LINK.finditer(text):
+                            escaped_words, address = link.groups()
+                            words = escaped_words.replace("\\[", "[").replace("\\]", "]")
+                            elements.append({"type": "text", "text": text[end : link.start()]})
+                            elements.append({"type": "link", "url": address, "text": words})
+                            end = link.end()
+                        match value:
+                            case ui.ControlsValue(controls=[ui.Action(fields=[]) as action]) if (
+                                token
+                                and not outcome
+                                and (
+                                    button := get_button(
+                                        action, encode_action(token, index, row_index, cell_index)
+                                    )
+                                )
+                            ):
+                                cells.append({"type": "action_cell", "element": button})
+                                # Slack counts the text of a button toward the limit of the cells.
+                                text = action.label
+                            case ui.NumberValue(number=number):
+                                # Slack sorts a column of number cells as numbers.
+                                cells.append({"type": "raw_number", "value": number, "text": text})
+                            case _ if elements:
+                                elements.append({"type": "text", "text": text[end:]})
+                                # Slack takes no text element without text.
+                                section = {
+                                    "type": "rich_text_section",
+                                    "elements": [
+                                        element for element in elements if element["text"]
+                                    ],
+                                }
+                                cells.append({"type": "rich_text", "elements": [section]})
+                            case _:
+                                cells.append({"type": "raw_text", "text": text})
+                        texts.append(text)
 
                     if size + len("".join(texts)) > table_room:
                         break
                     size += len("".join(texts))
-                    kept_cells += zip(row.cells, texts, strict=True)
-                cells = []
-
-                for value, text in kept_cells:
-                    elements, end = [], 0
-
-                    for link in _MARKDOWN_LINK.finditer(text):
-                        escaped_words, address = link.groups()
-                        words = escaped_words.replace("\\[", "[").replace("\\]", "]")
-                        elements.append({"type": "text", "text": text[end : link.start()]})
-                        elements.append({"type": "link", "url": address, "text": words})
-                        end = link.end()
-                    match value:
-                        case ui.NumberValue(number=number):
-                            # Slack sorts a column of number cells as numbers.
-                            cells.append({"type": "raw_number", "value": number, "text": text})
-                        case _ if elements:
-                            elements.append({"type": "text", "text": text[end:]})
-                            # Slack takes no text element without text.
-                            section = {
-                                "type": "rich_text_section",
-                                "elements": [element for element in elements if element["text"]],
-                            }
-                            cells.append({"type": "rich_text", "elements": [section]})
-                        case _:
-                            cells.append({"type": "raw_text", "text": text})
-                body = [
-                    cells[start : start + len(columns)]
-                    for start in range(0, len(cells), len(columns))
-                ]
+                    body.append(cells)
 
                 if body:
                     # Slack draws a data table only with a row under its header.
@@ -483,25 +521,8 @@ def get_blocks(
                         ],
                     }
                     parts = [{"type": "data_visualization", "title": heading, "chart": chart}]
-            case ui.Action(label=label, confirm=confirm, fields=[]) if token and not outcome:
-                if (
-                    label
-                    and len(label) <= slack.BUTTON_TEXT_LIMIT
-                    and len(confirm) <= slack.CONFIRM_TEXT_LIMIT
-                    and (not confirm or len(label) <= slack.CONFIRM_BUTTON_LIMIT)
-                ):
-                    button = {
-                        "type": "button",
-                        "text": {"type": "plain_text", "text": label},
-                        "action_id": encode_action(token, index),
-                    }
-                    if confirm:
-                        button["confirm"] = {
-                            "title": {"type": "plain_text", "text": label},
-                            "text": {"type": "plain_text", "text": confirm},
-                            "confirm": {"type": "plain_text", "text": label},
-                            "deny": {"type": "plain_text", "text": slack.CONFIRM_DENY_TEXT},
-                        }
+            case ui.Action(fields=[]) if token and not outcome:
+                if button := get_button(block, encode_action(token, index)):
                     parts = [{"type": "actions", "elements": [button]}]
             case ui.Image():
                 if image_block := get_image_block(block):

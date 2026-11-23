@@ -17,7 +17,6 @@ from druks.durable.models import Artifact, Run
 from druks.durable.reads import read_ask
 from druks.exceptions import ObjectNotFound
 from druks.notifications.constants import (
-    ACTION_GONE_MESSAGE,
     NOTE_FIELD,
     NOTE_REQUIRED_MESSAGE,
     QUESTION_FIELD_PREFIX,
@@ -46,20 +45,20 @@ async def list_notification_channels() -> list[dict]:
 
 async def get_rendered_ask(session: AsyncSession, run: Run) -> dict:
     """The ask that ``run`` is parked on, as the content of its notification. The blocks
-    are the ask in order, and the body is their text form. Each action is a control that a
-    click can send, and delivery makes its button. Each field is an input for a reply field
+    are the ask in order. The body is their text form. Each action is a control that a
+    click can send. Delivery makes its button. Each field is an input for a reply field
     that the gate takes: one for each question, and one for the note."""
     ask = await read_ask(session, run)
-    # An external ask has no questions, controls or artifact, so only this branch reads them.
+    # An external ask has no questions, controls or artifact. Only this branch reads them.
     if ask["presentation"] == "in_app":
         blocks = [ui.Markdown(f"# {ask['label']}")]
         context = ask.get("context", "")
         if stack := ui.Stack.from_context(context):
             app = get_app(run.app)
             pages = app.pages()
-            # A link names a page or a subject of the run's app, and a channel needs its
-            # address. The address takes the place of the page or the subject, so the
-            # stored link names one destination.
+            # A link names a page or a subject of the run's app. A channel needs its
+            # address. The address takes the place of the page or the subject. The stored
+            # link then names one destination.
             for link in iter_parts(stack.blocks, ui.Link):
                 if address := link.get_address(app.name, pages):
                     link.url, link.page, link.arguments, link.subject = address, "", {}, None
@@ -103,7 +102,7 @@ async def get_rendered_ask(session: AsyncSession, run: Run) -> dict:
             "fields": fields,
             "deep_link": None,
         }
-    # A person answers an external ask on its source, so it has no actions and no fields. Its
+    # A person answers an external ask on its source. It has no actions and no fields. Its
     # link is the one that the author of its gate declares.
     return {
         "body": ask["label"],
@@ -125,8 +124,8 @@ async def create_park_notification(
 ) -> str:
     """Create the notification of the question that ``run`` just parked on, for the account
     or in the conversation, and return its id. The caller queues its delivery. The
-    notification keeps the run and the time that it parked, so Druks refuses a click on an
-    old button after the run parks again."""
+    notification keeps the run and the time that it parked. Druks then refuses a click on
+    an old button after the run parks again."""
     rendered = await get_rendered_ask(session, run)
     notification = await Notification.create(
         session,
@@ -146,19 +145,16 @@ async def create_park_notification(
 
 
 async def get_action_request(
-    session: AsyncSession, token: str, position: int, *, user_id: str
+    session: AsyncSession, token: str, position: list[int], *, user_id: str
 ) -> dict:
     """The request that a click by ``user_id`` sends for the action at ``position`` in the
-    blocks of the notification of ``token``: the notification, and the method, the path and
-    the JSON body of the operation's route, as the dashboard sends them. Raises when the
-    action cannot run."""
+    blocks of the notification of ``token``. It holds the notification, and the method, the
+    path and the JSON body of the operation's route, as the dashboard sends them. Raises
+    when the action cannot run."""
     notification = await Notification.get_for_token(session, token)
     if not notification:
         raise UnknownTokenError()
-    # A line of text has the position of an action that ran.
-    if position >= len(notification.blocks) or notification.blocks[position]["block"] != "action":
-        raise InvalidChoiceError(ACTION_GONE_MESSAGE)
-    action = notification.blocks[position]
+    action = notification.get_action_at(position)
     if notification.is_acknowledged:
         raise AlreadyAcknowledgedError()
     # The click must land on the round of the notification, read past the identity map.
@@ -177,8 +173,8 @@ async def get_action_request(
     if not operation:
         raise InvalidChoiceError(f"The app {app.name} has no route for this action now.")
     parameters = list_route_parameters(operation.path)
-    # A number is a value even when it is 0. A client drops a segment of one or two dots
-    # from a path, and then another route answers, so neither is a value.
+    # A number is a value even when it is 0. When a client drops a segment of one or two
+    # dots from a path, another route answers. Neither segment is a value.
     if missing_names := [
         name for name in parameters if action["arguments"].get(name) in (None, "", ".", "..")
     ]:
@@ -200,7 +196,9 @@ async def get_offered_control(ask: dict, control: str) -> dict:
     for offered in ask.get("controls", []):
         if offered["id"] == control:
             return offered
-    raise InvalidChoiceError(f"unknown control {control!r}")
+    raise InvalidChoiceError(
+        f"The ask offers no control {control!r}. Answer with a control that the ask offers."
+    )
 
 
 async def validate_in_app_answer(
@@ -215,10 +213,10 @@ async def validate_in_app_answer(
 ) -> dict:
     # The in-app answer contract, shared by the runs resume route, the answer_gate
     # tool, and the notification respond rail. A question that a chat on an app's
-    # channel asked is its admin's alone. A run of an app that a team lists is its team's
-    # and the admins'. The control must be one the ask offered —
-    # the vocabulary is workflow-owned, never read from the client, so a spoofed
-    # control can't drive control flow.
+    # channel asked is its admin's alone. A run of an app that a team lists is its
+    # team's and the admins'. The control must be one that the ask offered. The workflow
+    # owns the vocabulary. Druks never reads it from the client, so that a spoofed control
+    # cannot drive control flow.
     if run.conversation_id:
         conversation = await session.get(Conversation, run.conversation_id)
         if not conversation.is_answerable_by(account_id):
@@ -244,18 +242,27 @@ async def validate_in_app_answer(
         if has_note_input:
             raise InvalidChoiceError(NOTE_REQUIRED_MESSAGE)
         if not answers:
-            raise InvalidChoiceError(f"{control} needs an answer or a note to guide the re-plan")
-    # Answers may be an offered option id or the operator's own words — free
-    # text is content that flows into the next agent prompt, so only the
-    # question ids are held to the ask; a blank answer is a client bug.
-    # Blankness is checked stripped: the HTTP models normalize whitespace, but
-    # this validator is also the direct-call boundary (the Slack rail).
+            raise InvalidChoiceError(
+                f"{control} needs an answer or a note to guide the re-plan. Answer a question, "
+                "or write a note."
+            )
+    # Answers may be an offered option id or the operator's own words. Free text is
+    # content that flows into the next agent prompt. Druks checks only the question ids
+    # against the ask. A blank answer is a client bug. The check strips the answer. The
+    # HTTP models normalize whitespace. This validator is also the boundary of a direct
+    # call, from the Slack rail.
     asked = {question["id"] for question in ask.get("questions", [])}
     for question_id, answer in answers.items():
         if question_id not in asked:
-            raise InvalidChoiceError(f"answer to {question_id!r} matches no open question")
+            raise InvalidChoiceError(
+                f"The answer to {question_id!r} matches no open question. Answer only the "
+                "questions of the ask."
+            )
         if not answer.strip():
-            raise InvalidChoiceError(f"blank answer to {question_id!r}")
+            raise InvalidChoiceError(
+                f"The answer to {question_id!r} is blank. Write an answer, or leave the "
+                "question out."
+            )
     return {"action": control, "answers": answers, "note": note}
 
 
@@ -272,13 +279,13 @@ async def respond_to_notification(
     """Answer the notification with a click by ``user_id``, whose account is
     ``account_id``, or with a link, which names nobody. In a chat, only its person answers.
     A click on the question of the chat's agent goes to the agent as the person's message.
-    So does a click on a run's control that needs more, when its message shows no inputs:
-    the chat's channel has none, or the notification holds none. A click carries
+    So does a click on a run's control that needs more, when its message shows no inputs.
+    The chat's channel then has none, or the notification holds none. A click carries
     ``values``, the answers in the inputs of its message by field name. A form takes them
     only when its fields take them. With ``has_inputs``, the click comes from a channel
-    that shows a run's inputs: the answers and the note are those of the inputs that the
-    notification holds. When it holds a note input, a control that needs a note takes no
-    empty note."""
+    that shows a run's inputs. The answers and the note are then those of the inputs that
+    the notification holds. When it holds a note input, a control that needs a note takes
+    no empty note."""
     notification = await Notification.get_for_token(session, token)
     if not notification:
         raise UnknownTokenError()
@@ -286,8 +293,8 @@ async def respond_to_notification(
         raise AlreadyAcknowledgedError()
     run, ask = None, {}
     if notification.run_id:
-        # The notification snapshots the round it was sent for; the answer must
-        # land on the run's live round, so the read goes past the identity map.
+        # The notification snapshots the round that Druks sent it for. The read goes past
+        # the identity map, because the answer must land on the run's live round.
         run = await session.get(Run, notification.run_id, populate_existing=True)
         if (
             run.state != RunState.PARKED.value
@@ -296,21 +303,21 @@ async def respond_to_notification(
             raise StaleRoundError()
         ask = await run.get_ask()
         if ask.get("presentation") != "in_app":
-            # External gates are answered on their source (PR review, ticket
-            # comment) via the existing webhook paths, never through this rail —
-            # and an ask that doesn't declare in_app isn't answerable either
-            # (the same declared-key read get_ask itself dispatches on).
-            raise InvalidChoiceError("this notification is informational; answer on its source")
+            # A person answers an external gate on its source (a PR review, a ticket
+            # comment), through the existing webhook paths, never through this rail. An
+            # ask that does not declare in_app takes no answer here either. get_ask
+            # dispatches on the same declared key.
+            raise InvalidChoiceError("This notification is informational. Answer it on its source.")
     elif not notification.conversation_id or not (notification.actions or notification.fields):
         # Without a run, only the question of a chat's agent takes an answer.
-        raise InvalidChoiceError("this notification does not take an answer")
+        raise InvalidChoiceError("This notification takes no answer.")
     control = choice["control"]
     if notification.conversation_id:
         conversation = await session.get(Conversation, notification.conversation_id)
-        # A link names nobody, so it answers no chat.
+        # A link answers no chat, because it names nobody.
         if not user_id or user_id != conversation.user_id:
             raise AnswerNotAllowedError("Only the person of this conversation can answer it.")
-        # The answers are checked before the claim, so a wrong one leaves the form open.
+        # Druks checks the answers before the claim. A wrong one then leaves the form open.
         if not run and notification.fields:
             answer = get_answer(notification.fields, values or {})
         else:
@@ -319,8 +326,9 @@ async def respond_to_notification(
             not (conversation.channel.has_inputs and notification.fields)
             and ((await get_offered_control(ask, control))["note_required"] or ask["questions"])
         ):
-            # A click on the agent's question, or on a control that needs more from a message
-            # with no inputs, reaches the chat's agent as the person's message.
+            # A click on the agent's question reaches the chat's agent as the person's
+            # message. So does a click on a control that needs more, from a message with no
+            # inputs.
             if not await notification.mark_acknowledged():
                 raise AlreadyAcknowledgedError()
             await conversation.create_message(session, answer)
@@ -350,8 +358,8 @@ async def respond_to_notification(
         note=note,
         has_note_input=has_note_input,
     )
-    # Claim first: once the run resumes, close_notifications takes each message of the
-    # question that is still open, and this one must show the click instead.
+    # Claim first. Once the run resumes, close_notifications takes each message of the
+    # question that is still open. This one must show the click instead.
     if not await notification.mark_acknowledged():
         raise AlreadyAcknowledgedError()
     await run.resume(**resume_payload)

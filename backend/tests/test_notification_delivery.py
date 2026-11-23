@@ -28,7 +28,12 @@ from druks.chat.models import Conversation
 from druks.core.apis.slack import SlackClient
 from druks.core.webhooks.slack import replace_buttons
 from druks.durable.models import AgentCall, Artifact, Run
-from druks.notifications.buttons import decode_button, encode_action, encode_button
+from druks.notifications.buttons import (
+    decode_action,
+    decode_button,
+    encode_action,
+    encode_button,
+)
 from druks.notifications.constants import CLOSED_MESSAGE
 from druks.notifications.exceptions import (
     ChannelUnavailableError,
@@ -472,6 +477,11 @@ def test_button_decode_rejects_non_string_input():
     for value in (None, 123, ["a.b"], {"action_id": "a.b"}):
         with pytest.raises(MalformedButtonError):
             decode_button(value)
+
+
+def test_the_id_of_an_action_at_the_top_names_its_block():
+    # This form must decode, because a message in Slack keeps the ids that Druks posted.
+    assert decode_action(f"{encode_button('t', '1')}.action") == ("t", [1])
 
 
 async def test_delivery_with_a_message_ts_edits_that_message_and_shows_the_outcome(slack):
@@ -1069,7 +1079,7 @@ async def test_a_link_button_opens_its_page_and_a_link_with_no_address_reads_as_
     ]
 
 
-async def test_an_action_goes_out_as_a_button_that_names_its_place_and_slack_confirms_it(slack):
+async def test_an_action_goes_out_as_a_button_that_names_its_position_and_slack_confirms_it(slack):
     blocks = _stored(
         ui.Markdown("# Review"),
         ui.Action(
@@ -1212,7 +1222,7 @@ async def test_an_approval_keeps_its_action_and_its_text_links_the_label_to_the_
     assert refused_post["blocks"][1]["elements"][0]["action_id"] == encode_action(
         notification.correlation_token, 1
     )
-    # Slack refuses the blocks, so their text goes in their place.
+    # Slack refuses the blocks. Their text goes in their place.
     assert text_post["blocks"][0]["text"].startswith(text)
 
 
@@ -1414,7 +1424,7 @@ async def test_an_approval_s_actions_are_buttons_until_it_closes_and_the_line_of
     token = approval.correlation_token
 
     await SlackChannel.post_buttons(druks_db, conversation, approval)
-    await approval.mark_action_run(1, username="member@example.com")
+    await approval.mark_action_run([1], username="member@example.com")
     await druks_db.commit()
     await replace_buttons(approval.id, channel="C1", message_ts="1.0", outcome="")
     await replace_buttons(
@@ -1632,6 +1642,137 @@ def test_the_tables_of_a_message_share_slack_s_limit_for_the_text_of_their_cells
         {"type": "markdown", "text": TABLE_OMISSION_MESSAGE.format(left=1, total=3)},
         _data_table("Log", ["Log"], ["y" * 1_998], ["y" * 1_999]),
         {"type": "markdown", "text": third_table.to_markdown()},
+    ]
+
+
+def _action_cell(label: str, action_id: str) -> dict:
+    """The cell of a data table that holds the button ``action_id``."""
+    button = {"type": "button", "text": _label(label), "action_id": action_id}
+    return {"type": "action_cell", "element": button}
+
+
+def _rich_text(*elements: dict) -> dict:
+    """The rich text cell of ``elements``."""
+    section = {"type": "rich_text_section", "elements": list(elements)}
+    return {"type": "rich_text", "elements": [section]}
+
+
+def test_a_cell_of_one_action_is_a_button_and_a_cell_of_more_controls_keeps_its_text():
+    _set_endpoint("https://druks.example")
+    log = ui.Link("Log", url="https://logs.example/7")
+    table = ui.Table(
+        columns=[ui.TableColumn(label) for label in ("Note", "", "Both", "Mixed")],
+        rows=[
+            ui.TableRow(
+                [
+                    body,
+                    ui.ControlsValue([_action(label="Archive", arguments=arguments)]),
+                    ui.ControlsValue(
+                        [
+                            _action(label="Archive"),
+                            _action(label="Clear gist", operation="clear_gist"),
+                        ]
+                    ),
+                    ui.ControlsValue([_action(label="Archive"), log]),
+                ]
+            )
+            for body, arguments in (("Fan noise", {"note_id": 7}), ("Rack 4", {"note_id": 8}))
+        ],
+    )
+
+    _, data_table = get_blocks("text", blocks=[ui.Markdown("# Review"), table], token="t")
+
+    page = "https://druks.example/runs/run-1"
+    archive = {"type": "link", "url": page, "text": "Archive"}
+    clear = {"type": "link", "url": page, "text": "Clear gist"}
+    log_link = {"type": "link", "url": "https://logs.example/7", "text": "Log"}
+    dot = {"type": "text", "text": " · "}
+    # A button names the table, the row, and the cell.
+    assert data_table["rows"][1:] == [
+        [
+            {"type": "raw_text", "text": body},
+            _action_cell("Archive", encode_action("t", 1, row, 1)),
+            _rich_text(archive, dot, clear),
+            _rich_text(archive, dot, log_link),
+        ]
+        for row, body in enumerate(("Fan noise", "Rack 4"))
+    ]
+
+
+def test_a_cell_action_that_confirms_asks_first_and_one_slack_cannot_draw_keeps_its_text():
+    rename = _action(
+        label="Rename", operation="write_note", fields=[ui.TextField(name="title", label="Title")]
+    )
+    actions = [
+        _action(label="Archive", confirm="Archive the note?"),
+        _action(label="A" * 76),
+        rename,
+    ]
+    table = ui.Table(
+        columns=[ui.TableColumn("Action")],
+        rows=[ui.TableRow([ui.ControlsValue([action])]) for action in actions],
+    )
+
+    (data_table,) = get_blocks("text", blocks=[table], token="t")
+
+    archive = _action_cell("Archive", encode_action("t", 0, 0, 0))
+    archive["element"]["confirm"] = {
+        "title": _label("Archive"),
+        "text": _label("Archive the note?"),
+        "confirm": _label("Archive"),
+        "deny": _label("Back"),
+    }
+    # With no endpoint, the text form of an action is its label.
+    assert data_table["rows"][1:] == [
+        [archive],
+        [{"type": "raw_text", "text": "A" * 76}],
+        [{"type": "raw_text", "text": "Rename"}],
+    ]
+
+
+def test_a_cell_is_a_button_only_while_its_approval_is_open():
+    table = ui.Table(
+        columns=[ui.TableColumn("Note"), ui.TableColumn("")],
+        rows=[ui.TableRow(["Fan noise", ui.ControlsValue([_action(label="Archive")])])],
+    )
+    outcome = "<@U1> chose Approve."
+
+    opened = get_blocks("text", blocks=[table], token="t")
+    closed = get_blocks("text", blocks=[table], token="t", outcome=outcome)
+
+    header = [{"type": "raw_text", "text": "Note"}, {"type": "raw_text", "text": "—"}]
+    row = [
+        {"type": "raw_text", "text": "Fan noise"},
+        _action_cell("Archive", encode_action("t", 0, 0, 1)),
+    ]
+    assert opened == [{"type": "data_table", "caption": "Note", "rows": [header, row]}]
+    assert closed == [
+        _data_table("Note", ["Note", "—"], ["Fan noise", "Archive"]),
+        {"type": "section", "text": _mrkdwn(outcome)},
+    ]
+
+
+def test_a_button_counts_its_label_toward_the_limit_of_the_cells():
+    _set_endpoint("https://druks.example")
+    archive = ui.ControlsValue([_action(label="Archive")])
+    # With their headers, the first table and two rows of buttons take all 20,000.
+    log = ui.Table(columns=[ui.TableColumn("Log")], rows=[ui.TableRow(["x" * 19_976])])
+    notes = ui.Table(
+        columns=[ui.TableColumn("Note"), ui.TableColumn("")],
+        rows=[ui.TableRow([name, archive]) for name in "yzw"],
+    )
+
+    blocks = get_blocks("text", blocks=[log, notes], token="t")
+
+    header = [{"type": "raw_text", "text": "Note"}, {"type": "raw_text", "text": "—"}]
+    rows = [
+        [{"type": "raw_text", "text": name}, _action_cell("Archive", encode_action("t", 1, row, 1))]
+        for row, name in enumerate("yz")
+    ]
+    # The button takes the 7 characters of its label, not the 43 of its linked text form.
+    assert blocks[1:] == [
+        {"type": "markdown", "text": TABLE_OMISSION_MESSAGE.format(left=1, total=3)},
+        {"type": "data_table", "caption": "Note", "rows": [header, *rows]},
     ]
 
 

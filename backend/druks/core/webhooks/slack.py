@@ -44,7 +44,7 @@ from druks.settings import get_settings
 from druks.signals import publish
 from druks.webhooks import Webhook
 
-# Slack signs v0:{ts}:{body}; a timestamp outside the window is a replayed capture.
+# Slack signs v0:{ts}:{body}. A timestamp outside the window is a replayed capture.
 _TIMESTAMP_TOLERANCE_SECONDS = 300
 
 # What a clicked message says in place of its buttons.
@@ -55,12 +55,12 @@ ANSWER_MESSAGE = "<@{user}> answered:\n{answers}"
 
 # What a person with no linked account reads by DM after a click on an action.
 CONNECT_MESSAGE = (
-    "Your Slack account is not connected to Druks, so Druks cannot run this action as you. "
+    "Your Slack account is not connected to Druks. Druks cannot run this action as you. "
     "Connect it, then click the button again: {url}"
 )
 # The same, on an installation with no address for the link.
 CONNECT_IN_DRUKS_MESSAGE = (
-    "Your Slack account is not connected to Druks, so Druks cannot run this action as you. "
+    "Your Slack account is not connected to Druks. Druks cannot run this action as you. "
     "Select Connect Slack under Chat → Channels in Druks, then click the button again."
 )
 
@@ -74,7 +74,8 @@ def verify_slack_signature(
     if not secret:
         raise HTTPException(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
-            "Webhook secret is not set.",
+            "Slack has no signing secret. Paste it on the Slack card under Settings → "
+            "Connections → Services.",
         )
     if not signature or not timestamp:
         raise HTTPException(
@@ -89,7 +90,6 @@ def verify_slack_signature(
             "Invalid webhook signature.",
         ) from error
     if age_seconds > _TIMESTAMP_TOLERANCE_SECONDS:
-        # A replayed capture: the signature may be real but the request is old.
         raise HTTPException(
             status.HTTP_401_UNAUTHORIZED,
             "Stale webhook timestamp.",
@@ -143,9 +143,8 @@ class SlackInteractivity(SlackWebhook):
 
     def get_values(self) -> dict:
         """The answers in the inputs of the clicked message, by field name, in the shapes
-        that a form's fields read. Slack keys the state of an input by its block, and Druks
-        names the block of a form's input for its field. A message without inputs has no
-        state."""
+        that a form's fields read. Slack keys the state of an input by its block. Druks names
+        the block of a form's input for its field. A message without inputs has no state."""
         values = {}
         for block_id, inputs in self.data.get("state", {}).get("values", {}).items():
             for element in inputs.values():
@@ -181,11 +180,11 @@ class SlackInteractivity(SlackWebhook):
             Slack.Authentication.get_authority((await Slack.get()).identity["team_id"]),
             user,
         )
-        # A click that cannot answer still gets a 200: nothing a retry can fix, so
-        # acknowledge instead of feeding Slack's retry loop. Corruption propagates as
-        # the logged 500 it is. What Slack shows after a click starts at once and is
-        # not awaited: a slow or refused post cannot fail the click, and a queue would
-        # add up to a second before the person sees it.
+        # A click that cannot answer still gets a 200, because a retry of Slack can fix
+        # nothing. Corruption propagates as the logged 500 that it is. What Slack shows
+        # after a click starts at once. The click does not wait for it. A slow or refused
+        # post then cannot fail the click. A queue would add up to a second before the
+        # person sees it.
         try:
             if is_action_button(action_id):
                 token, position = decode_action(action_id)
@@ -210,7 +209,7 @@ class SlackInteractivity(SlackWebhook):
         except MalformedButtonError as error:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "Unknown button.") from error
         except StaleRoundError as error:
-            # The round is over, so the clicked message loses its buttons.
+            # The round is over. The clicked message loses its buttons.
             self.log_ignored(event="block_actions", reason=type(error).__name__)
             notification = await Notification.get_for_token(db_session(), token)
             await DBOS.start_workflow_async(
@@ -228,8 +227,8 @@ class SlackInteractivity(SlackWebhook):
             AnswerNotAllowedError,
             ObjectNotFound,
         ) as error:
-            # The question can still be open, so the message stays, and only the
-            # clicker reads why.
+            # The question can still be open. The message stays. Only the clicker reads
+            # why.
             self.log_ignored(event="block_actions", reason=type(error).__name__)
             await DBOS.start_workflow_async(
                 explain_reason,
@@ -262,7 +261,7 @@ class SlackInteractivity(SlackWebhook):
     async def start_action(
         self,
         token: str,
-        position: int,
+        position: list[int],
         *,
         account_id: str | None,
         user: str,
@@ -271,7 +270,7 @@ class SlackInteractivity(SlackWebhook):
     ) -> Response:
         """Start the action at ``position`` in the blocks of the notification of ``token``,
         as the clicker's account. A person with no linked account gets a DM that says how to
-        connect one, and nothing runs."""
+        connect one. Nothing runs."""
         request = await get_action_request(db_session(), token, position, user_id=user)
         notification = request["notification"]
         if account_id:
@@ -303,7 +302,7 @@ class SlackInteractivity(SlackWebhook):
 @DBOS.workflow(name="slack.run_action")
 async def run_action(
     notification_id: str,
-    position: int,
+    position: list[int],
     *,
     account_id: str,
     user: str,
@@ -322,7 +321,9 @@ async def run_action(
 
 
 @DBOS.step(name="slack.call_action")
-async def call_action(notification_id: str, position: int, *, account_id: str, user: str) -> None:
+async def call_action(
+    notification_id: str, position: list[int], *, account_id: str, user: str
+) -> None:
     """Call the route of the action at ``position`` in the notification's blocks as the
     account, and store the line that replaces the action. The call holds the notification's
     lock, and reads the action again under it. Raises ActionRefusedError with what the
@@ -354,16 +355,16 @@ async def call_action(notification_id: str, position: int, *, account_id: str, u
     raise ActionRefusedError(get_refusal(response)["message"])
 
 
-# DBOS runs a lone step as a workflow of its own, so the click handler starts these two
-# and does not wait for them.
+# DBOS runs a lone step as a workflow of its own. The click handler starts these two and
+# does not wait for them.
 @DBOS.step(name="slack.replace_buttons", retries_allowed=True, max_attempts=5)
 async def replace_buttons(
     notification_id: str, *, channel: str, message_ts: str, outcome: str
 ) -> None:
-    """Edit the notification's message in Slack: ``outcome`` takes the place of its
-    buttons and inputs. With no outcome, an open question keeps them, and a question that
-    is over keeps its message. The edit holds the lock of the message, so it draws what an
-    action of the message stored."""
+    """Edit the notification's message in Slack. ``outcome`` takes the place of its
+    buttons and inputs. With no outcome, an open question keeps them. A question that is
+    over keeps its message. The edit holds the lock of the message, so that it draws what
+    an action of the message stored."""
     async with step_session() as session:
         notification = await session.get(Notification, notification_id)
     async with lock(
@@ -419,13 +420,13 @@ class SlackEvents(SlackWebhook):
 
     async def on_event_callback(self) -> Response:
         """Publish a person's message, another bot's tag in a room, and the bot's own
-        join to a room. Edits, deletes, other joins, hidden events, the bot's own
-        messages, other bots' untagged or direct messages, and people from other
-        workspaces are not facts for anyone."""
+        join to a room. Edits, deletes, other joins, hidden events, and the bot's own
+        messages are not facts for anyone. Nor are other bots' untagged or direct
+        messages, or people from other workspaces."""
         event = self.data["event"]
         bot_user_id = (await Slack.get()).identity["bot_user_id"]
-        # A bot has no Slack account to link and no direct message to answer in, so it
-        # reaches the bot only by a tag in a room.
+        # A bot has no Slack account to link and no direct message to answer in. Another
+        # bot reaches this bot only by a tag in a room.
         is_tag = f"<@{bot_user_id}>" in event.get("text", "")
         is_tag_in_room = is_tag and event.get("channel_type") != "im"
         is_fact = (

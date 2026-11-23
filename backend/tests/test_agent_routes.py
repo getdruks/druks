@@ -53,17 +53,8 @@ def client(tmp_path: Path, druks_db):
 
 @pytest.fixture
 async def account(druks_db):
-    # The account configure_app_for_test signs requests in as.
+    # The account that configure_app_for_test signs requests in as.
     return await Account.get_or_create(druks_db, "op@example.com")
-
-
-async def _connect_github() -> None:
-    # Start routes guard on the GitHub service identity before spending a run.
-    await connect_service(
-        "github",
-        identity={"app_id": "1", "slug": "druks-operator"},
-        secrets={"private_key": "operator-pem", "webhook_secret": "hook-secret"},
-    )
 
 
 @pytest.fixture
@@ -143,7 +134,12 @@ def test_openapi_pins_platform_and_app_agent_routes(client: TestClient):
 async def test_review_request_returns_the_run_id_start_hands_back(
     client: TestClient, account: Account, monkeypatch
 ):
-    await _connect_github()
+    # A start route checks the GitHub service identity before it spends a run.
+    await connect_service(
+        "github",
+        identity={"app_id": "1", "slug": "druks-operator"},
+        secrets={"private_key": "operator-pem", "webhook_secret": "hook-secret"},
+    )
     project = await Project.create(name="Acme")
     await ProjectRepo.create(project_id=project.id, full_name="acme/app")
     live_run_id = "review-run-id"
@@ -174,7 +170,7 @@ async def test_review_request_returns_the_run_id_start_hands_back(
 
 
 class _FakeTracker(Tracker):
-    """Answers the ticket read the route delegates to — no HTTP."""
+    """Answers the ticket read that the route delegates, with no HTTP call."""
 
     known_exceptions = (LinearAPIError, UnknownTicketError)
 
@@ -221,7 +217,7 @@ def _tracker_stub(fake):
 
 
 def test_software_factory_start_dispatches_the_tracker_ticket(client: TestClient, monkeypatch):
-    # The start dispatches in the agent's request, so the run records its conversation.
+    # The run records the conversation, because the start dispatches in the agent's request.
     # The ticket stays where it is until the build moves it to In Progress.
     fake = _FakeTracker()
     monkeypatch.setattr(SoftwareFactory, "get_tracker", _tracker_stub(fake))
@@ -281,8 +277,8 @@ def test_software_factory_start_translates_an_unknown_tracker_ticket(
 
 
 def test_software_factory_start_reports_a_missing_tracker_configuration(client: TestClient):
-    # Default settings select Linear but carry no API key, so no tracker
-    # resolves — the operator-configuration error, not a 404 or a 500.
+    # Default settings select Linear but carry no API key. No tracker resolves.
+    # That is an error of the operator's configuration, not a 404 or a 500.
     response = client.post("/api/software_factory/work-items/ENG-1/start")
 
     assert response.status_code == 503
@@ -310,7 +306,7 @@ async def test_review_request_refuses_when_github_is_not_connected(client: TestC
     await ProjectRepo.create(project_id=project.id, full_name="acme/app")
 
     async def start(cls, **kwargs):
-        raise AssertionError("start must not be reached without a GitHub identity")
+        raise AssertionError("start must not run without a GitHub identity")
 
     monkeypatch.setattr(PullRequestReview, "start", classmethod(start))
 
@@ -715,7 +711,10 @@ async def test_answer_gate_keys_empty_request_changes_on_note_required(
     assert rejected.status_code == 400
     assert rejected.json() == {
         "code": "INVALID_GATE_ANSWER",
-        "message": "request_changes needs an answer or a note to guide the re-plan",
+        "message": (
+            "request_changes needs an answer or a note to guide the re-plan. Answer a "
+            "question, or write a note."
+        ),
         "retryable": False,
     }
     assert len(resume_spy) == 1
@@ -756,7 +755,7 @@ async def test_answer_gate_requires_an_aware_parked_at(client: TestClient, druks
 async def test_cancel_run_route(client: TestClient, druks_db):
     note = await Note.create(body="cancelled note")
     run = await seed_run(druks_db, kind=Summarize.kind, subject=note)
-    # Parked, so the cancel must clear the gate — and never write the receipt.
+    # The cancel must clear the gate of the parked run. It must never write the receipt.
     run.input_gate = "review"
     run.input_request = {"presentation": "in_app", "questions": []}
     run.input_requested_at = run.utc_now()
@@ -797,11 +796,13 @@ async def test_transcript_route_matches_the_read_machinery(client: TestClient, d
     assert response.status_code == 200
     chunk = read_transcript_chunk(call, "stdout", offset=0, limit=7)
     assert response.json() == chunk.model_dump(mode="json", by_alias=True)
-    # The 7-byte cut lands mid-é; the window serves the seam's one �.
+    # The 7-byte cut lands in the middle of é. The window serves one � at the seam.
     assert response.json()["text"] == "hello �"
 
 
-async def test_resume_route_contract_is_preserved(client: TestClient, druks_db, resume_spy):
+async def test_the_resume_route_takes_only_a_valid_answer_to_an_open_gate(
+    client: TestClient, druks_db, resume_spy
+):
     unknown = client.post("/api/runs/no-such-run/resume", json={"control": "approve"})
     assert unknown.status_code == 404
 
@@ -823,7 +824,10 @@ async def test_resume_route_contract_is_preserved(client: TestClient, druks_db, 
     assert empty_changes.status_code == 422
     assert empty_changes.json() == {
         "error": "HTTP_422",
-        "detail": "request_changes needs an answer or a note to guide the re-plan",
+        "detail": (
+            "request_changes needs an answer or a note to guide the re-plan. Answer a "
+            "question, or write a note."
+        ),
     }
     assert resume_spy == []
 
@@ -834,8 +838,8 @@ async def test_resume_route_contract_is_preserved(client: TestClient, druks_db, 
     assert ok.status_code == 204
     assert resume_spy == [{"id": run.id, "action": "approve", "answers": {}, "note": "go"}]
 
-    # Once the answer has landed (receipt written, gate cleared), the
-    # dashboard's double-submit stays the conflict it has always been.
+    # After the answer lands, Druks writes the receipt and clears the gate. A second
+    # submit from the dashboard is then a conflict.
     run.answer_parked_at = run.input_requested_at
     run.input_gate = None
     run.input_request = None
@@ -877,7 +881,10 @@ async def test_usage_agent_route_matches_the_service(client: TestClient, druks_d
     assert len(response.content) <= 4 * 1024
 
     today = client.get("/api/usage/today").json()
-    assert sum(h["spendUsd"] for h in today["providers"]) == pytest.approx(body["spendTodayUsd"])
-    assert sum(h["runs"] for h in today["providers"]) == body["runsToday"]
-    assert sum(h["tokens"] for h in today["providers"]) == body["tokensToday"]
+    providers = today["providers"]
+    assert sum(provider["spendUsd"] for provider in providers) == pytest.approx(
+        body["spendTodayUsd"]
+    )
+    assert sum(provider["runs"] for provider in providers) == body["runsToday"]
+    assert sum(provider["tokens"] for provider in providers) == body["tokensToday"]
     assert today["day"] == body["day"]

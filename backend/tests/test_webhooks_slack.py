@@ -55,6 +55,7 @@ from druks.testing import (
 from druks.webhooks.router import match_webhook
 from druks_field_notes.models import Note
 from druks_field_notes.workflows import Summarize
+from fastapi import HTTPException
 from fastapi.responses import JSONResponse, Response
 from fastapi.testclient import TestClient
 from slack_sdk.errors import SlackApiError
@@ -168,10 +169,10 @@ def test_match_webhook_resolves_slack_interactivity():
 
 
 def test_signature_verifier_against_a_known_answer(monkeypatch):
-    # A fixed vector computed independently of the code under test (and of the
-    # _signed_headers helper), so a mirror-image bug in the base-string
-    # construction can't hide: the verifier is held to Slack's
-    # v0:{ts}:{body} algorithm itself. Clock frozen to the vector's epoch.
+    # A fixed vector, computed apart from the code under test and from _signed_headers.
+    # A mirror-image bug in the base string then cannot hide. The vector holds the
+    # verifier to Slack's v0:{ts}:{body} algorithm itself. The clock stops at the
+    # vector's epoch.
     body = b"payload=%7B%22type%22%3A%22ping%22%7D"
     timestamp = "1234567890"
     known = "v0=b14d6fbbfab2d9b2cb99c67b41b6289778e8bf6f4b534b69451b9e7ba1f878dd"
@@ -182,13 +183,13 @@ def test_signature_verifier_against_a_known_answer(monkeypatch):
     verify_slack_signature(body, known, timestamp, "slack-test-signing-secret")
 
     bit_flipped = known[:-1] + ("0" if known[-1] != "0" else "1")
-    with pytest.raises(Exception) as rejected:
+    with pytest.raises(HTTPException) as rejected:
         verify_slack_signature(body, bit_flipped, timestamp, "slack-test-signing-secret")
-    assert getattr(rejected.value, "status_code", None) == 401
+    assert rejected.value.status_code == 401
 
-    with pytest.raises(Exception) as tampered_body:
+    with pytest.raises(HTTPException) as tampered_body:
         verify_slack_signature(b"tampered" + body, known, timestamp, "slack-test-signing-secret")
-    assert getattr(tampered_body.value, "status_code", None) == 401
+    assert tampered_body.value.status_code == 401
 
 
 async def test_unsigned_or_stale_requests_401_and_never_resume(
@@ -241,8 +242,8 @@ async def test_signed_click_routes_through_respond(
         message_ts=_MESSAGE_TS,
         outcome="<@U7> chose Approve.",
     )
-    # The request's own session committed the transition; drop the ambient
-    # (task-scoped) session's cached instance to read it.
+    # The request's own session committed the transition. Drop the cached instance of
+    # the ambient (task-scoped) session to read it.
     ambient_db_session().expunge_all()
     assert (await ambient_db_session().get(Notification, notification.id)).state == "acknowledged"
     assert notification.correlation_token not in response.text
@@ -468,12 +469,11 @@ _REVIEW_ASK = {
 
 
 async def _approval(
-    druks_db, *actions: ui.Action, is_in_a_chat: bool = False
+    druks_db, *blocks: ui.Block, is_in_a_chat: bool = False
 ) -> tuple[Run, Notification]:
-    """A run parked on _REVIEW_ASK with ``actions`` at the top of its context, and the
-    notification that its park made: for its account, or in the thread of its Slack chat
-    with U7. On an installation with an endpoint, the notification links to the run's
-    page."""
+    """A run parked on _REVIEW_ASK with ``blocks`` as its context, and the notification that
+    its park made. The notification is for its account, or in the thread of its Slack chat
+    with U7. On an installation with an endpoint, the notification links to the run's page."""
     account = await Account.get_or_create(druks_db, "op@example.com")
     conversation_id = None
     if is_in_a_chat:
@@ -496,10 +496,10 @@ async def _approval(
             **_REVIEW_ASK,
             # Each action holds the page of its run, as review stores it.
             "context": [
-                action.model_dump(
+                block.model_dump(
                     mode="json", by_alias=True, context={"action_url": f"/runs/{run_id}"}
                 )
-                for action in actions
+                for block in blocks
             ],
         },
         input_requested_at=Base.utc_now(),
@@ -578,7 +578,7 @@ async def test_a_click_answers_the_run_with_the_inputs_and_shows_them_in_their_p
 
     assert response.json() == {"accepted": True}
     assert resume_spy == [{"id": run.id, "note": "", **reply}]
-    # The chat's agent is not asked.
+    # Druks does not ask the chat's agent.
     assert started.await_args_list == [
         call(replace_buttons, approval.id, channel="C1", message_ts=_MESSAGE_TS, outcome=outcome)
     ]
@@ -769,9 +769,9 @@ async def member(druks_db):
 
 
 async def _click(action_id: str, *, user: str = "U7") -> httpx.Response:
-    """Click the button ``action_id`` as Slack user ``user``. Slack stamps each click with
-    its own time, so a second click is not a retry of the first. The API overrides no
-    dependency, so the route of an action checks the credential of its call itself."""
+    """Click the button ``action_id`` as Slack user ``user``. A second click is not a retry
+    of the first, because Slack stamps each click with its own time. The API overrides no
+    dependency. The route of an action checks the credential of its call itself."""
     api = configure_app_for_test(settings=get_settings(), authenticated=False)
     payload = _interactivity_payload(action_id, user=user)
     payload["actions"][0]["action_ts"] = str(time.time_ns())
@@ -799,7 +799,7 @@ async def test_a_click_on_an_action_runs_its_route_as_the_clicker_and_names_them
     # Slack has its answer while the action waits to run.
     assert (clicked.json(), action_run.args[:3]) == (
         {"accepted": True},
-        (run_action, approval.id, 1),
+        (run_action, approval.id, [1]),
     )
     await _run(action_run)
 
@@ -820,7 +820,79 @@ async def test_a_click_on_an_action_runs_its_route_as_the_clicker_and_names_them
     ]
 
 
-async def test_an_action_button_whose_place_is_no_number_runs_nothing(
+async def test_a_click_on_a_row_s_action_runs_it_on_the_note_of_that_row_as_the_clicker(
+    druks_db, slack_card, member, started, resume_spy, slack_api
+):
+    notes = [
+        await Note.create(body="Fan noise on rack 3."),
+        await Note.create(body="Rack 4 is quiet."),
+    ]
+    table = ui.Table(
+        columns=[ui.TableColumn("Note"), ui.TableColumn("")],
+        rows=[ui.TableRow([note.body, ui.ControlsValue([_archive(note)])]) for note in notes],
+    )
+    _, approval = await _approval(druks_db, table)
+    await druks_db.commit()
+    token, blocks = approval.correlation_token, approval.blocks
+
+    clicked = await _click(encode_action(token, 1, 1, 1))
+    action_run = started.await_args
+    assert (clicked.json(), action_run.args[:3]) == (
+        {"accepted": True},
+        (run_action, approval.id, [1, 1, 1]),
+    )
+    await _run(action_run)
+
+    druks_db.expunge_all()
+    assert [(await druks_db.get(Note, note.id)).archived_by for note in notes] == [
+        None,
+        "member@example.com",
+    ]
+    stored = await druks_db.get(Notification, approval.id)
+    # The line takes the place of the cell. Every other part keeps its place.
+    line = ui.TextValue("member@example.com ran Archive.").model_dump(mode="json", by_alias=True)
+    first_row, second_row = blocks[1]["rows"]
+    ran_row = {**second_row, "cells": [second_row["cells"][0], line]}
+    assert stored.blocks == [blocks[0], {**blocks[1], "rows": [first_row, ran_row]}, *blocks[2:]]
+    assert "| Rack 4 is quiet. | member@example.com ran Archive. |" in stored.body
+    # The action neither answers the run nor closes its question.
+    assert (resume_spy, stored.is_acknowledged) == ([], False)
+    (edit,) = slack_api.calls
+    button = {
+        "type": "button",
+        "text": {"type": "plain_text", "text": "Archive"},
+        "action_id": encode_action(token, 1, 0, 1),
+    }
+    assert (edit["method"], edit["text"], edit["blocks"][1]["rows"][1:]) == (
+        "chat.update",
+        stored.body,
+        [
+            [
+                {"type": "raw_text", "text": "Fan noise on rack 3."},
+                {"type": "action_cell", "element": button},
+            ],
+            [
+                {"type": "raw_text", "text": "Rack 4 is quiet."},
+                {"type": "raw_text", "text": "member@example.com ran Archive."},
+            ],
+        ],
+    )
+
+    await _click(encode_action(token, 1, 1, 1))
+    assert started.await_args == call(
+        explain_reason, "C1", user="U7", reason="This action already ran.", thread_ts=_THREAD_TS
+    )
+    await _click(encode_action(token, 1, 0, 1))
+    await _run(started.await_args)
+
+    druks_db.expunge_all()
+    assert [(await druks_db.get(Note, note.id)).archived_by for note in notes] == [
+        "member@example.com",
+        "member@example.com",
+    ]
+
+
+async def test_an_action_button_whose_position_is_no_number_runs_nothing(
     druks_db, slack_card, started
 ):
     note = await Note.create(body="Fan noise on rack 3.")
@@ -841,7 +913,7 @@ async def _answered(druks_db, note: Note) -> Notification:
 
 async def _ran(druks_db, note: Note) -> Notification:
     _, approval = await _approval(druks_db, _archive(note))
-    await approval.mark_action_run(1, username="member@example.com")
+    await approval.mark_action_run([1], username="member@example.com")
     return approval
 
 
@@ -973,7 +1045,7 @@ async def test_an_action_runs_only_for_a_person_whose_account_can_use_its_app(
 async def test_a_value_that_the_route_refuses_is_named_to_the_clicker_alone(
     druks_db, slack_card, member, started, slack_api
 ):
-    # A "?" that Druks did not encode would end the path, and no route would answer it.
+    # A "?" that Druks did not encode would end the path. No route would answer it.
     archive = ui.Action(label="Archive", operation="archive_note", arguments={"note_id": "7?draft"})
     _, approval = await _approval(druks_db, archive)
     await druks_db.commit()
@@ -1059,7 +1131,7 @@ async def test_a_second_click_on_an_action_runs_nothing_once_the_first_click_ran
     _, approval = await _approval(druks_db, _archive(note))
     await druks_db.commit()
     action_id = encode_action(approval.correlation_token, 1)
-    # Both clicks come before the action runs, so each starts a run of it.
+    # Both clicks come before the action runs. Each starts a run of it.
     await _click(action_id)
     await _click(action_id)
 
@@ -1087,7 +1159,7 @@ async def test_an_action_s_line_is_stored_before_its_edit_so_a_failed_edit_runs_
     await _click(action_id)
     with pytest.raises(DeliveryError):
         await _run(started.await_args)
-    # DBOS tries the edit again, and the action not.
+    # DBOS tries the edit again. It does not try the action again.
     await replace_buttons(approval.id, channel="C1", message_ts=_MESSAGE_TS, outcome="")
     await _click(action_id)
 
@@ -1108,7 +1180,7 @@ async def test_an_answer_while_an_action_runs_keeps_its_outcome_and_the_action_s
     await _click(encode_action(approval.correlation_token, 1))
 
     # The route answers, then the edit of an approval lands before the action's own edit.
-    await call_action(approval.id, 1, account_id=member.id, user="U7")
+    await call_action(approval.id, [1], account_id=member.id, user="U7")
     await _click(encode_button(approval.correlation_token, "approve"))
     await _run(started.await_args)
     await replace_buttons(approval.id, channel="C1", message_ts=_MESSAGE_TS, outcome="")
