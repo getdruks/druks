@@ -1041,7 +1041,7 @@ class Action:
     block: Literal["action"] = "action"
     label: str
     operation: str
-    arguments: dict[str, Any] = {}
+    arguments: dict = {}
     fields: list[Field] = []
     tone: Literal["default", "primary", "danger"] = "default"
     confirm: str = ""
