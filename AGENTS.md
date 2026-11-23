@@ -135,12 +135,12 @@ Run the backend gates:
 uv run ruff check backend druks-calls
 uv run ruff format --check backend druks-calls
 uv pip install -e backend/tests/druks-field_notes
-uv run pytest backend/ -n auto
+uv run pytest backend/ -n auto --maxprocesses=8
 ```
 
 The suite collects the proof app, so `pytest backend/` fails at collection
-until that editable install has run. `-n auto` runs one pytest-xdist worker per
-CPU, and each worker gets its own database and Redis index (see
+until that editable install has run. `-n auto --maxprocesses=8` runs one pytest-xdist worker per
+CPU, up to eight, and each worker gets its own database and Redis index (see
 `docs/development.md`). Leave `-n` off to debug one test.
 
 Before you push, install and run the house-rules checker. Pin the version Druks

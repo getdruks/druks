@@ -137,20 +137,22 @@ Backend checks:
 uv pip install -e backend/tests/druks-field_notes   # once per environment
 uv run ruff check backend druks-calls
 uv run ruff format --check backend druks-calls
-uv run pytest backend/ -n auto
+uv run pytest backend/ -n auto --maxprocesses=8
 ```
 
 The suite builds its subjects from `field_notes`, the proof app. This standalone
 distribution depends on Druks. It installs like an author app, not as a Druks
 dependency. Install it one time for the full suite.
 
-`-n auto` runs the suite under pytest-xdist, one worker per CPU. Each worker
-creates and uses its own database, named `druks_test_gw0`, `druks_test_gw1`, and
-so on after the one `DRUKS_TEST_DATABASE_URL` names. It also uses its own Redis
-index, counting down from the one `DRUKS_TEST_REDIS_URL` names. Redis has 16
-indexes by default, so a run takes up to 16 workers. A test that creates a
-database of its own names it with `worker_name` from `druks.testing`. Run one
-test without `-n` when you want a debugger.
+`-n auto --maxprocesses=8` runs the suite under pytest-xdist, one worker per CPU up to
+eight. Each worker creates and uses its own database, named `druks_test_gw0`,
+`druks_test_gw1`, and so on after the one `DRUKS_TEST_DATABASE_URL` names. The
+databases stay after the run, and the next run resets them. A worker also uses its own
+Redis index, counting down from the one `DRUKS_TEST_REDIS_URL` names, and it never
+takes index 0, the one the application points at by default. The default index 15
+leaves room for 15 workers, and a worker with no index left fails at start with a
+message that says so. A test that creates a database of its own names it with
+`worker_name` from `druks.testing`. Run one test without `-n` when you want a debugger.
 
 The pull-request backend
 workflow does the same. Pyright is available for local and editor use. It is not

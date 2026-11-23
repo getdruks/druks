@@ -26,8 +26,9 @@ def test_a_worker_takes_the_redis_index_that_counts_down_from_its_number(monkeyp
     assert testing._worker_redis_url("redis://cache:6379/15") == "redis://cache:6379/13"
 
 
-def test_a_worker_past_the_last_redis_index_fails_loudly(monkeypatch):
-    monkeypatch.setattr(testing, "_WORKER", "gw16")
+@pytest.mark.parametrize(("worker", "path"), [("gw15", "/15"), ("gw1", "/0"), ("gw4", "/3")])
+def test_a_worker_never_takes_the_applications_redis_index(monkeypatch, worker, path):
+    monkeypatch.setattr(testing, "_WORKER", worker)
 
-    with pytest.raises(RuntimeError, match="gw16 has no Redis index left"):
-        testing._worker_redis_url("redis://cache:6379/15")
+    with pytest.raises(RuntimeError, match=f"{worker} has no Redis index left"):
+        testing._worker_redis_url(f"redis://cache:6379{path}")

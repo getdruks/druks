@@ -58,7 +58,7 @@ from druks.secrets.models import VaultSecret
 from druks.settings import Settings, configure_settings, get_settings
 from druks.workflows import Workflow, WorkflowError, _bind_instance, current_workflow
 
-# druks.testing is the author door for testing an app: these four, plus the
+# druks.testing is the author door for testing an app: these five, plus the
 # fixtures the pytest11 entry point registers. Everything else here is the
 # repository suite's own harness.
 __all__ = [
@@ -67,6 +67,7 @@ __all__ = [
     "run_workflow",
     "seed_call",
     "seed_run",
+    "worker_name",
 ]
 
 # The fixtures never read the application's settings: DRUKS_DATABASE_URL and
@@ -95,8 +96,10 @@ def _worker_redis_url(url: str) -> str:
     if not _WORKER:
         return url
     parsed = urlsplit(url)
-    index = int(parsed.path.lstrip("/") or 0) - int(_WORKER.removeprefix("gw"))
-    if index < 0:
+    number = int(_WORKER.removeprefix("gw"))
+    index = int(parsed.path.lstrip("/") or 0) - number
+    # Index 0 is where the application's own Redis points by default, and a test flushes its index.
+    if index < 0 or (index == 0 and number):
         raise RuntimeError(f"{_WORKER} has no Redis index left under {url}: use fewer workers")
     return urlunsplit(parsed._replace(path=f"/{index}"))
 
