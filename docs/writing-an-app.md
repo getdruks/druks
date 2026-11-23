@@ -1270,12 +1270,13 @@ A gate waits for a person. To wait for a machine, for example a review from a
 bot or the checks on a commit, wait on a topic:
 
 ```python
-review = await self.wait("review.completed", label="Waiting for the review", ttl_seconds=3600)
+review = await self.wait("review.completed", label="Waiting for the review")
 ```
 
 The run stays running. The run page shows the label. Druks sends no
 notification and keeps the warm sandbox. When the wait is longer than
-`ttl_seconds`, the run fails with `WaitTimeout`.
+`ttl_seconds`, the workflow fails with `WaitTimeout`. Without `ttl_seconds`,
+the limit is 14 days, as for a gate.
 
 A subscriber answers the wait through the workflow class and the subject. The
 facts it sends are the result of `wait()`:
