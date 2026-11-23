@@ -16,7 +16,10 @@ class InvalidChoiceError(NotificationError):
 
 
 class AnswerNotAllowedError(NotificationError):
-    pass
+    def __init__(self, reason: str, *, link: str | None = None) -> None:
+        # A person whom Druks cannot name here, such as a Slack account that is not
+        # linked, can still answer on the run's page, where Druks knows who signed in.
+        super().__init__(f"{reason} Open it in Druks: {link}" if link else reason)
 
 
 class AlreadyAcknowledgedError(NotificationError):

@@ -13,7 +13,7 @@ from druks.api.dependencies import EngineDep, SessionDep
 from druks.database import session_scope
 from druks.durable.live import EventStream
 from druks.events import reads
-from druks.events.feed import FeedDestinations, FeedItem, FeedResponse
+from druks.events.feed import FeedDestinations, FeedItem, FeedResponse, list_account_ids
 from druks.events.models import Event
 
 router = APIRouter(prefix="/api/events", tags=["feed"])
@@ -58,8 +58,11 @@ async def list_feed(
     cursor = await Event.get_cursor(session)
     events = list(await session.scalars(history.order_by(Event.id.desc()).limit(limit + 1)))
     next_cursor = str(events[limit - 1].id) if len(events) > limit else None
+    account_ids = list_account_ids(event.payload for event in events)
+    usernames = await Account.list_usernames(session, account_ids)
     return FeedResponse.model_validate(
-        {"items": events[:limit], "cursor": cursor, "next_cursor": next_cursor}
+        {"items": events[:limit], "cursor": cursor, "next_cursor": next_cursor},
+        context={"usernames": usernames},
     )
 
 
@@ -121,10 +124,17 @@ async def stream_feed(
         while not await request.is_disconnected():
             async with session_scope(engine) as session:
                 next_cursor = await Event.get_cursor(session)
-                events = await session.scalars(
-                    history.where(Event.committed_after(cursor)).order_by(Event.id)
+                events = list(
+                    await session.scalars(
+                        history.where(Event.committed_after(cursor)).order_by(Event.id)
+                    )
                 )
-                items = [FeedItem.model_validate(event) for event in events]
+                account_ids = list_account_ids(event.payload for event in events)
+                usernames = await Account.list_usernames(session, account_ids)
+                items = [
+                    FeedItem.model_validate(event, context={"usernames": usernames})
+                    for event in events
+                ]
             for item in items:
                 yield f"data: {item.model_dump_json(by_alias=True)}\n\n"
             cursor = next_cursor

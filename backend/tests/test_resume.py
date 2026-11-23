@@ -47,7 +47,13 @@ async def test_resume_sends_the_offered_control_as_the_action(druks_db, monkeypa
     await _park(druks_db)
 
     await resume_run(druks_db, "r1", ResumeRequest(control="approve", answers={"q1": "a"}))
-    assert captured == {"id": "r1", "action": "approve", "answers": {"q1": "a"}, "note": ""}
+    assert captured == {
+        "id": "r1",
+        "action": "approve",
+        "answers": {"q1": "a"},
+        "note": "",
+        "answered_by_id": "",
+    }
 
 
 async def test_resume_passes_free_text_answers_and_note_as_content(druks_db, monkeypatch):
@@ -76,6 +82,7 @@ async def test_resume_passes_free_text_answers_and_note_as_content(druks_db, mon
         "action": "approve",
         "answers": {"q1": "neither — use the existing cache"},
         "note": "keep the migration out of this PR",
+        "answered_by_id": "",
     }
 
 
@@ -116,6 +123,7 @@ async def test_resume_accepts_empty_request_changes_when_it_needs_no_note(druks_
         "action": "request_changes",
         "answers": {},
         "note": "",
+        "answered_by_id": "",
     }
 
 
@@ -136,6 +144,7 @@ async def test_resume_request_changes_with_a_note_passes(druks_db, monkeypatch):
         "action": "request_changes",
         "answers": {},
         "note": "split the migration",
+        "answered_by_id": "",
     }
 
 

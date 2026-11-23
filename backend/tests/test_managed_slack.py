@@ -414,4 +414,6 @@ async def test_a_forwarded_click_answers_its_notification_once(
         {"accepted": False, "duplicate": True},
         {"accepted": False},
     ]
-    assert resume_spy == [{"id": run.id, "action": "approve", "answers": {}, "note": ""}]
+    assert resume_spy == [
+        {"id": run.id, "action": "approve", "answers": {}, "note": "", "answered_by_id": ""}
+    ]

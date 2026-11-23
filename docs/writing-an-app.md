@@ -1300,6 +1300,46 @@ A subjectless workflow cannot use in-app review. A subjectless custom gate must
 override `on_wait()` to show the wait. Without this override, nobody sees the
 wait. Druks then raises an error and does not park the run.
 
+Every gate's reply, a review's and `YesNo`'s included, carries `answered_by`: the
+username of the account that answered in Druks. The admin of a
+[public number](chat.md#link-a-number) answers as the number's bot admin account,
+whose username names no person. It is empty when no account answered: an answer
+from outside Druks, a link in a notification, which names nobody, or a click in
+Slack by a person whose Slack account is not linked. Only Druks sets it: `answer()`
+refuses `answered_by`.
+
+To make one person decide, name their account's username as `approver`. An
+app usually reads it from its [settings](#app-settings-and-checks), in a step:
+
+```python
+@step
+async def get_approver(self) -> str:
+    return (await Deploys.settings()).approver
+```
+
+```python
+reply = await self.review(context=plan, approver=await self.get_approver())
+```
+
+A review with an approver runs one more step than a review without one. Read
+outside a step, a setting that an operator sets or clears while a run waits
+would make the run's replay take other steps, and the replay would fail.
+
+Only that account can answer. The dashboard, a Slack button, and `answer_gate`
+refuse everyone else, admins included. The refusal says who must answer and links
+to the run, so an approver whose Slack account is not linked answers there. Druks
+sends the approver the [Run waits for an answer](configuration.md#notifications)
+notification, with the review's context, its buttons, and a link to the run.
+The run shows under Needs you on the approver's
+[Dashboard](concepts.md#current-work-on-the-dashboard), and not on the
+Dashboard of the person who started it. That person gets no notification. When
+a chat started the run, the chat gets no buttons. Its agent tells the person
+that the run waits, and names the approver only in an operator's own chat. See
+[Agent access](chat.md#agent-access). The run fails before it parks: with
+`UnknownApprover` when no account has the username, and with
+`ApproverCannotUseApp` when the account cannot use the app. Without
+`approver`, the review asks as described above.
+
 For a yes or no decision, wait on the built-in `YesNo` gate:
 
 ```python
@@ -1414,9 +1454,9 @@ post the message a second time.
   reads the status again every two seconds. A workflow that does not report shows
   only a line below the messages while it is active. See
   [Read replies and tool calls](chat.md#read-replies-and-tool-calls).
-- A workflow that no chat started shows its status where its approvals go: the
-  Slack channel that its account chose, else the account's direct message. See
-  [Notifications](configuration.md#notifications).
+- A workflow that no chat started shows its status where its account's
+  notifications go: the Slack channel that its account chose, else the
+  account's direct message. See [Notifications](configuration.md#notifications).
 - A web chat keeps the status in Druks. So does a chat on a channel that cannot
   edit a message, such as WhatsApp. So does an account with no Slack channel and
   no linked Slack account. Druks sends no message. It does not send the status of

@@ -352,6 +352,44 @@ async def test_own_and_default_account_runs_count_before_preview_limits(client, 
     assert {row["run"] for row in running["rows"]} <= my_runs
 
 
+async def test_a_waiting_review_that_names_an_approver_needs_the_approver_alone(client, druks_db):
+    service = await Account.get_or_create(druks_db, "service@example.invalid")
+    other = await Account.get_or_create(druks_db, "another@example.invalid")
+    operator = await Account.get_or_create(druks_db, "op@example.com")
+    review = {"presentation": "in_app"}
+    for_me = await seed_run(
+        druks_db,
+        kind=Summarize.kind,
+        state="parked",
+        input_gate="review",
+        input_request={**review, "approver_id": operator.id},
+        account_id=other.id,
+    )
+    for starter in (operator, service):
+        await seed_run(
+            druks_db,
+            kind=Summarize.kind,
+            state="parked",
+            input_gate="review",
+            input_request={**review, "approver_id": other.id},
+            account_id=starter.id,
+        )
+    # A run that failed while it waited keeps its ask, and shows to its account.
+    failed = await seed_run(
+        druks_db,
+        kind=Summarize.kind,
+        state="failed",
+        input_gate="review",
+        input_request={**review, "approver_id": other.id},
+        account_id=operator.id,
+    )
+
+    body = overview(client)
+
+    assert [row["run"] for row in body["needsYou"]["rows"]] == [for_me.id]
+    assert [row["run"] for row in body["failed"]["rows"]] == [failed.id]
+
+
 async def test_recorded_times_follow_the_run_account(client, druks_db):
     operator = await Account.get_or_create(druks_db, "op@example.com")
     other = await Account.get_or_create(druks_db, "another@example.invalid")

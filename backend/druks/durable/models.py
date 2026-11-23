@@ -397,6 +397,7 @@ class Run(Base):
             func.left(cls.input_request["label"].as_string(), 240).label("request_label"),
             cls.input_request["presentation"].as_string().label("presentation"),
             cls.input_request["url"].as_string().label("request_url"),
+            cls.input_request["approver_id"].as_string().label("approver_id"),
             state,
             func.row_number()
             .over(

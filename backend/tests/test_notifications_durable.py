@@ -41,11 +41,12 @@ from druks.notifications.services import respond_to_notification
 from druks.secrets.datastructures import Audience
 from druks.secrets.models import VaultSecret
 from druks.settings import Settings, configure_settings, get_settings
+from druks.teams.models import Team
 from druks.testing import configure_app_for_test, init_db, make_settings
 from druks.workflows import Gate, OperatorReply, Run, Workflow
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, Field
-from sqlalchemy import NullPool, create_engine, select, text
+from sqlalchemy import NullPool, create_engine, delete, select, text
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.orm import Session
 
@@ -116,6 +117,12 @@ def _build_park_flows():
             )
             _REVIEW_REPLIES.append(reply)
 
+    class ApproverFlow(Workflow):
+        subject = NotificationProbe
+
+        async def run_multistep(self, approver: str) -> None:
+            _REVIEW_REPLIES.append(await self.review(approver=approver))
+
     class ExternalFlow(Workflow):
         subject = NotificationProbe
 
@@ -156,7 +163,15 @@ def _build_park_flows():
             _FAILED_EXECUTIONS.append(self.workflow_id)
             raise RuntimeError("the disk is full")
 
-    return InAppFlow, ExternalFlow, SubjectlessFlow, ExternalUrlFlow, DoubleParkFlow, FailingFlow
+    return (
+        InAppFlow,
+        ApproverFlow,
+        ExternalFlow,
+        SubjectlessFlow,
+        ExternalUrlFlow,
+        DoubleParkFlow,
+        FailingFlow,
+    )
 
 
 # The topic that a status flow waits on after each round of its reports, until the test sends.
@@ -226,6 +241,9 @@ async def rt():
                 9016,
                 9017,
                 9018,
+                9019,
+                9020,
+                9022,
             )
         )
         session.commit()
@@ -236,6 +254,7 @@ async def rt():
     configure_session(engine)
     (
         in_app_flow,
+        approver_flow,
         external_flow,
         subjectless_flow,
         external_url_flow,
@@ -260,6 +279,7 @@ async def rt():
             engine=engine,
             schema_engine=schema_engine,
             InAppFlow=in_app_flow,
+            ApproverFlow=approver_flow,
             ExternalFlow=external_flow,
             SubjectlessFlow=subjectless_flow,
             ExternalUrlFlow=external_url_flow,
@@ -965,7 +985,7 @@ async def test_a_cancelled_run_closes_the_question_s_message(rt, deliver_spy):
     assert edit["outcome"] == CLOSED_MESSAGE
 
 
-async def _respond_in_own_session(rt, token, choice, *, user_id=None, **click):
+async def _respond_in_own_session(rt, token, choice, *, user_id=None, account_id=None, **click):
     # Each caller is its own task, so the scoped registry gives each its own
     # session — a real request-shaped transaction. (The HTTP layer itself is
     # pinned by the unit route tests; driving DBOS's send through a TestClient
@@ -974,7 +994,7 @@ async def _respond_in_own_session(rt, token, choice, *, user_id=None, **click):
     db_session.registry.set(session)
     try:
         await respond_to_notification(
-            session, token, choice, user_id=user_id, account_id=None, **click
+            session, token, choice, user_id=user_id, account_id=account_id, **click
         )
         await session.commit()
         return "ok"
@@ -1092,7 +1112,13 @@ async def test_a_slack_chat_s_review_offers_its_buttons_in_its_thread(rt, delive
     )
     assert clicked == "ok"
     await _wait_run(rt, workflow_id, lambda run: run.state == RunState.FINISHED)
-    reply = OperatorReply(action="request_changes", answers={"q1": "postgres"}, note="Use a queue.")
+    # The person of the chat answers as the chat's account.
+    reply = OperatorReply(
+        action="request_changes",
+        answers={"q1": "postgres"},
+        note="Use a queue.",
+        answered_by="op@example.com",
+    )
     assert reply in _REVIEW_REPLIES
     session = get_session(rt.engine)
     try:
@@ -1106,6 +1132,95 @@ async def test_a_slack_chat_s_review_offers_its_buttons_in_its_thread(rt, delive
         assert list(bodies) == []
     finally:
         await session.close()
+
+
+async def test_a_review_asks_its_approver_and_only_their_answer_resumes_it(rt, deliver_spy):
+    async def create():
+        await _install_slack()
+        approver = await Account.get_or_create(db_session(), "paulo@example.com")
+        await approver.update_preferences(notification_channel_id="C-paulo")
+        requester = await Account.get_default(db_session())
+        # The requester's direct message, which only they read.
+        conversation = Conversation(
+            account_id=requester.id, source=ConversationSource.SLACK, user_id="U1"
+        )
+        db_session().add(conversation)
+        await db_session().flush()
+        return approver.id, requester.id, conversation.id
+
+    approver_id, requester_id, conversation_id = await _seed(rt, create)
+    reset = current_conversation_id.set(conversation_id)
+    try:
+        workflow_id = await rt.ApproverFlow.start(
+            subject=NotificationProbe(id=9019), approver="Paulo@example.com"
+        )
+    finally:
+        current_conversation_id.reset(reset)
+
+    notification = await _wait_notification(rt, workflow_id, "delivered")
+    # The approver gets the question, and the requester's chat gets no buttons.
+    assert [row.id for row in await _notifications_for_run(rt, workflow_id)] == [notification.id]
+    assert notification.account_id == approver_id
+    (call,) = deliver_spy.calls
+    assert (call["channel"], call["actions"]) == ("C-paulo", notification.actions)
+    session = get_session(rt.engine)
+    try:
+        (told,) = await session.scalars(
+            select(Message.body).where(Message.conversation_id == conversation_id)
+        )
+    finally:
+        await session.close()
+    assert f"Run {workflow_id} waits for an answer from paulo@example.com." in told
+
+    token = notification.correlation_token
+    by_requester = await _respond_in_own_session(
+        rt, token, {"control": "approve"}, user_id="U1", account_id=requester_id
+    )
+    by_approver = await _respond_in_own_session(
+        rt, token, {"control": "approve"}, user_id="U2", account_id=approver_id
+    )
+
+    assert (by_requester, by_approver) == ("AnswerNotAllowedError", "ok")
+    await _wait_run(rt, workflow_id, lambda run: run.state == RunState.FINISHED)
+    assert OperatorReply(action="approve", answered_by="paulo@example.com") in _REVIEW_REPLIES
+
+
+async def test_a_review_whose_approver_has_no_account_fails_the_run(rt, deliver_spy):
+    workflow_id = await rt.ApproverFlow.start(
+        subject=NotificationProbe(id=9020), approver="nobody@example.com"
+    )
+
+    run = await _wait_run(rt, workflow_id, lambda run: run.state == RunState.FAILED)
+    assert "no account has that username" in run.failure_message()
+
+
+async def test_a_review_whose_approver_cannot_use_the_app_fails_the_run(rt, deliver_spy):
+    async def create():
+        await Account.get_or_create(db_session(), "outsider@example.com")
+        # Team.create takes only an installed app, and the module's app is not installed.
+        team = Team(
+            name="Probes",
+            members=[await Account.get_default(db_session())],
+            apps=[NotificationsDurable.name],
+        )
+        db_session().add(team)
+        await db_session().flush()
+        return team.id
+
+    team_id = await _seed(rt, create)
+
+    async def remove():
+        await db_session().execute(delete(Team).where(Team.id == team_id))
+
+    try:
+        workflow_id = await rt.ApproverFlow.start(
+            subject=NotificationProbe(id=9022), approver="outsider@example.com"
+        )
+        run = await _wait_run(rt, workflow_id, lambda run: run.state == RunState.FAILED)
+    finally:
+        # The module shares one database, and the team binds every later run of the app.
+        await _seed(rt, remove)
+    assert "cannot use the app notifications_durable" in run.failure_message()
 
 
 async def test_concurrent_responds_resolve_to_one_answer(rt, deliver_spy):

@@ -28,6 +28,7 @@ from druks.notifications.services import (
     get_rendered_ask,
     respond_to_notification,
 )
+from druks.settings import configure_settings
 from druks.teams.models import Team
 from druks.testing import configure_app_for_test, make_settings, seed_dbos_status, seed_run
 from druks_field_notes.workflows import Summarize
@@ -364,7 +365,15 @@ async def test_respond_resumes_and_marks_acknowledged(druks_db, resume_spy):
         account_id=None,
     )
 
-    assert resume_spy == [{"id": run.id, "action": "approve", "answers": {"q1": "a"}, "note": ""}]
+    assert resume_spy == [
+        {
+            "id": run.id,
+            "action": "approve",
+            "answers": {"q1": "a"},
+            "note": "",
+            "answered_by_id": "",
+        }
+    ]
     assert (await druks_db.get(Notification, notification.id)).state == "acknowledged"
 
 
@@ -395,7 +404,15 @@ async def test_a_click_that_answers_in_a_thread_tells_the_chat(druks_db, resume_
         account_id=None,
     )
 
-    assert resume_spy == [{"id": run.id, "action": "approve", "answers": {}, "note": ""}]
+    assert resume_spy == [
+        {
+            "id": run.id,
+            "action": "approve",
+            "answers": {},
+            "note": "",
+            "answered_by_id": run.account_id,
+        }
+    ]
     internal = await druks_db.scalars(
         select(Message.body).where(
             Message.conversation_id == run.conversation_id, Message.is_internal
@@ -433,6 +450,7 @@ async def test_a_click_with_inputs_in_a_thread_answers_the_run_without_the_agent
             "action": "request_changes",
             "answers": {"note": "mysql", "why": "Because."},
             "note": "Use a queue.",
+            "answered_by_id": run.account_id,
         }
     ]
     assert notification.is_acknowledged
@@ -481,7 +499,13 @@ async def test_a_control_that_needs_a_note_takes_an_answer_when_the_review_takes
     )
 
     assert resume_spy == [
-        {"id": run.id, "action": "request_changes", "answers": {"q1": "a"}, "note": ""}
+        {
+            "id": run.id,
+            "action": "request_changes",
+            "answers": {"q1": "a"},
+            "note": "",
+            "answered_by_id": "",
+        }
     ]
 
 
@@ -583,6 +607,29 @@ async def test_a_click_on_a_chat_question_is_the_person_s_next_message(druks_db,
     assert question.is_acknowledged
     assert await _list_messages(druks_db, question) == [("MySQL", False, "pending")]
     started.assert_awaited_once_with(deliver, question.conversation_id)
+
+
+async def test_a_click_that_names_nobody_gets_the_approver_and_the_run_s_page(tmp_path, druks_db):
+    # A Slack account that is not linked clicks as nobody, the approver too.
+    configure_settings(make_settings(tmp_path, urls={"endpoint": "https://druks.example"}))
+    approver = await Account.get_or_create(druks_db, "paulo@example.com")
+    run, notification = await _parked_notification(
+        druks_db, ask={**_IN_APP_ASK, "approver_id": approver.id}
+    )
+
+    with pytest.raises(AnswerNotAllowedError) as refused:
+        await respond_to_notification(
+            druks_db,
+            notification.correlation_token,
+            {"control": "approve"},
+            user_id="U7",
+            account_id=None,
+        )
+
+    assert str(refused.value) == (
+        "Only paulo@example.com can answer this run. Open it in Druks: "
+        f"https://druks.example/runs/{run.id}"
+    )
 
 
 async def test_a_link_answers_no_chat_question(druks_db, started):
@@ -819,7 +866,13 @@ async def test_the_respond_route_takes_answers_without_a_note(tmp_path, druks_db
 
     assert response.status_code == 204
     assert resume_spy == [
-        {"id": run.id, "action": "request_changes", "answers": {"q1": "a"}, "note": ""}
+        {
+            "id": run.id,
+            "action": "request_changes",
+            "answers": {"q1": "a"},
+            "note": "",
+            "answered_by_id": "",
+        }
     ]
 
 

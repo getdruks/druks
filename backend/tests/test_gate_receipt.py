@@ -5,7 +5,7 @@ from dbos import DBOS
 from dbos import error as dbos_error
 from druks import ui
 from druks.contrib.software_factory.workflows import PullRequestReview
-from druks.durable.exceptions import GateTimeout
+from druks.durable.exceptions import GateTimeout, WorkflowError
 from druks.durable.models import Run
 from druks.durable.reads import read_ask
 from druks.events.models import Event
@@ -69,7 +69,12 @@ async def test_valid_reply_records_the_request_round_before_current_fields_clear
         assert event.payload["gate"] == "review"
         assert event.payload["input_requested_at"] == run.input_requested_at.isoformat()
     assert request.payload["input_request"] == _STORED_ASK
-    assert receipt.payload["result"] == {"action": "approve", "answers": {}, "note": ""}
+    assert receipt.payload["result"] == {
+        "action": "approve",
+        "answers": {},
+        "note": "",
+        "answered_by_id": "",
+    }
 
 
 async def test_yes_no_parks_with_its_own_controls(druks_db, direct_steps, monkeypatch):
@@ -79,13 +84,14 @@ async def test_yes_no_parks_with_its_own_controls(druks_db, direct_steps, monkey
     workflow._workflow_id = run.id
     workflow._subject = note.identity
     token = current_workflow.set(workflow)
-    monkeypatch.setattr(DBOS, "recv_async", AsyncMock(return_value={"action": "yes", "note": "go"}))
+    answer = {"action": "yes", "note": "go", "answered_by_id": run.account_id}
+    monkeypatch.setattr(DBOS, "recv_async", AsyncMock(return_value=answer))
     try:
         reply = await YesNo.wait(input_request={"presentation": "in_app", "label": "Keep it?"})
     finally:
         current_workflow.reset(token)
 
-    assert reply == YesNo(action="yes", note="go")
+    assert (reply.action, reply.note, reply.answered_by) == ("yes", "go", "op@example.com")
     druks_db.expunge_all()
     parked = await druks_db.scalar(select(Event).where(Event.type == "workflow.parked"))
     assert parked.payload["input_request"] == {
@@ -98,6 +104,38 @@ async def test_yes_no_parks_with_its_own_controls(druks_db, direct_steps, monkey
         ],
         "reply_fields": ["action", "note"],
     }
+
+
+async def test_a_reply_names_only_the_account_that_druks_stored(
+    druks_db, direct_steps, monkeypatch
+):
+    note = await Note.create(body="A quote")
+    run = await seed_run(druks_db, kind=Summarize.kind, subject=note)
+    workflow = Summarize()
+    workflow._workflow_id = run.id
+    workflow._subject = note.identity
+    token = current_workflow.set(workflow)
+    answer = {"action": "yes", "answered_by": "paulo@example.com"}
+    monkeypatch.setattr(DBOS, "recv_async", AsyncMock(return_value=answer))
+    try:
+        reply = await YesNo.wait(input_request={"presentation": "in_app", "label": "Keep it?"})
+    finally:
+        current_workflow.reset(token)
+
+    assert reply.answered_by == ""
+
+
+async def test_an_app_cannot_name_who_answered_a_gate(druks_db):
+    note = await Note.create(body="A quote")
+
+    with pytest.raises(WorkflowError, match="sets answered_by, answered_by_id, and only Druks"):
+        await OperatorReply.answer(
+            note,
+            workflow=Summarize,
+            action="approve",
+            answered_by="paulo@example.com",
+            answered_by_id="0196",
+        )
 
 
 @pytest.mark.parametrize(

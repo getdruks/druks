@@ -84,9 +84,11 @@ from druks.durable.engine import (
 )
 from druks.durable.enums import AgentCallStatus, RunState, WorkflowEvent
 from druks.durable.exceptions import (
+    ApproverCannotUseApp,
     FatalError,
     GateTimeout,
     SubjectlessGate,
+    UnknownApprover,
     WaitFailed,
     WaitTimeout,
     WorkflowError,
@@ -351,9 +353,16 @@ class Gate(BaseModel):
 
     `wait()` parks the running workflow until `answer()` resolves it or the TTL ends.
     It then returns the validated reply. Both ends of the channel are methods of the
-    class."""
+    class.
+
+    Every reply carries ``answered_by``, the username of the account that answered in
+    Druks. A public number's admin answers as the number's bot admin account, whose
+    username names no person. It is empty when no account answered: an answer from
+    outside Druks, a link, or a click in Slack by a person whose Slack account is not
+    linked. Druks stores the account's id, and the reply gets its username."""
 
     name: ClassVar[str] = ""
+    answered_by: str = ""
 
     def __init_subclass__(cls, **kwargs) -> None:
         super().__init_subclass__(**kwargs)
@@ -377,6 +386,11 @@ class Gate(BaseModel):
         workflow: type["Workflow"],
         **reply,
     ) -> None:
+        if taken := sorted(reply.keys() & {"answered_by", "answered_by_id"}):
+            raise WorkflowError(
+                f"{cls.__name__}.answer() sets {', '.join(taken)}, and only Druks names who "
+                "answered. Leave them out."
+            )
         workflow._validate_subject(subject)
         if parked_run := await Run.get_latest_for_subject(
             db_session(),
@@ -454,8 +468,9 @@ async def _park(
     await workflow._reap_run()
     if input_request and input_request.get("presentation") == "in_app":
         # The dashboard shows a note box only for a gate whose reply fields
-        # include note.
-        input_request = {"questions": [], **input_request, "reply_fields": list(gate.model_fields)}
+        # include note. Druks fills the fields of Gate itself, so no answer sends them.
+        reply_fields = [name for name in gate.model_fields if name not in Gate.model_fields]
+        input_request = {"questions": [], **input_request, "reply_fields": reply_fields}
         context = input_request.get("context", "")
         if stack := Stack.from_context(context):
             operations = get_app(workflow.app).operations()
@@ -514,30 +529,47 @@ async def _park(
     payload = await DBOS.recv_async(gate.name, timeout_seconds=ttl_seconds)
     if payload is None:
         raise GateTimeout(gate.name)
-    reply = gate.model_validate(payload)
+    answer = {**payload, "answered_by": ""}
+    if answered_by_id := answer.pop("answered_by_id", ""):
+        # An answer that no account gave runs no step. A run that such an answer resumed
+        # thus replays the steps that it recorded.
+        async def get_username() -> str:
+            async with step_session() as session:
+                return (await session.get(Account, answered_by_id)).username
+
+        answer["answered_by"] = await DBOS.run_step_async(
+            StepOptions(name=f"{gate.name}.answered_by"), get_username
+        )
+    reply = gate.model_validate(answer)
     await _emit_run_event(
         workflow.workflow_id,
         RunState.RUNNING,
         subject=workflow._subject,
         facts={**_GATE_CLEARED, "answer_parked_at": Run.input_requested_at},
-        result=reply,
+        result={
+            **reply.model_dump(mode="json", exclude={"answered_by"}),
+            "answered_by_id": answered_by_id,
+        },
     )
     return reply
 
 
 async def _notify_account(workflow_id: str, subject: dict) -> None:
-    # A run that a chat started asks in that chat. The person then does not get the same
-    # buttons twice. The step still runs for every park with a subject. A parked run then
-    # replays its recorded steps in their order.
+    # A review's approver gets the question wherever the run started. Otherwise, a run
+    # that a chat started asks in that chat. The person then does not get the same
+    # buttons twice. The step still runs for every park with a subject. A parked run
+    # then replays its recorded steps in their order.
     async def _create() -> str | None:
         async with step_session() as session:
             run = await session.get(Run, workflow_id)
-            if run.input_request and not run.conversation_id:
+            ask = run.input_request or {}
+            account_id = ask.get("approver_id") or (None if run.conversation_id else run.account_id)
+            if ask and account_id:
                 return await create_park_notification(
                     session,
                     run,
                     subject=subject,
-                    account_id=run.account_id,
+                    account_id=account_id,
                     deep_link=run.get_link(),
                 )
 
@@ -559,7 +591,13 @@ async def _notify_conversation(workflow_id: str, subject: dict) -> bool:
                 conversation = await session.get(Conversation, run.conversation_id)
                 channel = conversation.channel
                 ask = run.input_request or {}
-                if channel and channel.has_buttons and ask.get("presentation") == "in_app":
+                # Only the approver answers, so the chat gets no buttons.
+                if (
+                    channel
+                    and channel.has_buttons
+                    and ask.get("presentation") == "in_app"
+                    and not ask.get("approver_id")
+                ):
                     return await create_park_notification(
                         session,
                         run,
@@ -611,7 +649,7 @@ async def _replace_status(workflow_id: str, subject: dict | None, stack: Stack) 
             status = await Notification.create(
                 session,
                 conversation_id=run.conversation_id,
-                # A run that no chat started reports where its approvals go.
+                # A run that no chat started reports where its account's notifications go.
                 account_id=None if run.conversation_id else run.account_id,
                 reason=STATUS_REASON,
                 body=stack.to_markdown(),
@@ -1154,8 +1192,8 @@ class Workflow:
     async def report(self, blocks: list[Block]) -> None:
         """Show ``blocks`` as the status of the workflow, in place of the status before.
         The first report posts the status in the chat that started the workflow, or else
-        where its approvals go. Each later report edits that message. The report is a
-        checkpoint. A replay of it changes nothing and sends nothing."""
+        where its account's notifications go. Each later report edits that message. The
+        report is a checkpoint. A replay of it changes nothing and sends nothing."""
         stack = Stack(blocks)
         # Druks sends a status as text too. A part with no text form then fails before the step.
         stack.to_markdown()
@@ -1188,13 +1226,18 @@ class Workflow:
         )
 
     async def review(
-        self, *, questions: list[BaseModel] | None = None, context: str | list[Block] = ""
+        self,
+        *,
+        questions: list[BaseModel] | None = None,
+        context: str | list[Block] = "",
+        approver: str = "",
     ) -> OperatorReply:
         """Park for an in-app decision of the operator, and return the reply. The ask
         carries the controls, the ``questions`` and the ``context``, which the dashboard
         shows beside the reviewed document. The read side finds that document when it
-        shows the ask, because a parked run makes no new artifacts. For an answer from
-        outside Druks, use a Gate."""
+        shows the ask, because a parked run makes no new artifacts. ``approver`` is the
+        username of the one account that may answer. For an answer from outside Druks,
+        use a Gate."""
         if not self._subject:
             # A person answers an in-app review on the surfaces of the subject. A run with no
             # subject has none. Nobody then ever sees the ask.
@@ -1205,6 +1248,22 @@ class Workflow:
         }
         if context:
             request["context"] = context
+        if approver:
+
+            async def get_approver_id() -> str:
+                async with step_session() as session:
+                    account = await Account.get_for_username(session, approver)
+                    if not account:
+                        raise UnknownApprover(approver)
+                    # Only the approver may answer, so an approver who cannot use the
+                    # app would leave the run waiting until its gate times out.
+                    if not await account.can_use_app(get_app(self.app)):
+                        raise ApproverCannotUseApp(approver, self.app)
+                    return account.id
+
+            request["approver_id"] = await DBOS.run_step_async(
+                StepOptions(name="review.approver"), get_approver_id
+            )
         reply = await _park(
             self, gate=OperatorReply, input_request=request, ttl_seconds=GATE_TTL_SECONDS
         )

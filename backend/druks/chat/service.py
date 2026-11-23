@@ -142,11 +142,10 @@ async def get_agent(
     template = bot.prompt
     if account_type == AccountKind.BOT_ADMIN:
         template = ADMIN_PROMPT
-    is_shared_thread = bool(conversation.thread_id) and conversation.channel.has_readable_threads
     context = {
         "source": conversation.source,
         "thread_id": conversation.thread_id,
-        "is_shared_thread": is_shared_thread,
+        "is_shared_thread": conversation.is_shared_thread,
         "sign_ins": sign_ins,
         "apps": [
             app
@@ -157,7 +156,7 @@ async def get_agent(
     if conversation.connection:
         context.update(await conversation.channel.get_prompt_context(session, conversation))
     prompt = await render_prompt(template, **context)
-    if is_shared_thread and account_type in (AccountKind.BOT, AccountKind.BOT_ADMIN):
+    if conversation.is_shared_thread and account_type in (AccountKind.BOT, AccountKind.BOT_ADMIN):
         prompt = f"{prompt}\n\n{THREAD_PROMPT}"
     if conversation.agent:
         prompt = f"{prompt}\n\n{conversation.agent.instructions}"
@@ -174,8 +173,7 @@ def get_agent_tools(conversation: Conversation) -> AllowedTools:
     if account_type == AccountKind.BOT_ADMIN:
         admin_tools = (get_tool_name(name, [bot.app], {bot.app}) for name in bot.admin_tools)
         tools = (*admin_tools, *ADMIN_TOOLS)
-    is_shared_thread = bool(conversation.thread_id) and conversation.channel.has_readable_threads
-    if is_shared_thread and account_type in (AccountKind.BOT, AccountKind.BOT_ADMIN):
+    if conversation.is_shared_thread and account_type in (AccountKind.BOT, AccountKind.BOT_ADMIN):
         tools = (*tools, *THREAD_TOOLS)
     return tools
 

@@ -632,6 +632,17 @@ async def test_list_open_subjects_caps_the_workflows(client: TestClient, druks_d
     assert len(body["subjects"]) == 50
 
 
+async def test_get_gate_names_the_approver_by_username(client: TestClient, druks_db):
+    approver = await Account.get_or_create(druks_db, "paulo@example.com")
+    run = await _park(druks_db, await Note.create(body="answer gate"))
+    run.input_request = {**run.input_request, "approver_id": approver.id}
+    await druks_db.flush()
+
+    ask = client.get(f"/api/gates/{run.id}").json()["ask"]
+
+    assert (ask["approver"], "approver_id" in ask) == ("paulo@example.com", False)
+
+
 async def test_get_gate_then_answer_roundtrip(client: TestClient, druks_db, resume_spy):
     note = await Note.create(body="answer gate")
     run = await _park(druks_db, note)
@@ -649,7 +660,15 @@ async def test_get_gate_then_answer_roundtrip(client: TestClient, druks_db, resu
     )
     assert answered.status_code == 200
     assert answered.json()["result"] == "answered"
-    assert resume_spy == [{"id": run.id, "action": "approve", "answers": {}, "note": "ship it"}]
+    assert resume_spy == [
+        {
+            "id": run.id,
+            "action": "approve",
+            "answers": {},
+            "note": "ship it",
+            "answered_by_id": run.account_id,
+        }
+    ]
 
 
 async def test_answer_gate_keys_empty_request_changes_on_note_required(
@@ -689,6 +708,7 @@ async def test_answer_gate_keys_empty_request_changes_on_note_required(
             "action": "request_changes",
             "answers": {},
             "note": "",
+            "answered_by_id": relaxed_run.account_id,
         }
     ]
 
@@ -836,7 +856,15 @@ async def test_the_resume_route_takes_only_a_valid_answer_to_an_open_gate(
         json={"control": "approve", "answers": {}, "note": "go"},
     )
     assert ok.status_code == 204
-    assert resume_spy == [{"id": run.id, "action": "approve", "answers": {}, "note": "go"}]
+    assert resume_spy == [
+        {
+            "id": run.id,
+            "action": "approve",
+            "answers": {},
+            "note": "go",
+            "answered_by_id": run.account_id,
+        }
+    ]
 
     # After the answer arrives, Druks writes the receipt and clears the gate. A second
     # submit from the dashboard is then a conflict.

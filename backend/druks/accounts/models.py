@@ -140,6 +140,17 @@ class Account(Model, Uuid7Pk, ordering=("created_at", "id")):
         return await cls.get_default(session)
 
     @classmethod
+    async def list_usernames(cls, session: AsyncSession, account_ids: set[str]) -> dict[str, str]:
+        """The username of each account in ``account_ids``, by its id."""
+        # The activity stream reads this on each poll, and most polls name no account.
+        if account_ids:
+            rows = await session.execute(
+                select(cls.id, cls.username).where(cls.id.in_(account_ids))
+            )
+            return dict(rows.all())
+        return {}
+
+    @classmethod
     async def get_for_username(cls, session: AsyncSession, username: str) -> "Account | None":
         return await session.scalar(select(cls).where(cls.username == username))
 
