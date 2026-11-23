@@ -788,6 +788,21 @@ class AgentCall(Base, Uuid7Pk):
         )
 
     @classmethod
+    async def lookup_last_succeeded(
+        cls, session: AsyncSession, run_id: str, agent: str
+    ) -> "AgentCall | None":
+        return await session.scalar(
+            select(cls)
+            .where(
+                cls.run_id == run_id,
+                cls.agent == agent,
+                cls.status == AgentCallStatus.SUCCEEDED.value,
+            )
+            .order_by(cls.created_at.desc(), cls.id.desc())
+            .limit(1)
+        )
+
+    @classmethod
     async def get_cost_for_run(cls, session: AsyncSession, run_id: str) -> float:
         stmt = select(func.sum(cls.cost_usd)).where(cls.run_id == run_id)
         return await session.scalar(stmt) or 0.0

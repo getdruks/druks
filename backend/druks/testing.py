@@ -7,13 +7,16 @@ from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from pathlib import Path
 from unittest import mock
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
+import psycopg
+import psycopg.sql
 import pytest
 import redis.asyncio as aioredis
 from dbos import run_dbos_database_migrations
 from sqlalchemy import NullPool, text, update
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import URL, Engine, make_url
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from uuid_utils import uuid7
 
@@ -55,7 +58,7 @@ from druks.secrets.models import VaultSecret
 from druks.settings import Settings, configure_settings, get_settings
 from druks.workflows import Workflow, WorkflowError, _bind_instance, current_workflow
 
-# druks.testing is the author door for testing an app: these four, plus the
+# druks.testing is the author door for testing an app: these five, plus the
 # fixtures the pytest11 entry point registers. Everything else here is the
 # repository suite's own harness.
 __all__ = [
@@ -64,16 +67,51 @@ __all__ = [
     "run_workflow",
     "seed_call",
     "seed_run",
+    "worker_name",
 ]
 
 # The fixtures never read the application's settings: DRUKS_DATABASE_URL and
 # DRUKS_REDIS_URL name a live instance, and these fixtures create tables and run
 # FLUSHDB. They carry their own keys, defaulting to a database and a Redis index
 # nothing else uses.
-TEST_DATABASE_URL = os.environ.get(
-    "DRUKS_TEST_DATABASE_URL", "postgresql+psycopg://druks:druks@localhost:5432/druks_test"
+#
+# Under pytest-xdist every worker is its own process, so it gets its own database and
+# its own Redis index: a worker's FLUSHDB and rolled-back transactions must not reach
+# the tests another worker is running. xdist names the worker in the environment
+# ("gw0", "gw1", ...); a single-process run and the controller have none.
+_WORKER = os.environ.get("PYTEST_XDIST_WORKER", "")
+
+
+def worker_name(name: str) -> str:
+    """Name a resource a test creates, such as a database, so no two workers share one."""
+    return f"{name}_{_WORKER}" if _WORKER else name
+
+
+def _worker_database_url(url: str) -> URL:
+    parsed = make_url(url)
+    return parsed.set(database=worker_name(parsed.database))
+
+
+def _worker_redis_url(url: str) -> str:
+    if not _WORKER:
+        return url
+    parsed = urlsplit(url)
+    number = int(_WORKER.removeprefix("gw"))
+    index = int(parsed.path.lstrip("/") or 0) - number
+    # Index 0 is where the application's own Redis points by default, and a test flushes its index.
+    if index < 0 or (index == 0 and number):
+        raise RuntimeError(f"{_WORKER} has no Redis index left under {url}: use fewer workers")
+    return urlunsplit(parsed._replace(path=f"/{index}"))
+
+
+TEST_DATABASE_URL = _worker_database_url(
+    os.environ.get(
+        "DRUKS_TEST_DATABASE_URL", "postgresql+psycopg://druks:druks@localhost:5432/druks_test"
+    )
+).render_as_string(hide_password=False)
+TEST_REDIS_URL = _worker_redis_url(
+    os.environ.get("DRUKS_TEST_REDIS_URL", "redis://127.0.0.1:6379/15")
 )
-TEST_REDIS_URL = os.environ.get("DRUKS_TEST_REDIS_URL", "redis://127.0.0.1:6379/15")
 
 # The rollback fixture's async connection, for consumers that need the bind
 # itself (the app under test binds its ambient session factory to it).
@@ -125,6 +163,8 @@ def pytest_load_initial_conftests(early_config, parser, args) -> None:
     global _discovery_error
 
     early_config.add_cleanup(_settings_path.unlink)
+    if _WORKER:
+        _create_worker_database()
     # Build the process settings only after its infrastructure points at the
     # database and Redis that the fixtures own.
     os.environ["DRUKS_DATABASE_URL"] = TEST_DATABASE_URL
@@ -147,6 +187,21 @@ def _restore_settings():
     settings = get_settings()
     yield
     configure_settings(settings)
+
+
+def _create_worker_database() -> None:
+    """Make this worker's database if an earlier run left none; the single-process
+    database is the one the operator already created."""
+    target = make_url(TEST_DATABASE_URL)
+    admin_url = target.set(drivername="postgresql", database="postgres")
+    with psycopg.connect(admin_url.render_as_string(hide_password=False), autocommit=True) as admin:
+        exists = admin.execute("SELECT 1 FROM pg_database WHERE datname = %s", (target.database,))
+        if not exists.fetchone():
+            admin.execute(
+                psycopg.sql.SQL("CREATE DATABASE {}").format(
+                    psycopg.sql.Identifier(target.database)
+                )
+            )
 
 
 @pytest.fixture(scope="session")

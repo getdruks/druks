@@ -294,6 +294,8 @@ class Host:
         extra_env: dict[str, Any] | None = None,
         mcp_servers: tuple[McpServer, ...] = (),
         hooks: dict[str, Hook] | None = None,
+        resumable: bool = False,
+        resume_session: str | None = None,
     ) -> AgentResult:
         """Run ``agent`` with ``harness`` and return a pure ``AgentResult`` —
         no database write. A failure is carried on the result's ``error``, not
@@ -326,6 +328,8 @@ class Host:
                 identity=identity,
                 include_apps=include_apps,
                 hooks=hooks,
+                resumable=resumable,
+                resume_session=resume_session,
             ),
             agent=agent,
             model=harness.model,
@@ -415,10 +419,19 @@ class Host:
         identity: dict | None = None,
         include_apps: bool = False,
         hooks: dict[str, Hook] | None = None,
+        resumable: bool = False,
+        resume_session: str | None = None,
     ) -> Any:
         """Drive one prompt through ``harness`` on this VM: the harness
-        builds the invocation and parses the result; this sandbox executes it."""
+        builds the invocation and parses the result; this sandbox executes it.
+        ``resume_session`` continues that call's session on this VM, and ``resumable`` lets
+        a later call do so; a harness that cannot resume is never given either."""
         run_id = harness.mint_run_id(call_id)
+        resume = {}
+        if resumable:
+            resume["resumable"] = True
+        if resume_session:
+            resume["resume_session"] = resume_session
         artifact_dir.mkdir(parents=True, exist_ok=True)
         persist_prompt(artifact_dir, call_id=run_id, prompt=prompt)
         persist_manifest(
@@ -441,6 +454,7 @@ class Host:
             include_apps=include_apps,
             timeout=timeout,
             hooks=hooks or (),
+            **resume,
         )
         result = await self._start_run(
             invocation,

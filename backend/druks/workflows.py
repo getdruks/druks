@@ -1,11 +1,12 @@
 import asyncio
+import dataclasses
 import hashlib
 import inspect
 import json
 import random
 import subprocess
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager, nullcontext, suppress
+from contextlib import AsyncExitStack, asynccontextmanager, nullcontext, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -106,7 +107,7 @@ from druks.files.datastructures import File
 from druks.files.exceptions import FileUnavailableError
 from druks.files.models import FileRecord
 from druks.harnesses.artifacts import normalize_token_usage
-from druks.harnesses.config import AgentConfig, get_config
+from druks.harnesses.config import AgentConfig, cap_effort, get_config
 from druks.harnesses.exceptions import (
     HarnessError,
     HarnessInvalidOutputError,
@@ -1141,7 +1142,16 @@ class Workflow:
         # The wait takes answers before its label shows, so an answer sent on seeing it arrives.
         await DBOS.set_event_async("waiting_on", topic)
         await set_run_phase(label)
-        facts = await DBOS.recv_async(topic, timeout_seconds=ttl_seconds)
+        async with AsyncExitStack() as stack:
+            if self._host:
+                # A lease renews only while something holds it, and the box would expire
+                # in the middle of a long wait.
+                try:
+                    await stack.enter_async_context(sandbox_client.lease(host_id=self._host.id))
+                except HarnessSandboxProvisioningError:
+                    # The box is already gone. A call after the wait provisions another.
+                    await self._reap_run()
+            facts = await DBOS.recv_async(topic, timeout_seconds=ttl_seconds)
         await DBOS.set_event_async("waiting_on", "")
         if facts is None:
             raise WaitTimeout(topic)
@@ -1750,6 +1760,11 @@ class Instruction:
     # ``include_mcp=False`` gives the call no MCP server and its sandbox no
     # server entry, for an instruction that reads untrusted content.
     include_mcp: bool = True
+    # True lets a call continue this instruction's last call in the run, with ``resume=``.
+    # The first call then writes the model's prompt cache for an hour, not five minutes, so
+    # the resume reads the cache after a pause. The templates read ``can_resume``, true
+    # when the call's harness can resume too.
+    resumable: bool = False
     # The service secrets the call's sandbox holds, ``(Acme.fields.api_key,)``.
     # Each is a placeholder that the secrets proxy swaps at the service's host.
     secrets: "tuple[ServiceField, ...]" = ()
@@ -1829,6 +1844,8 @@ class Instruction:
         *,
         contract: type[InstructionOutput] | None = None,
         agent_id: str | None = None,
+        effort: str | None = None,
+        resume: Callable[..., Awaitable[str]] | None = None,
         **context: object,
     ) -> Any:
         """Run the instruction — ``await SoftwareFactory.implement(...)`` — as a durable step in the
@@ -1838,7 +1855,14 @@ class Instruction:
         else (repo, …) is prompt context. ``contract`` overrides the output
         contract for this call, including schema generation and validation. ``agent_id``
         runs the call as that saved agent: with its instructions, its model, its billing,
-        and only its skills."""
+        and only its skills. ``effort`` runs the call at a lower effort than the operator's
+        setting; the setting is the ceiling, and a higher ``effort`` runs at the setting.
+        ``resume`` continues the instruction's last call in this run, on
+        its box, as the same conversation: Druks calls ``resume(workspace=...)`` with the
+        checkout as the agent left it, and sends the text it returns as the agent's next
+        message. The instruction must be ``resumable``. When the call cannot continue the
+        session, because its harness cannot resume, it has no finished call, or its box was
+        released, it starts over with its full prompt and never calls ``resume``."""
         if not self.id:
             # Built loose — never assigned to an App — so its settings, its
             # registry entry and the call it would record all key on nothing.
@@ -1860,6 +1884,8 @@ class Instruction:
                     workflow_id=workflow.workflow_id,
                     contract=contract,
                     agent_id=agent_id,
+                    effort=effort,
+                    resume=resume,
                     **context,
                 )
 
@@ -1993,6 +2019,8 @@ class Instruction:
         workflow_id: str,
         contract: type[InstructionOutput] | None = None,
         agent_id: str | None = None,
+        effort: str | None = None,
+        resume: Callable[..., Awaitable[str]] | None = None,
         **context: Any,
     ) -> Any:
         """The raw execution: read what the call needs, provision or attach a host,
@@ -2019,6 +2047,14 @@ class Instruction:
             config = await self._get_config(session, workflow.account_id, agent_id)
             call_id = config.harness_class.mint_run_id(None)
             running = await AgentCall.lookup_running(session, workflow_id, self.id)
+            previous = None
+            if resume:
+                if not self.resumable:
+                    raise WorkflowError(
+                        f"instruction {self.id!r} cannot resume: declare it resumable"
+                    )
+                if config.harness_class.can_resume:
+                    previous = await AgentCall.lookup_last_succeeded(session, workflow_id, self.id)
         model = config.model
         span.set_attributes({"druks.harness": config.harness, "druks.model": model})
         subscription_id = config.subscription.id if config.subscription else None
@@ -2084,7 +2120,9 @@ class Instruction:
                 # The override lookup reads the GitHub credential from a row.
                 template = await get_template(self.prompt, repo=prompt_context.get("repo"))
                 harness = config.harness_class(
-                    model=config.model, fast_mode=config.fast_mode, effort=config.effort
+                    model=config.model,
+                    fast_mode=config.fast_mode,
+                    effort=cap_effort(config.effort, effort),
                 )
                 agent_instructions = ""
                 if agent_id:
@@ -2134,13 +2172,21 @@ class Instruction:
                     resume_from = running
                 else:
                     resume_from = None
+                # The session is a file on the box that ran it, and that box holds the checkout
+                # as the agent left it. A resume that cannot continue it starts over with the
+                # full prompt: a harness that cannot resume, a run with no finished call, or a
+                # box that was released, whose session and checkout went with it.
+                resuming = bool(previous) and previous.sandbox_host_id == runner.host_id
 
                 context_on_box = await self._upload_files(prompt_context, runner.host, call_id)
                 context_on_box.setdefault("workflow", workflow)
                 context_on_box["workspace"] = runner
-                prompt = await template.render_async(**context_on_box)
-                if agent_instructions:
-                    prompt = f"{agent_instructions}\n\n{prompt}"
+                context_on_box["can_resume"] = self.resumable and harness.can_resume
+                prompt = ""
+                if not resuming:
+                    prompt = await template.render_async(**context_on_box)
+                    if agent_instructions:
+                        prompt = f"{agent_instructions}\n\n{prompt}"
                 hooks = {}
                 if self._after_agent:
                     hooks["after_agent"] = partial(
@@ -2161,7 +2207,15 @@ class Instruction:
                         hooks=hooks,
                     )
                 else:
-                    await runner.prepare()
+                    session_options = {}
+                    if self.resumable and harness.can_resume:
+                        session_options["resumable"] = True
+                    if resuming:
+                        # Preparing the workspace would discard the agent's uncommitted work.
+                        prompt = await resume(workspace=runner)
+                        session_options["resume_session"] = previous.id
+                    else:
+                        await runner.prepare()
                     await set_run_phase("agent_running")
                     await AgentCall.start(
                         engine,
@@ -2187,12 +2241,20 @@ class Instruction:
                         include_plugins=self.include_plugins,
                         mcp_servers=mcp_servers,
                         hooks=hooks,
+                        **session_options,
                     )
                 try:
                     result = await attempt
                 except BaseException as error:
                     await AgentCall.fail(engine, call_id=call_id, error=error)
                     raise
+                if resuming:
+                    cost_usd, cost_metadata = harness.get_own_cost(
+                        result.cost_usd, result.cost_metadata, previous.cost_metadata
+                    )
+                    result = dataclasses.replace(
+                        result, cost_usd=cost_usd, cost_metadata=cost_metadata
+                    )
                 if usage := normalize_token_usage(result.cost_metadata):
                     span.set_attributes(
                         {f"druks.usage.{name}": count for name, count in usage.items()}
