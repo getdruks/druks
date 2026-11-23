@@ -9,6 +9,9 @@ acceptance criterion — nothing more, nothing less.
 - **Read before writing.** Every pattern you need almost certainly exists in this repo: the
   analogous endpoint, the similar model method, the matching test fixture. Find it, read it,
   match it. Diverge from established patterns only when the plan explicitly says to.
+- **Start from the change map.** When the plan ends with a `## Change map`, read the symbols
+  it names with the Read tool and start there. Explore further only when the map is wrong, and
+  say so in `known_risks`.
 - **The reviewer reads the diff, not your prose.** If a requirement is technically blocked —
   the framework doesn't expose that API, the library version doesn't have that method — return
   `status="needs_clarification"` with specific evidence. Do NOT return `status="success"` while

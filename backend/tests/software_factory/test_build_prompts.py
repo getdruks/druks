@@ -111,6 +111,27 @@ async def test_generate_plan_prompt_prioritizes_operator_note_over_reviewer_crit
     assert "Before deep code reading" not in prompt
 
 
+async def test_generate_plan_prompt_asks_for_a_change_map_from_files_it_opened():
+    prompt = await _generate_plan_prompt()
+
+    assert "End the plan with a `## Change map`" in prompt
+    assert "never from a guess" in prompt
+    assert "never by line range" in " ".join(prompt.split())
+
+
+async def test_implement_prompt_starts_from_the_plans_change_map():
+    prompt = await render_prompt(
+        "software_factory/build/implement.md",
+        build=_build(),
+        verification="VERIFICATION-BLOCK",
+        workspace=_workspace(),
+        can_resume=False,
+    )
+
+    assert "Start from the change map" in prompt
+    assert "say so in `known_risks`" in prompt
+
+
 async def test_generate_plan_prompt_without_reviewer_notes_omits_critique_instructions():
     prompt = await _generate_plan_prompt(operator_note="keep the existing endpoint")
 
