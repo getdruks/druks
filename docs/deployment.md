@@ -99,13 +99,13 @@ If you want another installation directory, set
 To install the deploy files of one commit, push it and set `DRUKS_REF` to its
 full SHA. If the commit is in a fork, also set `DRUKS_REPO` to that repository,
 as `<owner>/<name>`. To run a backend image that you built, tag it
-`ghcr.io/czpython/druks:<tag>`, set `DRUKS_TAG` to that tag, and set
+`ghcr.io/getdruks/druks:<tag>`, set `DRUKS_TAG` to that tag, and set
 `DRUKS_SKIP_PULL=1`. The installer then skips `docker pull` and
 `docker compose pull`. Compose still pulls each image that is missing. From a
 checkout of the commit:
 
 ```bash
-docker build -t ghcr.io/czpython/druks:dev .
+docker build -t ghcr.io/getdruks/druks:dev .
 DRUKS_REF="$(git rev-parse HEAD)" DRUKS_TAG=dev DRUKS_SKIP_PULL=1 bash scripts/install.sh
 ```
 
@@ -230,7 +230,7 @@ it is not in the default stack. To run it, add this service to
 ```yaml
 services:
   calls:
-    image: ghcr.io/czpython/druks-calls:latest
+    image: ghcr.io/getdruks/druks-calls:latest
     restart: unless-stopped
     network_mode: host
     environment:

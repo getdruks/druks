@@ -29,7 +29,7 @@ DRUKS_PROVIDER=docker bash "$e2e/../../scripts/install.sh"
 
 cd "$install_dir"
 docker run --rm --user "$(id -u):$(id -g)" -v "$install_dir:/bootstrap" \
-  "ghcr.io/czpython/druks:$(sed -n 's/^DRUKS_TAG=//p' .env)" \
+  "ghcr.io/getdruks/druks:$(sed -n 's/^DRUKS_TAG=//p' .env)" \
   druks setup /bootstrap/.env --home "$HOME" \
   --set identity.mode=header --set identity.header=X-Forwarded-Email \
   --set providers.anthropic.sign_in=setup_token "$@"

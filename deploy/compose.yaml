@@ -8,7 +8,7 @@
 # connects to each sandbox at the address the provider returns.
 
 x-druks: &druks
-  image: ghcr.io/czpython/druks:${DRUKS_TAG:-latest}
+  image: ghcr.io/getdruks/druks:${DRUKS_TAG:-latest}
   # Run as the deploy user, not root. This user owns the data and harness-config
   # roots. install.sh writes DRUKS_UID/DRUKS_GID into .env from `id -u` / `id -g`.
   user: "${DRUKS_UID:?set DRUKS_UID in .env — run install.sh}:${DRUKS_GID:?set DRUKS_GID in .env — run install.sh}"

@@ -199,7 +199,7 @@ listens on port 443, and the containers reach it at the Docker bridge address,
 1. Build the image of your checkout:
 
    ```bash
-   docker build -t ghcr.io/czpython/druks:e2e .
+   docker build -t ghcr.io/getdruks/druks:e2e .
    ```
 
 2. Install the stack into `~/druks`. `DRUKS_REF` names a pushed commit whose
