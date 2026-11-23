@@ -142,13 +142,13 @@ again and reads the saved messages and available live events.
 Agent text streams into the conversation. A tool row shows its ACP title
 and status. Select the row to read its input and output.
 Tool rows have no timestamps. Saved replies retain their tool details and
-their position between text segments. Slack, GitHub, and WhatsApp get only the
-text after the agent's last tool call. The text before it holds the agent's
+their position between text segments. Slack, GitHub, and WhatsApp get the text
+after the agent's last tool call. The text before it holds the agent's
 notes. Only the Chat page shows them. When the agent writes nothing after its
 last tool call, Druks asks it once for the answer in an internal message. When
 that turn ends without text too, the channel gets "The reply is unavailable.
-Send the message again to retry." A turn that asks a [question](#questions) has
-an answer, even with no text.
+Send the message again to retry." A turn that asks a [question](#questions) or
+shows [blocks](#blocks) has an answer, even with no text.
 
 An agent plan shows the latest complete plan. A plan update replaces the
 previous list. Tool updates instead change only the fields that the adapter
@@ -176,8 +176,8 @@ names, so they do not have it.
 When the turn ends, Druks sends the question after the agent's reply:
 
 - In the web chat, the question shows under the reply, with a button for each
-  choice. A form shows an input for each field and one **Submit** button. The reply
-  keeps only the agent's own text.
+  choice. A form shows an input for each field and one **Submit** button. The question
+  stays out of the reply's text.
 - In Slack, the reply, the question, and a button for each choice come in one
   message. A form comes the same way, with an input for each field and a
   **Submit** button. A reply too long for one message loses its end. The question,
@@ -246,6 +246,52 @@ In both cases, the page sends nothing. Druks does not check the answers again: t
 go as an ordinary message, with the same lines as a Slack Submit. The reply then
 shows your answers in place of the inputs. When the message is not sent, the inputs
 keep your answers, and you can select **Submit** again.
+
+## Blocks
+
+The agent can show blocks in its reply, such as a chart, an image, a table, or a grid
+of facts. It calls `chat_show` during its turn, with the blocks as one Python list of
+`druks.ui` block calls, as app pages write them:
+
+```python
+[Chart(kind="bar", title="Builds this week", categories=["Mon", "Tue"], series=[ChartSeries(label="Builds", points=[4, 7])])]
+```
+
+The agent writes each block and each part of a block with its bare name or with the
+`ui.` prefix. The parts are classes such as `Fact`, `Metric`, `ChartSeries`,
+`TableRow`, and `StatusValue`. Some classes take their first arguments without a name,
+in order, as in `Fact("Owner", "Ana")`. The agent gives every other argument by its
+`druks.ui` name. A fact, a metric, and a table cell take a string or a number as their
+value.
+
+Druks reads the list with Python's `ast` module and runs no code. It takes only
+literals, lists, and these calls. It checks each block as an app page does. A reply
+runs no operation and does not change after Druks sends it. So Druks refuses a `Form`,
+an `Action`, and `GateControls` at every depth, such as an action in a `ControlsValue`.
+Druks also refuses `SubjectStatus`, because a chat has no status to show. It refuses
+the `subject=`, `page=`, and `follows=` arguments too. The agent gets the reason in the
+same turn and can call `chat_show` again. A second call that Druks accepts replaces the
+blocks of the first. Like `chat_ask`, `chat_show` is a tool of the Druks toolkit.
+
+When the turn ends, Druks sends the blocks after the agent's text:
+
+- In Slack, the text and the blocks come in one message. Slack draws them as it draws
+  the blocks of an approval: see [Approvals in Slack](druks-ui.md#approvals-in-slack).
+  Facts and metrics show as Slack's own fields, a divider shows as a divider, a link
+  shows as a button, and a table shows as a data table. Any other block, and a block
+  past a limit of Slack, shows as its [text form](druks-ui.md#text-forms). A reply too
+  long for one message loses its end. When Slack refuses the blocks, Druks sends their
+  text form in their place.
+- In the web chat, the reply keeps the blocks, and the page shows their text form after
+  the reply's text.
+- In WhatsApp and GitHub, the reply ends with the text form of the blocks.
+
+A turn can show blocks and ask a question. In Slack, you then get one message: the
+text, the blocks, the question, and its buttons or inputs. When Druks cuts the rest to
+fit, the question, the buttons, and the inputs stay whole. They also stay whole when
+Slack refuses the blocks, and when the question closes or gets your answer. In WhatsApp
+and GitHub, the numbered question follows the text form of the blocks. A turn that you
+stop shows no blocks.
 
 ## Agent access
 
@@ -690,7 +736,8 @@ room.
 You have one conversation with the Bot in your direct message, and one with
 each agent that you tag by name there. Druks drops a
 repeated event by its event ID. The agent writes Markdown, and Druks
-posts each reply in the direct message, in pieces of at most 12,000 characters.
+posts each reply in the direct message, in pieces of at most 12,000 characters. A reply
+that shows [blocks](#blocks) or asks a [question](#questions) goes as one message.
 Druks ignores the bot's own messages, other bots' direct messages, edits,
 deletes, joins, hidden events, and people from other workspaces.
 

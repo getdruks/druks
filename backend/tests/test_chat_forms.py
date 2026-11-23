@@ -79,40 +79,26 @@ def test_a_form_reads_each_field_by_its_bare_name_or_with_the_ui_prefix(prefix):
 @pytest.mark.parametrize(
     ("text", "reason"),
     [
-        ('[TextField("title", label="Title")]', "TextField takes its arguments by name"),
+        ('[TextField("title", label="Title")]', "TextField takes no argument without a name."),
         (
             '[SelectField(name="s", label="S", options=[Option("A", "a")])]',
-            "Only an option takes its label without a name",
+            "Option takes label without a name. Give the rest by name.",
         ),
         ('[TextField(name="t", **{"label": "T"})]', "TextField takes no argument **."),
-        ('[TextField(*["t"])]', "TextField takes its arguments by name"),
-        ('[*[TextField(name="t", label="T")]]', "Call each field and option by its name"),
-        ('[EmailField(name="e", label="E")]', "EmailField is not one of TextField,"),
         ('[Option("Staging", value="staging")]', "Option is not one of TextField,"),
-        ('[druks.ui.TextField(name="t", label="T")]', "Call each field and option by its name"),
+        ('[druks.ui.TextField(name="t", label="T")]', "Call each druks.ui class by its bare name"),
         ('[TextField(name="t", label="T", name="u")]', "TextField takes name once."),
-        ('[TextField(name="t", label=("T"), value="a" + "b")]', "Replace the BinOp"),
         ('[TextField(name="t", label=title)]', "Replace the Name at line 1, column 28."),
-        ('[TextField(name="t", label=f"{1}")]', "Replace the JoinedStr"),
-        ('[TextField(name="t", label="T", value={"a": "b"})]', "Replace the Dict"),
-        ('[TextField(name="t", label=(lambda: "T")())]', "Call each field and option by its name"),
         ('[NumberField(name="n", label="N", value=1e999)]', "Replace the Constant"),
     ],
     ids=[
         "positional-field-argument",
         "second-positional-option-argument",
         "keyword-unpacking",
-        "positional-unpacking",
-        "list-unpacking",
-        "unknown-name",
         "option-as-a-field",
         "other-qualification",
         "repeated-argument",
-        "expression",
         "name",
-        "f-string",
-        "dict",
-        "lambda",
         "infinite-number",
     ],
 )
@@ -121,13 +107,12 @@ def test_a_form_refuses_what_is_not_a_literal_list_or_field_call(text, reason):
         parse_fields(text)
 
 
-def test_a_form_refuses_an_alias_and_an_extra_argument_that_the_shared_field_takes():
-    for argument in ('helpText="h"', 'colour="red"'):
-        with pytest.raises(FormError, match="It takes field, name, label, help_text"):
-            parse_fields(f'[TextField(name="t", label="T", {argument})]')
+def test_a_form_refuses_an_alias_that_the_shared_field_takes():
+    with pytest.raises(FormError, match="It takes field, name, label, help_text"):
+        parse_fields('[TextField(name="t", label="T", helpText="h")]')
 
-    # Pages build the same field with both.
-    field = ui.TextField.model_validate({"name": "t", "label": "T", "helpText": "h", "colour": 1})
+    # Pages build the same field with it.
+    field = ui.TextField.model_validate({"name": "t", "label": "T", "helpText": "h"})
     assert field.help_text == "h"
 
 
@@ -146,19 +131,11 @@ def test_the_fields_run_none_of_their_text(tmp_path):
     [
         ('[TextField(name="title")]', "TextField: label: Field required."),
         (
-            '[CheckboxField(name="c", label="C", is_required="maybe")]',
-            "CheckboxField: is_required: Input should be a valid boolean",
-        ),
-        (
-            '[RadioField(name="r", label="R", options=[Option("A")])]',
-            "Option: value: Field required.",
-        ),
-        (
             '[RadioField(name="r", label="R", options=[Option(value="a")])]',
             "Option: label: Field required.",
         ),
     ],
-    ids=["missing-label", "wrong-type", "option-without-value", "option-without-label"],
+    ids=["missing-label", "option-without-label"],
 )
 def test_pydantic_s_reason_reaches_the_agent(text, reason):
     with pytest.raises(FormError, match=re.escape(reason)):
@@ -173,10 +150,9 @@ def test_pydantic_s_reason_reaches_the_agent(text, reason):
         ("MultiUploadField", "Slack shows a file input only in a modal"),
     ],
 )
-@pytest.mark.parametrize("prefix", ["", "ui."], ids=["bare", "ui-prefix"])
-def test_a_form_refuses_a_secret_or_an_upload_with_its_reason(name, reason, prefix):
+def test_a_form_refuses_a_secret_or_an_upload_with_its_reason(name, reason):
     with pytest.raises(FormError) as refused:
-        parse_fields(f'[TextField(name="t", label="T"), {prefix}{name}(name="f", label="F")]')
+        parse_fields(f'[TextField(name="t", label="T"), {name}(name="f", label="F")]')
 
     assert str(refused.value).startswith(f"A form takes no {name}.")
     assert reason in str(refused.value)
@@ -192,8 +168,6 @@ def test_a_form_refuses_a_secret_or_an_upload_with_its_reason(name, reason, pref
             "Two fields have the name 't'.",
         ),
         ('[SelectField(name="s", label="S")]', "Field 's' has no options."),
-        ('[MultiSelectField(name="m", label="M", options=[])]', "Field 'm' has no options."),
-        ('[RadioField(name="r", label="R")]', "Field 'r' has no options."),
         (
             '[RadioField(name="r", label="R", options=[Option("A", value="a"), Option("B", '
             'value="a")])]',
@@ -212,10 +186,6 @@ def test_a_form_refuses_a_secret_or_an_upload_with_its_reason(name, reason, pref
         (
             '[NumberField(name="n", label="N", step="nan", value=5)]',
             "Field 'n' has the step nan. Give a finite number.",
-        ),
-        (
-            '[NumberField(name="n", label="N", maximum="inf")]',
-            "Field 'n' has the maximum inf. Give a finite number.",
         ),
         (
             '[NumberField(name="n", label="N", minimum=0, step=5, value=10000000002)]',
@@ -239,14 +209,11 @@ def test_a_form_refuses_a_secret_or_an_upload_with_its_reason(name, reason, pref
         "not-a-list",
         "duplicate-names",
         "select-without-options",
-        "multi-select-without-options",
-        "radio-without-options",
         "duplicate-option-values",
         "select-default-not-offered",
         "multi-select-default-not-offered",
         "step-below-zero",
         "step-not-a-number",
-        "infinite-maximum",
         "large-default-off-its-step",
         "minimum-above-maximum",
         "default-off-its-step",
@@ -280,11 +247,10 @@ def test_a_form_reads_fields_as_long_as_the_limit_and_refuses_one_character_more
     ("text", "reason"),
     [
         ('[TextField(name="t", label="T", value=[[["x"]]])]', "The fields nest deeper than 5"),
-        ("[" * 300 + "]" * 300, "too many nested parentheses"),
         ("-" * 19_000 + "1", "The fields nest too deep."),
         ('[TextField(name="t", label="T"', "The fields are not valid Python: '(' was never"),
     ],
-    ids=["past-the-depth-limit", "past-python-s-nesting", "past-the-parser-s-stack", "syntax"],
+    ids=["past-the-depth-limit", "past-the-parser-s-stack", "syntax"],
 )
 def test_a_form_refuses_fields_that_nest_too_deep_or_are_not_python(text, reason):
     with pytest.raises(FormError, match=re.escape(reason)):

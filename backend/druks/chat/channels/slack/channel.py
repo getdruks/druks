@@ -8,6 +8,7 @@ from dbos import DBOS
 from slack_sdk.errors import SlackApiError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from druks import ui
 from druks.accounts.models import Account
 from druks.agents.constants import PRIVATE_AGENT_MESSAGE
 from druks.agents.models import Agent
@@ -64,6 +65,7 @@ class SlackChannel(Channel):
     has_readable_threads = True
     has_buttons = True
     has_inputs = True
+    has_blocks = True
     has_account_notifications = True
     reaction_ack = "eyes"
 
@@ -264,8 +266,9 @@ class SlackChannel(Channel):
         cls, session: AsyncSession, conversation: Conversation, reply: Message
     ) -> None:
         """Post the reply where the conversation lives, in pieces that fit a markdown
-        block. The first piece's Slack id is the reply's source id. An agent's reply
-        shows the agent's name and picture."""
+        block. The first piece's Slack id is the reply's source id. A reply that shows blocks
+        goes out as one message, as a notice does: its text, then its blocks as Slack draws
+        them. An agent's reply shows the agent's name and picture."""
         client = SlackClient(token=await Slack.get_bot_token())
         room, _, thread_ts = conversation.thread_id.partition(":")
         # Slack takes a custom name only with the scope. A workspace that has not
@@ -273,17 +276,31 @@ class SlackChannel(Channel):
         agent = None
         if SLACK_CUSTOMIZE_SCOPE in (await Slack.get_grant()).scopes:
             agent = conversation.agent
-        posted = [
-            await client.post_markdown(
+        username = agent.name if agent else None
+        icon_url = agent.picture_url if agent else None
+        if reply.blocks:
+            blocks = reply.answer_blocks
+            posted = await deliver_notification(
+                client,
                 room or conversation.user_id,
-                reply.answer[start : start + MARKDOWN_TEXT_LIMIT],
+                ui.Stack(blocks).to_markdown(),
+                blocks=blocks,
                 thread_ts=thread_ts,
-                username=agent.name if agent else None,
-                icon_url=agent.picture_url if agent else None,
+                username=username,
+                icon_url=icon_url,
             )
-            for start in range(0, len(reply.answer), MARKDOWN_TEXT_LIMIT)
-        ]
-        reply.source_id = f"{posted[0]['channel']}:{posted[0]['ts']}"
+        else:
+            posted, *_ = [
+                await client.post_markdown(
+                    room or conversation.user_id,
+                    reply.answer[start : start + MARKDOWN_TEXT_LIMIT],
+                    thread_ts=thread_ts,
+                    username=username,
+                    icon_url=icon_url,
+                )
+                for start in range(0, len(reply.answer), MARKDOWN_TEXT_LIMIT)
+            ]
+        reply.source_id = f"{posted['channel']}:{posted['ts']}"
         await session.commit()
 
     @classmethod

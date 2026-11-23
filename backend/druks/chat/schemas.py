@@ -47,7 +47,7 @@ class MessageResponse(Schema):
 
     id: str
     role: MessageRole
-    body: str
+    body: str = Field(validation_alias="text_form")
     reply_to: str | None
     state: MessageState | None
     tool_calls: list[dict]

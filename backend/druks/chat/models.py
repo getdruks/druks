@@ -9,6 +9,7 @@ from sqlalchemy.dialects.postgresql import JSONB, insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, column_property, mapped_column, relationship
 
+from druks import ui
 from druks.accounts.enums import AccountKind
 from druks.accounts.models import Account
 from druks.core.models import Uuid7Pk, uuid7_str
@@ -46,6 +47,8 @@ class Message(Base, Uuid7Pk):
     tool_calls: Mapped[list[dict]] = mapped_column(JSONB, default=list)
     # The question that a web reply asks: its prompt, and its choices or its fields.
     question: Mapped[dict | None] = mapped_column(JSONB, default=None)
+    # The druks.ui blocks that a reply shows after its text, as JSON.
+    blocks: Mapped[list[dict] | None] = mapped_column(JSONB, default=None)
     # Druks wrote it for the agent. It never reaches the source.
     is_internal: Mapped[bool] = mapped_column(default=False, server_default=text("false"))
     # The message's id at its source. Druks records a reply's id before it sends the
@@ -63,6 +66,19 @@ class Message(Base, Uuid7Pk):
         notes."""
         start = max((call["textOffset"] for call in self.tool_calls), default=0)
         return self.body[start:]
+
+    @property
+    def answer_blocks(self) -> list[dict]:
+        """The answer as druks.ui blocks, as JSON: its text, then the blocks that the reply
+        shows."""
+        text = ui.Markdown(self.answer).model_dump(mode="json", by_alias=True)
+        return [text, *(self.blocks or [])]
+
+    @property
+    def text_form(self) -> str:
+        """The body, then the text form of the blocks that the reply shows."""
+        blocks = ui.Stack(self.blocks or []).to_markdown()
+        return "\n\n".join(part for part in (self.body, blocks) if part)
 
     @classmethod
     async def get_for_source_id(cls, session: AsyncSession, source_id: str) -> "Message | None":
@@ -304,6 +320,7 @@ class Conversation(Base, Uuid7Pk):
         reply_to: Message | None = None,
         tool_calls: list[dict] | None = None,
         question: dict | None = None,
+        blocks: list[dict] | None = None,
         is_internal: bool = False,
         source_id: str | None = None,
         file: File | None = None,
@@ -320,6 +337,7 @@ class Conversation(Base, Uuid7Pk):
             state=state if role == MessageRole.USER else None,
             tool_calls=tool_calls or [],
             question=question,
+            blocks=blocks,
             is_internal=is_internal,
             source_id=source_id,
             file=file,

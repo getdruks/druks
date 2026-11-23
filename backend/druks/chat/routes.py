@@ -22,6 +22,7 @@ from druks.redis import get_client
 from druks.sandbox.constants import SANDBOX_HOST_LEASE_SECONDS
 from druks.sandbox.exceptions import SandboxUploadError
 
+from .blocks import parse_blocks
 from .channels.whatsapp.exceptions import NumberNotOnWhatsAppError, WahaError
 from .enums import MessageState
 from .exceptions import (
@@ -40,7 +41,7 @@ from .schemas import (
     MessageResponse,
     ReminderResponse,
 )
-from .service import cancel_turn, deliver, publish, question_key, upload_file
+from .service import blocks_key, cancel_turn, deliver, publish, question_key, upload_file
 from .workflows import RunInstruction
 
 router = APIRouter()
@@ -225,9 +226,7 @@ async def cancel(
 
 
 @router.get("/thread", operation_id="read_thread", tags=["agent", "bot"])
-async def read_thread(
-    session: SessionDep, account: Account = Depends(current_account)
-) -> list[dict]:
+async def read_thread(session: SessionDep) -> list[dict]:
     """Read the thread of the conversation this call comes from: its newest 200
     messages, oldest first. Each one has ts, user_id, user_name, text, files (each
     file's id, name, and content_type; chat_read_file reads one), is_from_you (you
@@ -250,9 +249,7 @@ async def read_thread(
 
 
 @router.get("/thread/files/{file_id}", operation_id="read_file", tags=["agent", "bot"])
-async def read_file(
-    session: SessionDep, file_id: str, account: Account = Depends(current_account)
-) -> dict:
+async def read_file(session: SessionDep, file_id: str) -> dict:
     """Read a file on the thread of the conversation this call comes from, by the id
     chat_read_thread lists. The file lands in your workspace; the answer is its path,
     name, and content_type. Open the path to read it."""
@@ -287,7 +284,6 @@ async def require_tag(
     is_required: Annotated[
         bool, Body(embed=True, description="True to require a tag, false to stop requiring one.")
     ],
-    account: Account = Depends(current_account),
 ) -> None:
     """Require a tag in the thread of the conversation this call comes from, or stop
     requiring one. While a tag is required, the person's untagged replies in the thread
@@ -323,7 +319,6 @@ async def ask(
     fields: Annotated[
         str, Body(description="The fields of a form, as one Python list of field calls.")
     ] = "",
-    account: Account = Depends(current_account),
 ) -> None:
     """Ask the person of the conversation this call comes from one question, with two to
     four choices or with a form of fields. Give choices or fields, not both. Druks sends
@@ -370,6 +365,46 @@ async def ask(
     )
 
 
+@router.put("/blocks", operation_id="show", status_code=204, tags=["agent"])
+async def show(
+    session: SessionDep,
+    blocks: Annotated[
+        str,
+        Body(embed=True, description="The blocks, as one Python list of druks.ui block calls."),
+    ],
+) -> None:
+    """Show druks.ui blocks, such as a chart, an image, a table, or a grid of facts, in your
+    reply to the person of the conversation this call comes from. Druks sends them after
+    your reply's text, in the same message, when your turn ends. Write the blocks as one
+    Python list of druks.ui block calls, as app pages write them, such as
+    [Chart(kind="bar", title="Builds this week", categories=["Mon", "Tue"],
+    series=[ChartSeries(label="Builds", points=[4, 7])])]. Call each block and each part of
+    one, such as Fact, Metric, TableRow, or StatusValue, by its bare name or with the ui.
+    prefix. Give an argument by its druks.ui name, or without a name where druks.ui takes
+    it so, as in Fact("Owner", "Ana"). A fact, a metric, or a table cell takes a string or
+    a number as its value. Druks reads the blocks and runs no code. A reply runs no
+    operation and does not change after Druks sends it, so it takes no Form, Action,
+    GateControls, or SubjectStatus, and no subject=, page=, or follows=. When Druks refuses
+    the blocks, the answer says why: correct them and call again. A second call in the turn
+    replaces the blocks. Slack draws the blocks. The web chat and the other channels show
+    their text form. With chat_ask in the same turn, the person gets one message: your
+    text, the blocks, then the question. Call it before you write your reply, and write
+    the reply after your last tool call: the text before it stays your notes. Do not
+    repeat the blocks in the reply."""
+    conversation_id = current_conversation_id.get()
+    if not conversation_id:
+        raise HTTPException(409, "This tool shows blocks in a conversation. Call it from one.")
+    conversation = await session.get(Conversation, conversation_id)
+    message = await conversation.get_unanswered_message(session)
+    if not message or message.state != MessageState.DELIVERED:
+        raise HTTPException(409, "No turn runs in this conversation. Call it during a turn.")
+    await get_client().set(
+        blocks_key(conversation.id, message.id),
+        json.dumps(parse_blocks(blocks)),
+        ex=SANDBOX_HOST_LEASE_SECONDS,
+    )
+
+
 @router.post("/instructions", operation_id="run_instruction", status_code=202, tags=["agent"])
 async def run_instruction(
     instruction: Annotated[
@@ -398,7 +433,6 @@ async def start_conversation(
     session: SessionDep,
     phone: Annotated[str, Body(description="The person's phone number, with its country code.")],
     name: Annotated[str, Body(description="The person's name, as you call them.")],
-    account: Account = Depends(current_account),
 ) -> Conversation:
     """Start a chat with a person on the number this call comes from, so your reminders
     reach them. Druks sends nothing until a reminder does."""

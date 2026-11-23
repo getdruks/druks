@@ -1,14 +1,10 @@
-"""The form that the agent of a chat asks: its fields, which Druks reads from the agent's
-text, and the person's answers to them."""
-
 import ast
 import math
 from fractions import Fraction
 
-from pydantic import ValidationError
-
 from druks import ui
 from druks.notifications.exceptions import InvalidChoiceError
+from druks.ui.expressions import Expression
 
 from . import constants
 from .exceptions import FormError
@@ -27,26 +23,26 @@ FORM_FIELDS = {
 }
 
 
+class Fields(Expression):
+    """The fields of a form, as the agent writes them. A field takes options, and only an
+    option takes its label without a name."""
+
+    error = FormError
+    noun = "fields"
+    text_limit = constants.FIELDS_TEXT_LIMIT
+    depth_limit = constants.FIELDS_DEPTH_LIMIT
+    models = {"Option": ui.Option}
+    refused = constants.REFUSED_FIELDS
+
+
 def parse_fields(text: str) -> list[dict]:
     """The fields of the form that ``text`` declares: one Python list of field calls, as in
     ``[TextField(name="title", label="Title")]``. Druks reads the text with ``ast`` and runs
     none of it, and Pydantic checks each field. Each field comes back as the fields of its
     model, by name."""
-    if len(text) > constants.FIELDS_TEXT_LIMIT:
-        raise FormError(
-            f"The fields are {len(text)} characters long. Write them in "
-            f"{constants.FIELDS_TEXT_LIMIT} characters or fewer."
-        )
-    try:
-        tree = ast.parse(text, filename="fields", mode="eval")
-    except SyntaxError as error:
-        raise FormError(f"The fields are not valid Python: {error}.") from error
-    # The parser runs out of stack on a text that nests deep.
-    except (RecursionError, MemoryError) as error:
-        raise FormError("The fields nest too deep. Write one list of field calls.") from error
-    match tree.body:
+    match Fields.get_expression(text):
         case ast.List(elts=[_, *_] as calls):
-            fields = [get_object(call, FORM_FIELDS, depth=2).model_dump() for call in calls]
+            fields = [Fields.get_object(call, FORM_FIELDS, depth=2).model_dump() for call in calls]
         case ast.List():
             raise FormError("The form has no fields. Give at least one field.")
         case _:
@@ -61,85 +57,6 @@ def parse_fields(text: str) -> list[dict]:
             )
         check_field(field)
     return fields
-
-
-def get_object(node: ast.expr, models: dict, depth: int) -> ui.Option | ui.Field:
-    """The field or the option that the call ``node`` makes: one of ``models``, called by
-    its bare name or with the ``ui.`` prefix. Only an option takes a positional argument,
-    its label. Pydantic checks the arguments."""
-    match node:
-        case ast.Call(func=ast.Name(id=name) | ast.Attribute(value=ast.Name(id="ui"), attr=name)):
-            pass
-        case _:
-            raise FormError(
-                "Call each field and option by its name, such as TextField(...) or ui.Option(...)."
-            )
-    if name in constants.REFUSED_FIELDS:
-        raise FormError(constants.REFUSED_FIELDS[name])
-    if name not in models:
-        raise FormError(f"{name} is not one of {', '.join(models)}.")
-    model = models[name]
-    positions = ["label"] if model is ui.Option else []
-    if len(node.args) > len(positions):
-        raise FormError(
-            f'{name} takes its arguments by name, such as name="title". Only an option takes '
-            'its label without a name, as in Option("Staging", value="staging").'
-        )
-    arguments = {
-        position: get_value(argument, depth + 1)
-        for position, argument in zip(positions, node.args, strict=False)
-    }
-    for keyword in node.keywords:
-        if keyword.arg not in model.model_fields:
-            raise FormError(
-                f"{name} takes no argument {keyword.arg or '**'}. "
-                f"It takes {', '.join(model.model_fields)}."
-            )
-        if keyword.arg in arguments:
-            raise FormError(f"{name} takes {keyword.arg} once.")
-        arguments[keyword.arg] = get_value(keyword.value, depth + 1)
-    # An option takes its label in its own __init__, which raises a TypeError without one,
-    # where Pydantic raises its ValidationError.
-    if model is ui.Option and "label" not in arguments:
-        raise FormError(f"{name}: label: Field required.")
-    try:
-        return model.model_validate(arguments)
-    except ValidationError as error:
-        details = "; ".join(
-            f"{'.'.join(map(str, detail['loc']))}: {detail['msg']}" for detail in error.errors()
-        )
-        raise FormError(f"{name}: {details}.") from error
-
-
-def get_value(node: ast.expr, depth: int):
-    """The value of the argument ``node``: a literal, a signed number, a list of values, or
-    an option."""
-    if depth > constants.FIELDS_DEPTH_LIMIT:
-        raise FormError(
-            f"The fields nest deeper than {constants.FIELDS_DEPTH_LIMIT} levels: the list, a "
-            "field, its options, an option, and its literals."
-        )
-    match node:
-        case ast.Constant(value=str() | bool() | None):
-            return node.value
-        case (
-            ast.Constant(value=int() | float() as number)
-            | ast.UnaryOp(op=ast.UAdd(), operand=ast.Constant(value=int() | float() as number))
-        ) if abs(number) < math.inf:
-            return number
-        case ast.UnaryOp(op=ast.USub(), operand=ast.Constant(value=int() | float() as number)) if (
-            abs(number) < math.inf
-        ):
-            return -number
-        case ast.List():
-            return [get_value(element, depth + 1) for element in node.elts]
-        case ast.Call():
-            return get_object(node, {"Option": ui.Option}, depth)
-    raise FormError(
-        "The fields hold only literals, lists, and calls of the fields and Option, and Druks "
-        f"runs no code. Replace the {type(node).__name__} at line {node.lineno}, column "
-        f"{node.col_offset + 1}."
-    )
 
 
 def check_field(field: dict) -> None:
