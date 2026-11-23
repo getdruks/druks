@@ -1,6 +1,7 @@
 import base64
 import logging
 import time
+import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -13,7 +14,7 @@ from githubkit.exception import GraphQLFailed, RequestFailed
 from githubkit.retry import RETRY_SERVER_ERROR
 from githubkit.utils import UNSET
 
-from druks.core.apis.exceptions import GitHubAppNotActiveError, GitHubAppNotInstalledError
+from druks.core.apis import exceptions
 from druks.core.utils.time import ensure_utc
 
 logger = logging.getLogger(__name__)
@@ -84,7 +85,7 @@ class GitHubAppClient:
             except RequestFailed as error:
                 if error.response.status_code != 404:
                     raise
-        raise GitHubAppNotInstalledError(owner_or_repo, app=self._slug)
+        raise exceptions.GitHubAppNotInstalledError(owner_or_repo, app=self._slug)
 
     async def create_installation_token(
         self, installation_id: int, repositories: Sequence[str] = ()
@@ -104,7 +105,7 @@ class GitHubAppClient:
         response = await self._app.rest.apps.async_list_installations(per_page=100)
         installation_ids = [item.id for item in response.parsed_data if not item.suspended_at]
         if not installation_ids:
-            raise GitHubAppNotActiveError(self._slug)
+            raise exceptions.GitHubAppNotActiveError(self._slug)
         token, _ = await self.create_installation_token(installation_ids[0])
         async with GitHub(
             TokenAuthStrategy(token),
@@ -379,6 +380,67 @@ class GitHubClient:
                 return
             raise
 
+    async def rebase_branch(self, repo: str, branch: str, onto: str, *, since: str) -> None:
+        """Move the one commit of ``branch`` from ``since``, the tip it was built on, onto the tip
+        of ``onto``, so that a stack keeps the linear history that GitHub requires to merge it.
+        GitHub refuses to update the branch of a stacked PR, and has no call that rebases a
+        stack. A plain merge of the new tip into the branch starts from the branch's own old
+        copy of the lower commits, and reports a conflict when that commit was amended or
+        squashed. So the merge starts from ``since``: a scratch branch holds a commit on
+        ``since`` with the tree of ``onto``, and the branch merges into it. The result goes on
+        ``onto`` as one commit with the branch's message. GitHub answers a real conflict
+        with 409."""
+        owner, name = repo.split("/", 1)
+        git = self._github.rest.git
+        # Behind by nothing: the branch holds the new tip already, as it does when GitHub
+        # rebased the chain itself.
+        comparison = await self._github.rest.repos.async_compare_commits(
+            owner, name, basehead=f"{onto}...{branch}"
+        )
+        if not comparison.parsed_data.behind_by:
+            return
+        tip = (await git.async_get_ref(owner, name, f"heads/{branch}")).parsed_data.object_.sha
+        onto_tip = (await git.async_get_ref(owner, name, f"heads/{onto}")).parsed_data.object_.sha
+        onto_tree = (await git.async_get_commit(owner, name, onto_tip)).parsed_data.tree.sha
+        original = (await git.async_get_commit(owner, name, tip)).parsed_data
+        anchor = await git.async_create_commit(
+            owner, name, message=f"Base of {branch}", tree=onto_tree, parents=[since]
+        )
+        # A new name each time: a scratch branch that a crash left behind refuses the next one.
+        scratch = f"{branch}-rebase-{uuid.uuid4().hex[:8]}"
+        await git.async_create_ref(
+            owner, name, ref=f"refs/heads/{scratch}", sha=anchor.parsed_data.sha
+        )
+        try:
+            try:
+                merge = await self._github.rest.repos.async_merge(
+                    owner, name, base=scratch, head=tip
+                )
+            except RequestFailed as error:
+                if error.response.status_code == 409:
+                    raise exceptions.GitHubMergeConflictError(
+                        f"{repo}: {branch} onto {onto}"
+                    ) from error
+                raise
+            # The commit keeps its message and its author. Its committer is whoever rebased it.
+            commit = await git.async_create_commit(
+                owner,
+                name,
+                message=original.message,
+                tree=merge.parsed_data.commit.tree.sha,
+                parents=[onto_tip],
+                author={
+                    "name": original.author.name,
+                    "email": original.author.email,
+                    "date": original.author.date,
+                },
+            )
+            await git.async_update_ref(
+                owner, name, f"heads/{branch}", sha=commit.parsed_data.sha, force=True
+            )
+        finally:
+            await git.async_delete_ref(owner, name, f"heads/{scratch}")
+
     async def merge_when_ready(self, repo: str, pr_number: int) -> bool:
         """Whether GitHub accepted ownership of the merge."""
         pull_request = await self.get_pull_request(repo, pr_number)
@@ -394,6 +456,110 @@ class GitHubClient:
             await self.update_pull_request_branch(repo, pr_number)
             return True
         return False
+
+    async def get_stack(self, repo: str, pr_number: int) -> dict[str, object] | None:
+        """The stack that holds the pull request, as GitHub gives it on the pull request.
+        githubkit's model of a pull request drops this field, so the request is raw."""
+        owner, name = repo.split("/", 1)
+        response = await self._github.arequest("GET", f"/repos/{owner}/{name}/pulls/{pr_number}")
+        return response.json().get("stack")
+
+    async def has_stacks(self, repo: str) -> bool:
+        """Whether the repository has stacked pull requests. GitHub answers 404 when it has
+        not."""
+        owner, name = repo.split("/", 1)
+        try:
+            await self._github.arequest("GET", f"/repos/{owner}/{name}/stacks")
+        except RequestFailed as error:
+            if error.response.status_code == 404:
+                return False
+            raise
+        return True
+
+    async def stack_on(self, repo: str, pr_number: int, *, below: int) -> None:
+        """Put the pull request in the stack of ``below``, the pull request whose branch it
+        targets. ``below`` starts a stack when it has none. GitHub accepts only a pull
+        request that targets the top of a stack, and a closed pull request on top blocks the
+        stack. Such a stack is dissolved, and a new one holds its open pull requests, in
+        order, and then this one."""
+        owner, name = repo.split("/", 1)
+        try:
+            stack = await self.get_stack(repo, below)
+            pull_requests = [below, pr_number]
+            if stack:
+                number = stack["number"]
+                response = await self._github.arequest(
+                    "GET", f"/repos/{owner}/{name}/stacks/{number}"
+                )
+                members = response.json()["pull_requests"]
+                top = members[-1]
+                if top["state"] == "closed" and not top["merged_at"]:
+                    pull_requests = [
+                        member["number"] for member in members if member["state"] == "open"
+                    ] + [pr_number]
+                    await self._github.arequest(
+                        "POST", f"/repos/{owner}/{name}/stacks/{number}/unstack"
+                    )
+                    stack = None
+            if stack:
+                await self._github.arequest(
+                    "POST",
+                    f"/repos/{owner}/{name}/stacks/{stack['number']}/add",
+                    json={"pull_requests": [pr_number]},
+                )
+            else:
+                await self._github.arequest(
+                    "POST", f"/repos/{owner}/{name}/stacks", json={"pull_requests": pull_requests}
+                )
+        except RequestFailed as error:
+            raise exceptions.GitHubStackError(
+                f"{repo}#{pr_number} on #{below}: {error.response.status_code} "
+                f"{error.response.text}",
+                status_code=error.response.status_code,
+            ) from error
+
+    async def list_open_pull_requests(self, repo: str, *, base: str) -> list[int]:
+        """The numbers of the open pull requests that target the branch ``base``."""
+        owner, name = repo.split("/", 1)
+        response = await self._github.rest.pulls.async_list(owner, name, base=base, state="open")
+        return [pull_request.number for pull_request in response.parsed_data]
+
+    async def request_stacked_merge(self, repo: str, pr_number: int):
+        """Ask GitHub to merge a stacked pull request. GitHub merges it only through the
+        asynchronous endpoint, and that merge takes every open pull request below it too.
+        The answer says whether the merge is still running."""
+        owner, name = repo.split("/", 1)
+        try:
+            response = await self._github.arequest(
+                "PUT",
+                f"/repos/{owner}/{name}/pulls/{pr_number}/merge-async",
+                json={"merge_method": "squash"},
+            )
+        except RequestFailed as error:
+            # 409: a merge of this pull request is already running, and the answer is its.
+            # 400: the pull request is closed or still a draft. Both answer as a result.
+            if error.response.status_code not in {400, 409}:
+                raise
+            return error.response.json()
+        return response.json()
+
+    async def read_stacked_merge(self, repo: str, pr_number: int, uuid: str):
+        """Where the merge that ``request_stacked_merge`` started has got to."""
+        owner, name = repo.split("/", 1)
+        try:
+            response = await self._github.arequest(
+                "GET", f"/repos/{owner}/{name}/pulls/{pr_number}/merge-async/{uuid}"
+            )
+        except RequestFailed as error:
+            # GitHub keeps the result for 24 hours and then answers 404. A merge that was
+            # still pending then is lost, and the work goes back to review.
+            if error.response.status_code != 404:
+                raise
+            return {
+                "status": "failed",
+                "details": {"message": "GitHub no longer keeps the result of this merge"},
+            }
+        return response.json()
 
     async def update_pull_request_body(
         self,
@@ -452,13 +618,21 @@ class GitHubClient:
 
         return True
 
-    async def create_branch(self, repo: str, branch: str) -> None:
-        """Create ``branch`` at the head of the default branch."""
+    async def get_default_branch(self, repo: str) -> str:
         owner, name = repo.split("/", 1)
         repository = await self._github.rest.repos.async_get(owner, name)
-        head = await self._github.rest.git.async_get_ref(
-            owner, name, f"heads/{repository.parsed_data.default_branch}"
-        )
+        return repository.parsed_data.default_branch
+
+    async def update_pull_request_base(self, repo: str, pr_number: int, *, base: str) -> None:
+        owner, name = repo.split("/", 1)
+        await self._github.rest.pulls.async_update(owner, name, pr_number, base=base)
+
+    async def create_branch(self, repo: str, branch: str, *, base: str | None = None) -> None:
+        """Create ``branch`` at the head of ``base``, or of the default branch."""
+        owner, name = repo.split("/", 1)
+        if not base:
+            base = await self.get_default_branch(repo)
+        head = await self._github.rest.git.async_get_ref(owner, name, f"heads/{base}")
         await self._github.rest.git.async_create_ref(
             owner, name, ref=f"refs/heads/{branch}", sha=head.parsed_data.object_.sha
         )

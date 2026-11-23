@@ -19,6 +19,19 @@ CI_TTL_SECONDS = 60 * 60
 # A webhook wakes the CI wait early. The poll catches a check that finished before the
 # wait began, and a delivery that never came.
 CI_POLL_SECONDS = 60
+# A webhook wakes the wait for a blocker's merge when GitHub moves the PR. The hourly read
+# catches a move that came with no delivery.
+BLOCKER_POLL_SECONDS = 60 * 60
+# A blocker that does not merge in two weeks fails the build that waits for it.
+BLOCKER_TTL_SECONDS = 14 * 24 * 60 * 60
+
+# GitHub runs the merge of a stacked PR in the background, and a merge may take a few
+# minutes. The run asks again this often until the merge is no longer pending.
+MERGE_POLL_SECONDS = 10
+# GitHub answers 409 to a stack call while it changes the stack, after a merge below. The
+# build tries again this often, for this many tries.
+STACK_RETRY_SECONDS = 10
+STACK_ATTEMPTS = 3
 # A suite that passed or did not apply.
 CI_GREEN_CONCLUSIONS = frozenset({"success", "neutral", "skipped"})
 # A Linear issue in a state of these types is finished or dropped, so it blocks nothing.

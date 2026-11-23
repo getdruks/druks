@@ -1,7 +1,15 @@
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from druks.contrib.software_factory.app import SoftwareFactory
+from druks.contrib.software_factory.constants import (
+    BLOCKER_POLL_SECONDS,
+    BLOCKER_TTL_SECONDS,
+    MERGE_POLL_SECONDS,
+    STACK_ATTEMPTS,
+    STACK_RETRY_SECONDS,
+)
 from druks.contrib.software_factory.contracts import (
     AcceptanceCriterionOutput,
     CiReport,
@@ -19,8 +27,9 @@ from druks.contrib.software_factory.journal import BuildJournal
 from druks.contrib.software_factory.policy import PlanGate, RepoPolicy
 from druks.contrib.software_factory.ticketing.base import Tracker
 from druks.contrib.software_factory.workflows import Build, PullRequestReview
+from druks.core.apis.exceptions import GitHubMergeConflictError
 from druks.notifications.services import get_rendered_ask
-from druks.workflows import FatalError, OperatorReply, Run
+from druks.workflows import FatalError, OperatorReply, Run, WaitTimeout
 
 from software_factory.factories import make_test_work_item
 
@@ -834,6 +843,7 @@ async def test_a_round_without_green_ci_parks_saying_so(monkeypatch, conclusion,
 async def test_only_a_person_s_approval_clears_the_draft_before_a_merge(monkeypatch, gate, calls):
     flow = Build()
     flow._policy = RepoPolicy(on_approval="merge", gates={"implementation_approval": gate})
+    flow._blockers = []
     flow.subject = SimpleNamespace(repo="org/repo")
     flow.journal = BuildJournal()
     flow.journal.add(CiReport(head_sha="0f3a2c1d", conclusion="red"))
@@ -846,12 +856,13 @@ async def test_only_a_person_s_approval_clears_the_draft_before_a_merge(monkeypa
     async def clear_draft():
         recorded.append("clear_draft")
 
-    async def merge():
+    async def merge(*, stacked):
         recorded.append("merge")
         return True
 
     monkeypatch.setattr(ReviewWork, "wait", fake_wait)
     monkeypatch.setattr(flow, "_clear_draft", clear_draft)
+    monkeypatch.setattr(flow, "_is_stacked", AsyncMock(return_value=False))
     monkeypatch.setattr(flow, "declare_merge_intent", merge)
 
     assert await flow._work_gate() is True
@@ -881,7 +892,7 @@ async def test_approval_ends_the_build_without_merging_by_default(monkeypatch):
     flow._policy = RepoPolicy()
     cleared = []
 
-    async def merged():
+    async def merged(*, stacked):
         raise AssertionError("merge without opt-in")
 
     async def fake_clear_draft():
@@ -899,22 +910,535 @@ async def test_a_rejected_merge_intent_reparks_the_work_gate(monkeypatch):
     rather than finishing a run whose PR never merged."""
     flow = Build()
     flow._policy = RepoPolicy(on_approval="merge")
+    flow._blockers = []
     flow.subject = SimpleNamespace(repo="clawhaven/example")
     flow.journal = SimpleNamespace(implementations=[])
     reparked = []
 
-    async def declined():
+    async def declined(*, stacked):
         return False
 
     async def fake_work_gate():
         reparked.append(True)
         return True
 
+    monkeypatch.setattr(flow, "_is_stacked", AsyncMock(return_value=False))
     monkeypatch.setattr(flow, "declare_merge_intent", declined)
     monkeypatch.setattr(flow, "_work_gate", fake_work_gate)
 
     assert await flow._approved_work() is True
     assert reparked == [True]
+
+
+def _merging_flow(monkeypatch, *, stacked: bool, requested, reads=()) -> SimpleNamespace:
+    """A build whose PR is approved. GitHub answers the stacked merge with ``requested``,
+    and then with each of ``reads``, one per ask."""
+    flow = Build()
+    flow.subject = SimpleNamespace(repo="org/repo")
+    monkeypatch.setattr(Build, "pr_number", property(lambda self: 42))
+    answers = iter(reads)
+    seen = SimpleNamespace(sleeps=[], reads=[], requests=0, direct=0)
+
+    async def is_stacked():
+        return stacked
+
+    async def merge_when_ready():
+        seen.direct += 1
+        return True
+
+    async def request_stacked_merge():
+        seen.requests += 1
+        return requested
+
+    async def read_stacked_merge(uuid):
+        seen.reads.append(uuid)
+        return next(answers)
+
+    async def sleep(seconds, *, label, until=""):
+        seen.sleeps.append((seconds, label))
+        return False
+
+    monkeypatch.setattr(flow, "_is_stacked", is_stacked)
+    monkeypatch.setattr(flow, "_merge_when_ready", merge_when_ready)
+    monkeypatch.setattr(flow, "_request_stacked_merge", request_stacked_merge)
+    monkeypatch.setattr(flow, "_read_stacked_merge", read_stacked_merge)
+    monkeypatch.setattr(flow, "sleep", sleep)
+    seen.flow = flow
+    return seen
+
+
+def _merge(status: str, uuid: str = "", message: str = "") -> dict:
+    """GitHub's answer to the merge of a stacked PR."""
+    return {"status": status, "details": {"uuid": uuid, "message": message}}
+
+
+async def test_a_pr_outside_a_stack_merges_in_one_call_and_waits_for_nothing(monkeypatch):
+    merging = _merging_flow(monkeypatch, stacked=False, requested=None)
+
+    assert await merging.flow.declare_merge_intent(stacked=False) is True
+
+    assert (merging.direct, merging.requests, merging.sleeps) == (1, 0, [])
+
+
+async def test_a_stacked_merge_is_asked_again_with_a_durable_sleep_until_it_is_done(monkeypatch):
+    """The wait is the run's, not the client's: it sleeps durably between the asks, so it
+    releases the box and survives a restart."""
+    merging = _merging_flow(
+        monkeypatch,
+        stacked=True,
+        requested=_merge("pending", "u1", "enqueued"),
+        reads=[_merge("pending", "u1"), _merge("merged", message="Merged")],
+    )
+
+    assert await merging.flow.declare_merge_intent(stacked=True) is True
+
+    assert merging.requests == 1
+    assert merging.reads == ["u1", "u1"]
+    assert merging.sleeps == [(MERGE_POLL_SECONDS, "Waiting for GitHub to merge")] * 2
+
+
+async def test_a_stacked_merge_that_github_fails_parks_the_work(monkeypatch):
+    merging = _merging_flow(
+        monkeypatch,
+        stacked=True,
+        requested=_merge("pending", "u1"),
+        reads=[_merge("failed", "u1", "Required status check is failing")],
+    )
+
+    assert await merging.flow.declare_merge_intent(stacked=True) is False
+
+
+async def test_a_stacked_merge_that_github_refuses_at_once_does_not_wait(monkeypatch):
+    merging = _merging_flow(
+        monkeypatch, stacked=True, requested=_merge("failed", message="The PR is a draft")
+    )
+
+    assert await merging.flow.declare_merge_intent(stacked=True) is False
+
+    assert merging.sleeps == []
+
+
+async def test_a_stacked_merge_is_asked_about_until_it_is_no_longer_pending(monkeypatch):
+    """GitHub says a stack merge may take a few minutes, so no number of asks ends the wait
+    while it is still pending. A merge that fails late is not lost."""
+    pending = _merge("pending", "u1")
+    merging = _merging_flow(
+        monkeypatch,
+        stacked=True,
+        requested=pending,
+        reads=[pending] * 40 + [_merge("failed", "u1", "Required status check is failing")],
+    )
+
+    assert await merging.flow.declare_merge_intent(stacked=True) is False
+
+    assert len(merging.sleeps) == 41
+
+
+def _flow_on_a_blockers_branch(monkeypatch, *bases: str, answers=()) -> SimpleNamespace:
+    """A build whose PR targets each of ``bases`` as it reads it, one after another. Each
+    wait for the blocker answers with the next of ``answers``: facts, or a timeout."""
+    flow = Build()
+    flow._policy = RepoPolicy(on_approval="merge")
+    flow._base_branch = "agent/ACME-1"
+    flow.subject = SimpleNamespace(repo="org/repo")
+    flow.journal = BuildJournal()
+    monkeypatch.setattr(Build, "pr_number", property(lambda self: 42))
+    reads = iter(bases)
+    github = SimpleNamespace(
+        get_pull_request=AsyncMock(side_effect=lambda repo, number: {"base": {"ref": next(reads)}})
+    )
+    monkeypatch.setattr(
+        "druks.contrib.software_factory.workflows.Github.get_client",
+        AsyncMock(return_value=github),
+    )
+    replies = iter(answers)
+    waits: list[tuple] = []
+    merges: list[int] = []
+    triages: list[bool] = []
+
+    async def wait(topic, *, label, ttl_seconds):
+        waits.append((topic, label, ttl_seconds))
+        reply = next(replies)
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+
+    async def merge(*, stacked):
+        merges.append(len(waits))
+        return True
+
+    async def triage():
+        triages.append(True)
+        return False
+
+    async def now():
+        return 0.0
+
+    async def targets_blocker_branch():
+        return await Build._targets_blocker_branch.__wrapped__(flow)
+
+    monkeypatch.setattr(flow, "wait", wait)
+    monkeypatch.setattr(flow, "_is_stacked", AsyncMock(return_value=False))
+    monkeypatch.setattr(flow, "declare_merge_intent", merge)
+    monkeypatch.setattr(flow, "_triage", triage)
+    monkeypatch.setattr(flow, "_now", now)
+    monkeypatch.setattr(flow, "_targets_blocker_branch", targets_blocker_branch)
+    return SimpleNamespace(flow=flow, waits=waits, merges=merges, triages=triages)
+
+
+_WAIT = ("pr.changed", "Waiting for its blocker to merge", BLOCKER_POLL_SECONDS)
+
+
+async def test_approval_waits_to_merge_while_the_pr_targets_a_blockers_branch(monkeypatch):
+    """GitHub merges a stacked PR with every open PR below it, so a PR on a blocker's
+    branch merges only after GitHub moves it to the base the blocker merged into. A wake
+    from GitHub and a poll both read the base again."""
+    build = _flow_on_a_blockers_branch(
+        monkeypatch,
+        "agent/ACME-1",
+        "agent/ACME-1",
+        "main",
+        answers=[{"action": "moved"}, WaitTimeout("pr.changed")],
+    )
+
+    assert await build.flow._approved_work() is True
+
+    assert build.waits == [_WAIT, _WAIT]
+    assert build.merges == [2]
+
+
+async def test_approval_merges_at_once_when_the_pr_no_longer_targets_a_blockers_branch(
+    monkeypatch,
+):
+    build = _flow_on_a_blockers_branch(monkeypatch, "main")
+
+    assert await build.flow._approved_work() is True
+
+    assert (build.waits, build.merges) == ([], [0])
+
+
+async def test_a_build_that_waits_too_long_for_its_blocker_fails(monkeypatch):
+    build = _flow_on_a_blockers_branch(monkeypatch, "agent/ACME-1")
+    clock = iter([0.0, BLOCKER_TTL_SECONDS + 1.0])
+
+    async def now():
+        return next(clock)
+
+    monkeypatch.setattr(build.flow, "_now", now)
+
+    with pytest.raises(FatalError, match="agent/ACME-1 did not merge in time"):
+        await build.flow._approved_work()
+
+    assert (build.waits, build.merges) == ([], [])
+
+
+async def test_a_change_request_while_the_build_waits_goes_to_triage(monkeypatch):
+    """The wait is not the review gate, so a review that asks for changes has to reach the
+    build through the wait, and not merge with the blocker."""
+    review = {"action": "request_changes", "reviewer": "paulo", "body": "Rename it."}
+    build = _flow_on_a_blockers_branch(
+        monkeypatch, "agent/ACME-1", "agent/ACME-1", answers=[review]
+    )
+
+    assert await build.flow._approved_work() is False
+
+    assert (build.merges, build.triages) == ([], [True])
+    assert [(entry["reviewer"], entry["body"]) for entry in build.flow.journal.human_feedback] == [
+        ("paulo", "Rename it.")
+    ]
+
+
+async def test_an_approval_while_the_build_waits_changes_nothing(monkeypatch):
+    approval = {"action": "approve", "reviewer": "paulo", "body": ""}
+    build = _flow_on_a_blockers_branch(
+        monkeypatch, "agent/ACME-1", "agent/ACME-1", "main", answers=[approval, {"action": "moved"}]
+    )
+
+    assert await build.flow._approved_work() is True
+
+    assert (build.merges, build.triages) == ([2], [])
+
+
+def _stacked_approval(monkeypatch, *, heads, conclusion: str, merged: bool):
+    """An approved stacked PR whose head reads as each of ``heads`` in turn, whose checks
+    conclude ``conclusion``, and whose merge GitHub accepts or refuses."""
+    build = _flow_on_a_blockers_branch(monkeypatch, "main")
+    reads = iter(heads)
+    waited, asked, parked = [], [], []
+
+    async def wait_for_ci(head_sha):
+        waited.append(head_sha)
+        return CiReport(head_sha=head_sha, conclusion=conclusion)
+
+    async def merge(*, stacked):
+        asked.append(stacked)
+        return merged
+
+    async def work_gate():
+        parked.append(True)
+        return True
+
+    monkeypatch.setattr(build.flow, "_is_stacked", AsyncMock(return_value=True))
+    monkeypatch.setattr(build.flow, "_read_head_sha", AsyncMock(side_effect=lambda: next(reads)))
+    monkeypatch.setattr(build.flow, "_wait_for_ci", wait_for_ci)
+    monkeypatch.setattr(build.flow, "declare_merge_intent", merge)
+    monkeypatch.setattr(build.flow, "_work_gate", work_gate)
+    return SimpleNamespace(flow=build.flow, waited=waited, asked=asked, parked=parked)
+
+
+async def test_a_stacked_pr_waits_for_the_checks_of_its_head_and_then_asks_github(monkeypatch):
+    """GitHub rebases a PR when the one below it merges, and its checks start again. GitHub
+    decides whether to merge, and the build asks once the checks have finished."""
+    approval = _stacked_approval(
+        monkeypatch, heads=["9c1d", "9c1d"], conclusion="green", merged=True
+    )
+
+    assert await approval.flow._approved_work() is True
+
+    assert (approval.waited, approval.asked) == (["9c1d"], [True])
+
+
+async def test_a_stacked_pr_whose_head_moved_during_the_wait_waits_again(monkeypatch):
+    """GitHub moves a stacked PR first and rebases the others after, so the wait can end on
+    the old head."""
+    approval = _stacked_approval(
+        monkeypatch, heads=["old", "new", "new"], conclusion="green", merged=True
+    )
+
+    assert await approval.flow._approved_work() is True
+
+    assert approval.waited == ["old", "new"]
+
+
+async def test_red_checks_that_github_refuses_to_merge_go_back_to_the_implementer(monkeypatch):
+    approval = _stacked_approval(
+        monkeypatch, heads=["9c1d", "9c1d"], conclusion="red", merged=False
+    )
+
+    assert await approval.flow._approved_work() is False
+
+    assert approval.parked == []
+
+
+async def test_red_checks_do_not_stop_a_merge_that_github_accepts(monkeypatch):
+    """The base requires only some checks, so a red check that it does not require leaves the
+    person's approval standing."""
+    approval = _stacked_approval(monkeypatch, heads=["9c1d", "9c1d"], conclusion="red", merged=True)
+
+    assert await approval.flow._approved_work() is True
+
+    assert approval.parked == []
+
+
+async def test_a_refused_merge_with_green_checks_parks_the_work_for_review(monkeypatch):
+    approval = _stacked_approval(
+        monkeypatch, heads=["9c1d", "9c1d"], conclusion="green", merged=False
+    )
+
+    assert await approval.flow._approved_work() is True
+
+    assert approval.parked == [True]
+
+
+def _building_on_a_blockers_branch(monkeypatch, *, blocker_state: str) -> SimpleNamespace:
+    flow = Build()
+    flow._base_branch = "agent/ACME-1"
+    flow.subject = SimpleNamespace(repo="org/repo")
+    monkeypatch.setattr(flow, "_get_base_pr_number", AsyncMock(return_value=7))
+    github = SimpleNamespace(get_pull_request=AsyncMock(return_value={"state": blocker_state}))
+    monkeypatch.setattr(
+        "druks.contrib.software_factory.workflows.Github.get_client",
+        AsyncMock(return_value=github),
+    )
+    return SimpleNamespace(flow=flow)
+
+
+async def test_a_blockers_pr_that_is_open_is_a_base(monkeypatch):
+    build = _building_on_a_blockers_branch(monkeypatch, blocker_state="open")
+
+    assert await Build._is_base_open.__wrapped__(build.flow) is True
+
+
+async def test_a_blockers_pr_that_merged_meanwhile_is_no_base(monkeypatch):
+    build = _building_on_a_blockers_branch(monkeypatch, blocker_state="closed")
+
+    assert await Build._is_base_open.__wrapped__(build.flow) is False
+
+
+async def test_a_branch_starts_on_the_base_that_it_is_given():
+    created = []
+
+    async def create_branch(*, base=None):
+        created.append(base)
+
+    flow = Build()
+    flow.subject = SimpleNamespace(repo="org/repo", create_branch=create_branch)
+
+    await Build._create_branch.__wrapped__(flow, "agent/ACME-1")
+    await Build._create_branch.__wrapped__(flow, None)
+
+    assert created == ["agent/ACME-1", None]
+
+
+async def test_a_blocker_that_merged_meanwhile_leaves_the_build_on_the_default_branch(
+    monkeypatch,
+):
+    flow, calls = _implementing_build(
+        monkeypatch, max_revisions=1, heads=["a"], conclusions=["green"], decisions=["approve"]
+    )
+    flow._base_branch = "agent/ACME-1"
+    monkeypatch.setattr(flow, "_is_base_open", AsyncMock(return_value=False))
+
+    await flow._implement_phase()
+
+    assert flow._base_branch is None
+    assert flow._create_branch.created == [None]
+    assert "join_stack" not in calls
+
+
+async def test_a_build_on_a_blockers_branch_joins_its_stack_after_the_first_delivery(monkeypatch):
+    flow, calls = _implementing_build(
+        monkeypatch,
+        max_revisions=5,
+        heads=["a", "b"],
+        conclusions=["green", "green"],
+        decisions=["request_changes", "approve"],
+    )
+    flow._base_branch = "agent/ACME-1"
+    monkeypatch.setattr(flow, "_is_base_open", AsyncMock(return_value=True))
+
+    async def join_stack():
+        calls.append("join_stack")
+
+    monkeypatch.setattr(flow, "_join_stack", join_stack)
+
+    await flow._implement_phase()
+
+    assert flow._create_branch.created == ["agent/ACME-1"]
+    assert calls.count("join_stack") == 1
+    assert calls[:2] == ["implement", "join_stack"]
+
+
+def _refusal(status_code: int, message: str = "must form a stack") -> dict:
+    return {"status_code": status_code, "message": f"org/repo#9 on #7: {status_code} {message}"}
+
+
+def _joining_build(monkeypatch, *answers, base_open: bool = True):
+    """A build that asks GitHub to stack its PR, and gets each of ``answers`` in turn: None
+    for a PR that joined, or GitHub's refusal."""
+    flow = Build()
+    flow._base_branch = "agent/ACME-1"
+    flow.sleeps = []
+
+    async def sleep(seconds, *, label, until=""):
+        flow.sleeps.append(seconds)
+        return False
+
+    monkeypatch.setattr(flow, "sleep", sleep)
+    monkeypatch.setattr(flow, "_stack_on_blocker", AsyncMock(side_effect=list(answers)))
+    monkeypatch.setattr(flow, "_is_base_open", AsyncMock(return_value=base_open))
+    monkeypatch.setattr(flow, "_move_to_default_branch", AsyncMock())
+    return flow
+
+
+async def test_a_pr_that_github_will_not_stack_fails_the_build_with_the_reason(monkeypatch):
+    flow = _joining_build(monkeypatch, _refusal(422))
+
+    with pytest.raises(
+        FatalError, match="cannot join the stack of agent/ACME-1: .*must form a stack"
+    ):
+        await flow._join_stack()
+
+    flow._move_to_default_branch.assert_not_awaited()
+    assert flow.sleeps == []
+
+
+async def test_a_pr_whose_blocker_merged_before_it_joined_moves_onto_the_default_branch(
+    monkeypatch,
+):
+    """GitHub refuses a PR on a merged PR's branch, and nothing would move it. The blocker's
+    change is on the default branch now, so the PR goes there."""
+    flow = _joining_build(monkeypatch, _refusal(422), base_open=False)
+
+    await flow._join_stack()
+
+    flow._move_to_default_branch.assert_awaited_once_with()
+    assert flow._base_branch is None
+
+
+async def test_a_pr_that_joins_the_stack_stays_on_its_blockers_branch(monkeypatch):
+    flow = _joining_build(monkeypatch, None)
+
+    await flow._join_stack()
+
+    flow._move_to_default_branch.assert_not_awaited()
+    assert flow._base_branch == "agent/ACME-1"
+
+
+async def test_a_stack_that_github_is_changing_is_tried_again_after_a_wait(monkeypatch):
+    """GitHub answers 409 while it rebases the stack after a merge below."""
+    flow = _joining_build(monkeypatch, _refusal(409, "stack is being modified"), None)
+
+    await flow._join_stack()
+
+    assert flow.sleeps == [STACK_RETRY_SECONDS]
+    assert flow._base_branch == "agent/ACME-1"
+
+
+async def test_a_stack_that_stays_busy_fails_the_build_with_the_last_reason(monkeypatch):
+    busy = _refusal(409, "stack is being modified")
+    flow = _joining_build(monkeypatch, *[busy] * STACK_ATTEMPTS)
+
+    with pytest.raises(FatalError, match="being modified"):
+        await flow._join_stack()
+
+    assert flow.sleeps == [STACK_RETRY_SECONDS] * (STACK_ATTEMPTS - 1)
+
+
+def _moving_build(monkeypatch, *, conflict: bool):
+    flow = Build()
+    flow._base_branch = "agent/ACME-1"
+    flow.subject = SimpleNamespace(repo="org/repo", branch="agent/ACME-2")
+    monkeypatch.setattr(Build, "pr_number", property(lambda self: 42))
+    monkeypatch.setattr(flow, "_get_base_pr_number", AsyncMock(return_value=7))
+    github = SimpleNamespace(
+        get_default_branch=AsyncMock(return_value="main"),
+        get_pull_request=AsyncMock(return_value={"head": {"sha": "a1b2"}}),
+        rebase_branch=AsyncMock(
+            side_effect=GitHubMergeConflictError("o/r: agent/ACME-2 onto main")
+            if conflict
+            else None
+        ),
+        update_pull_request_base=AsyncMock(),
+    )
+    monkeypatch.setattr(
+        "druks.contrib.software_factory.workflows.Github.get_client",
+        AsyncMock(return_value=github),
+    )
+    return flow, github
+
+
+async def test_moving_a_pr_to_the_default_branch_rebases_it_from_the_blockers_tip(monkeypatch):
+    """The commit was built on the tip of the blocker's PR, and the merge starts there."""
+    flow, github = _moving_build(monkeypatch, conflict=False)
+
+    await Build._move_to_default_branch.__wrapped__(flow)
+
+    github.rebase_branch.assert_awaited_once_with(
+        "org/repo", "agent/ACME-2", onto="main", since="a1b2"
+    )
+    github.update_pull_request_base.assert_awaited_once_with("org/repo", 42, base="main")
+
+
+async def test_a_pr_that_conflicts_with_the_default_branch_fails_the_build_and_keeps_its_base(
+    monkeypatch,
+):
+    flow, github = _moving_build(monkeypatch, conflict=True)
+
+    with pytest.raises(FatalError, match="conflicts with main"):
+        await Build._move_to_default_branch.__wrapped__(flow)
+
+    github.update_pull_request_base.assert_not_awaited()
 
 
 def _reviewing_flow(monkeypatch, facts: dict) -> tuple[Build, list[dict]]:
@@ -964,12 +1488,15 @@ def _implementing_build(
     and whose review decides ``decisions``, each in turn. It returns the calls made."""
     flow = Build()
     flow._settings = Build.Settings(max_implementation_revisions=max_revisions)
+    flow._blockers = []
     flow.journal = SimpleNamespace(implementation_revision=0, last_implementation=None)
     heads, conclusions, decisions = iter(heads), iter(conclusions), iter(decisions)
     calls: list[str] = []
 
-    async def create_branch():
-        return None
+    async def create_branch(base):
+        create_branch.created.append(base)
+
+    create_branch.created = []
 
     async def implement():
         delivery = SimpleNamespace(head_sha=next(heads))

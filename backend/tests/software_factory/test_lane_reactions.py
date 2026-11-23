@@ -181,7 +181,7 @@ async def test_github_pr_open_records_the_pr_of_the_items_branch(druks_db):
             "pr.opened",
             repo="acme/widget",
             pr_number=12,
-            payload={"branch": "agent/ACME-8", "is_fork": False},
+            payload={"branch": "agent/ACME-8", "base_branch": "main", "is_fork": False},
         )
 
     opened = await druks_db.scalars(
