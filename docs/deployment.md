@@ -46,6 +46,8 @@ The Druks services use the **host network** so they can connect to Postgres, Red
 Drukbox, and provider-specific sandbox addresses from the host network
 namespace. The exe.dev shape reaches VMs over the host tailnet. Other providers
 can return SSH addresses that are directly reachable.
+Postgres listens on `127.0.0.1:5432` and Redis on `127.0.0.1:6379`, so neither
+answers from the network.
 
 ## First-time setup on a fresh box
 

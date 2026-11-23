@@ -53,7 +53,8 @@ The local shape needs no authored values, so the first run goes all the way:
 - It generates the database password and the stored-secret key.
 - It pulls images and applies migrations.
 - It starts Druks, Postgres, Redis, Drukbox, its janitor, the secrets exchange,
-  and the secrets proxy. Drukbox listens on `127.0.0.1:8780`. The exchange
+  and the secrets proxy. Postgres listens on `127.0.0.1:5432` and Redis on
+  `127.0.0.1:6379`. Drukbox listens on `127.0.0.1:8780`. The exchange
   listens on `127.0.0.1:8781`. The proxy listens on `172.17.0.1:8880`, where
   sandbox containers reach it.
 - It uses `COMPOSE_FILE=compose.yaml:compose.override.yaml` and
