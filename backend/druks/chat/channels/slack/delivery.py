@@ -32,7 +32,12 @@ _CHANNEL_REASONS = {
 }
 
 # What Slack answers when it refuses the blocks of a message.
-_BLOCK_REFUSALS = {"invalid_blocks", "invalid_blocks_format", "msg_blocks_too_long"}
+_BLOCK_REFUSALS = {
+    "invalid_blocks",
+    "invalid_blocks_format",
+    "msg_blocks_too_long",
+    "posting_to_channel_denied",
+}
 
 # A line that opens or closes a code fence: its indent, three or more backticks or
 # tildes, then the rest.
@@ -40,6 +45,9 @@ _FENCE = re.compile(r"(\s*)(`{3,}|~{3,})(.*)")
 
 # A link as a text form writes it: its words, each bracket escaped, then its address.
 _MARKDOWN_LINK = re.compile(r"\[((?:\\.|[^\\\]])*)\]\(([^)\s]+)\)")
+
+# An outside http(s) address. Its path ends at the query or the fragment.
+_OUTSIDE_ADDRESS = re.compile(r"https?://[^/?#]*(?P<path>[^?#]*)", re.IGNORECASE)
 
 SUBMIT_ACTION = {"id": "submit", "label": "Submit"}
 
@@ -184,6 +192,25 @@ def cut_text(text: str, limit: int) -> str:
     return text[: limit - 1] + "…"
 
 
+def get_image_block(image: ui.Image) -> dict:
+    """The image block that draws ``image``. Empty when its address is not an outside png,
+    jpg, or gif, or when a field is too long for Slack."""
+    outside_address = _OUTSIDE_ADDRESS.match(image.url)
+    address = get_absolute_url(image.url)
+    if (
+        outside_address
+        and outside_address["path"].lower().endswith(slack.IMAGE_EXTENSIONS)
+        and len(address) <= slack.IMAGE_URL_LIMIT
+        and len(image.alternative_text) <= slack.IMAGE_ALT_TEXT_LIMIT
+        and len(image.caption) <= slack.IMAGE_TITLE_LIMIT
+    ):
+        block = {"type": "image", "image_url": address, "alt_text": image.alternative_text}
+        if image.caption:
+            block["title"] = {"type": "plain_text", "text": image.caption}
+        return block
+    return {}
+
+
 def get_blocks(
     text: str,
     *,
@@ -213,13 +240,16 @@ def get_blocks(
     chart. A pie takes a segment for each category. Druks cuts no label of a pie. A message
     draws the first two charts that Slack can draw. An action with no fields takes a
     button that carries ``token`` and its position, with Slack's dialog when it asks to
-    confirm, while there is no ``outcome``. Any other block, and a block past a limit of
-    Slack, takes its text form. A table that selects rows takes its text form, which holds
-    its actions. Text that follows text joins it in one markdown block. ``blocks`` take the
-    room that the rest leaves, the question included. When the room runs out, the last
-    block holds the text forms of the blocks left. When the markdown is longer than Slack
-    takes, Druks cuts the end of the blocks. A line in place of the link then says so, with
-    the link."""
+    confirm, while there is no ``outcome``. An image at an outside address of a png, a
+    jpg, or a gif takes an image block. A gallery takes one for each such image, under its
+    title. Each other image of a gallery keeps its line of the text form, in its place. Any
+    other block, and a block past a limit of Slack, takes its text form. A table that
+    selects rows takes its text form, which holds its actions. Text that follows text joins
+    it in one markdown block. ``blocks`` take the room that the rest leaves, the question
+    included. When the room runs out, the last block holds the text forms of the blocks
+    left. A gallery that does not fit whole is one of them. When the markdown is longer
+    than Slack takes, Druks cuts the end of the blocks. A line in place of the link then
+    says so, with the link."""
     controls: list[dict] = []
     if fields and actions:
         inputs_by_id = {}
@@ -473,6 +503,20 @@ def get_blocks(
                             "deny": {"type": "plain_text", "text": slack.CONFIRM_DENY_TEXT},
                         }
                     parts = [{"type": "actions", "elements": [button]}]
+            case ui.Image():
+                if image_block := get_image_block(block):
+                    parts = [image_block]
+            case ui.ImageGallery(title=title, images=images) if any(map(get_image_block, images)):
+                parts = [{"type": "markdown", "text": f"### {title}"}] if title else []
+                for image in images:
+                    if image_block := get_image_block(image):
+                        parts.append(image_block)
+                        continue
+                    line = f"- {image.to_markdown()}"
+                    if parts and parts[-1]["type"] == "markdown":
+                        parts[-1]["text"] += f"\n{line}"
+                    else:
+                        parts.append({"type": "markdown", "text": line})
         text_form = "" if parts else block.to_markdown()
         # One block of the room stays free for the link. When the room runs out, its last
         # block takes the blocks left as their text forms.

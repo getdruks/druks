@@ -19,6 +19,7 @@ from druks.chat.channels.slack.delivery import (
     cut_markdown,
     deliver,
     get_blocks,
+    get_image_block,
 )
 from druks.chat.enums import ConversationSource
 from druks.chat.exceptions import FormError
@@ -668,6 +669,10 @@ def _link_button(label: str, url: str) -> dict:
     return {"type": "actions", "elements": [button]}
 
 
+def _image_block(url: str, alternative_text: str) -> dict:
+    return {"type": "image", "image_url": url, "alt_text": alternative_text}
+
+
 @pytest.mark.usefixtures("tmp_data_dir")
 async def test_an_approval_keeps_its_blocks_beside_their_text_form(druks_db):
     _set_endpoint("https://druks.example")
@@ -796,6 +801,25 @@ async def test_facts_metrics_a_divider_and_a_link_go_out_as_slack_s_own_blocks(s
             ),
             20,
         ),
+        (
+            lambda size: ui.Image(
+                url="https://shots.example/" + "a" * (size - 26) + ".png",
+                alternative_text="Rack 3.",
+            ),
+            3000,
+        ),
+        (
+            lambda size: ui.Image(
+                url="https://shots.example/rack.png", alternative_text="A" * size
+            ),
+            2000,
+        ),
+        (
+            lambda size: ui.Image(
+                url="https://shots.example/rack.png", alternative_text="Rack 3.", caption="C" * size
+            ),
+            2000,
+        ),
     ],
     ids=[
         "field",
@@ -805,6 +829,9 @@ async def test_facts_metrics_a_divider_and_a_link_go_out_as_slack_s_own_blocks(s
         "table-columns",
         "chart-series",
         "chart-points",
+        "image-address",
+        "image-alt-text",
+        "image-title",
     ],
 )
 async def test_a_block_takes_slack_s_blocks_up_to_a_limit_and_its_text_form_past_it(
@@ -822,6 +849,7 @@ async def test_a_block_takes_slack_s_blocks_up_to_a_limit_and_its_text_form_past
         "actions",
         "data_table",
         "data_visualization",
+        "image",
     )
     assert text_post["blocks"] == [{"type": "markdown", "text": block_past_limit.to_markdown()}]
 
@@ -1868,3 +1896,129 @@ async def test_a_status_in_a_dm_edits_the_dm_channel_that_slack_gave(druks_db, s
         "1.0",
         "The gist is written.",
     )
+
+
+def test_an_image_goes_out_as_slack_s_image_with_its_caption_as_its_title():
+    rack = ui.Image(
+        url="https://shots.example/rack.png",
+        alternative_text="Rack 3 with its front fan out.",
+        caption="Rack 3",
+    )
+
+    assert get_blocks("text", blocks=[rack]) == [
+        {
+            "type": "image",
+            "image_url": "https://shots.example/rack.png",
+            "alt_text": "Rack 3 with its front fan out.",
+            "title": _label("Rack 3"),
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("url", "block"),
+    [
+        (
+            "HTTPS://shots.example/RACK.JPEG",
+            _image_block("HTTPS://shots.example/RACK.JPEG", "Rack 3."),
+        ),
+        (
+            "https://shots.example/rack.gif?size=2#loop",
+            _image_block("https://shots.example/rack.gif?size=2#loop", "Rack 3."),
+        ),
+        (
+            "https://shots.example/rack 3 (front).png",
+            _image_block("https://shots.example/rack%203%20%28front%29.png", "Rack 3."),
+        ),
+        ("https://shots.example/rack.svg", {}),
+        ("/static/rack.png", {}),
+    ],
+    ids=["jpeg-in-capitals", "gif-with-query-and-fragment", "space-and-parentheses", "svg", "path"],
+)
+def test_slack_draws_an_image_only_at_an_outside_address_whose_path_ends_in_png_jpg_or_gif(
+    url, block
+):
+    _set_endpoint("https://druks.example")
+
+    assert get_image_block(ui.Image(url=url, alternative_text="Rack 3.")) == block
+
+
+def test_a_gallery_takes_an_image_block_for_each_image_under_its_title():
+    shots = [
+        ui.Image(url=f"https://shots.example/rack-{number}.png", alternative_text=f"Rack {number}.")
+        for number in (1, 2, 3)
+    ]
+    image_blocks = [
+        _image_block(f"https://shots.example/rack-{number}.png", f"Rack {number}.")
+        for number in (1, 2, 3)
+    ]
+
+    blocks = get_blocks(
+        "text", blocks=[ui.ImageGallery(shots, title="Racks"), ui.ImageGallery(shots)]
+    )
+
+    assert blocks == [{"type": "markdown", "text": "### Racks"}, *image_blocks, *image_blocks]
+
+
+def test_a_gallery_keeps_the_line_of_each_image_that_slack_cannot_draw_in_its_place():
+    gallery = ui.ImageGallery(
+        [
+            ui.Image(url="https://shots.example/plan.svg", alternative_text="The plan."),
+            ui.Image(url="https://shots.example/front.png", alternative_text="The front."),
+            ui.Image(url="https://shots.example/back", alternative_text="The back."),
+            ui.Image(url="https://shots.example/side.svg", alternative_text="The side."),
+            ui.Image(url="https://shots.example/top.gif", alternative_text="The top."),
+        ],
+        title="Rack 3",
+    )
+
+    assert get_blocks("text", blocks=[gallery]) == [
+        {
+            "type": "markdown",
+            "text": "### Rack 3\n- [The plan.](https://shots.example/plan.svg)",
+        },
+        _image_block("https://shots.example/front.png", "The front."),
+        {
+            "type": "markdown",
+            "text": "- [The back.](https://shots.example/back)\n"
+            "- [The side.](https://shots.example/side.svg)",
+        },
+        _image_block("https://shots.example/top.gif", "The top."),
+    ]
+
+
+def test_a_gallery_with_no_image_that_slack_can_draw_shows_its_text_form():
+    links = ui.ImageGallery(
+        [
+            ui.Image(url="https://shots.example/plan.svg", alternative_text="The plan."),
+            ui.Image(url="https://shots.example/back", alternative_text="The back."),
+        ],
+        title="Rack 3",
+    )
+    front = ui.Image(url="https://shots.example/front.png", alternative_text="The front.")
+
+    assert get_blocks("text", blocks=[links, front]) == [
+        {"type": "markdown", "text": links.to_markdown()},
+        _image_block("https://shots.example/front.png", "The front."),
+    ]
+
+
+def test_a_gallery_that_does_not_fit_whole_shows_its_text_form_with_the_blocks_after_it():
+    links = [
+        ui.Link(f"Link {number}", url=f"https://docs.example/{number}") for number in range(46)
+    ]
+    shots = ui.ImageGallery(
+        [
+            ui.Image(url=f"https://shots.example/{number}.png", alternative_text=f"Shot {number}.")
+            for number in range(3)
+        ],
+        title="Shots",
+    )
+    docs = ui.Link("Docs", url="https://docs.example/a")
+
+    blocks = get_blocks("text", blocks=[*links, shots, docs])
+
+    # The title and two of the images would fit.
+    assert blocks[46:] == [
+        {"type": "markdown", "text": f"{shots.to_markdown()}\n\n{docs.to_markdown()}"}
+    ]

@@ -65,5 +65,10 @@ CONFIRM_TEXT_LIMIT = 300
 CONFIRM_BUTTON_LIMIT = 30
 # What the button that closes the dialog says, as on the dashboard.
 CONFIRM_DENY_TEXT = "Back"
+# The image formats that Slack draws, and its limits for an image, from the Block Kit reference.
+IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif")
+IMAGE_URL_LIMIT = 3000
+IMAGE_ALT_TEXT_LIMIT = 2000
+IMAGE_TITLE_LIMIT = 2000
 # What a button that opens a link sends as its action. A click on it answers no notification.
 LINK_BUTTON_ACTION_ID = "link"
