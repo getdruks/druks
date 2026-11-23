@@ -199,7 +199,7 @@ async def runtime():
             raise RuntimeError("retry task")
         SINK.append("task:retried")
 
-    @task(every="0 6 * * *")
+    @task(every="0 0 1 1 *")
     async def scheduled_task() -> None:
         SINK.append("task:scheduled")
 
@@ -285,7 +285,7 @@ async def runtime():
             await record_task.enqueue(repo="from-a-body")
 
     class DailySweep(Workflow):
-        every = "0 6 * * *"
+        every = "0 0 1 1 *"
 
         async def run(self) -> None:
             SINK.append("swept")
@@ -1177,7 +1177,7 @@ async def test_scheduled_task_runs_nullary_body(runtime):
 async def test_scheduled_task_must_be_nullary(runtime):
     with pytest.raises(WorkflowError, match="nullary"):
 
-        @task(every="0 6 * * *")
+        @task(every="0 0 1 1 *")
         async def needs_argument(target: str) -> None: ...
 
 
@@ -1197,7 +1197,7 @@ async def test_every_registers_schedule(runtime):
     workflow, entry = next(
         row for row in _workflow_schedules if row[0].kind == "durable_sdk.daily_sweep"
     )
-    assert workflow.every == "0 6 * * *"
+    assert workflow.every == "0 0 1 1 *"
     parameters = list(inspect.signature(entry).parameters.values())
     assert parameters[0].annotation is datetime
     assert len(parameters) == 2 and parameters[1].name == "context"
@@ -1365,7 +1365,7 @@ async def test_scheduled_dispatch_must_be_nullary(runtime):
     with pytest.raises(WorkflowError, match="nullary"):
 
         class NeedsArg(Workflow):
-            every = "0 6 * * *"
+            every = "0 0 1 1 *"
 
             async def run(self) -> None: ...  # pragma: no cover
 
@@ -1392,12 +1392,12 @@ async def test_apply_schedules_drops_undeclared(runtime):
 async def test_apply_schedules_resolves_operator_overrides(runtime):
     async with session_scope(runtime.engine) as session:
         await SettingsOverride.write(
-            session, "workflow:durable_sdk.daily_sweep:schedule", "0 9 * * *"
+            session, "workflow:durable_sdk.daily_sweep:schedule", "0 0 2 1 *"
         )
     async with session_scope(runtime.engine) as session:
         await apply_schedules(session)
     schedule = await DBOS.get_schedule_async("durable_sdk.daily_sweep")
-    assert schedule["schedule"] == "0 9 * * *"
+    assert schedule["schedule"] == "0 0 2 1 *"
 
     async with session_scope(runtime.engine) as session:
         await SettingsOverride.write(
@@ -1411,13 +1411,13 @@ async def test_apply_schedules_resolves_operator_overrides(runtime):
 
     async with session_scope(runtime.engine) as session:
         await SettingsOverride.write(
-            session, "workflow:durable_sdk.daily_sweep:schedule", "0 10 * * *"
+            session, "workflow:durable_sdk.daily_sweep:schedule", "0 0 3 1 *"
         )
     async with session_scope(runtime.engine) as session:
         await apply_schedules(session)
     retuned = await DBOS.get_schedule_async("durable_sdk.daily_sweep")
     assert retuned["status"] == "PAUSED"
-    assert retuned["schedule"] == "0 10 * * *"
+    assert retuned["schedule"] == "0 0 3 1 *"
     assert retuned["schedule_id"] == schedule["schedule_id"]
 
     invocation = await trigger_schedule("durable_sdk.daily_sweep")
@@ -1437,7 +1437,7 @@ async def test_apply_schedules_resolves_operator_overrides(runtime):
     async with session_scope(runtime.engine) as session:
         await apply_schedules(session)
     restored = await DBOS.get_schedule_async("durable_sdk.daily_sweep")
-    assert restored["schedule"] == "0 6 * * *"
+    assert restored["schedule"] == "0 0 1 1 *"
     assert restored["status"] == "ACTIVE"
 
 
