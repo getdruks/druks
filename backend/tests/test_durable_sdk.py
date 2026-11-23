@@ -63,7 +63,7 @@ from druks.secrets.models import VaultSecret
 from druks.settings import Settings, configure_settings, get_settings
 from druks.signals import subscribe
 from druks.teams.models import Team
-from druks.testing import asgi_client, init_db
+from druks.testing import asgi_client, init_db, worker_name
 from druks.user_settings.models import InstallationSettings, SettingsOverride
 from druks.workflows import (
     GATE_TTL_SECONDS,
@@ -88,7 +88,7 @@ from sqlalchemy import NullPool, column, create_engine, delete, func, select, te
 from sqlalchemy.ext.asyncio import create_async_engine
 
 PG_BASE = os.environ.get("DRUKS_TEST_PG", "postgresql://druks:druks@localhost:5432")
-DB = "druks_durable_test"
+DB = worker_name("druks_durable_test")
 URL = f"{PG_BASE.replace('postgresql://', 'postgresql+psycopg://')}/{DB}"
 
 

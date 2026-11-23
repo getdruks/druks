@@ -271,8 +271,12 @@ class ImplementationOutput(workflows.InstructionOutput):
     type: Literal["result"]
     # ``needs_clarification`` = the implementer found a contradiction in the binding
     # requirements and bailed; ``summary`` carries the reason. The workflow turns
-    # that into a run-stopping failure.
-    status: Literal["success", "needs_clarification"]
+    # that into a run-stopping failure. ``needs_check`` = the implementer ends its turn to
+    # have Druks run ``check_command``, and Druks resumes it with the result; it is not a
+    # delivery and not a revision.
+    status: Literal["success", "needs_clarification", "needs_check"]
+    # The declared test command to run, set only with ``needs_check``.
+    check_command: str | None
     # Nullable only for needs_clarification (bailed before delivering) — the strict
     # schema bans defaults, so optional is spelled required-but-nullable. On success
     # the validator below demands all four: a "success" without a pushed commit on a
@@ -304,6 +308,8 @@ class ImplementationOutput(workflows.InstructionOutput):
                     f"status=success without {', '.join(undelivered)} — a delivery has a "
                     "pushed commit on a PR; return needs_clarification if you could not deliver"
                 )
+        if (self.status == "needs_check") != bool(self.check_command):
+            raise ValueError("check_command is set when status is needs_check, and only then")
         return self
 
 

@@ -10,7 +10,7 @@ from druks.secrets.datastructures import Audience
 from druks.secrets.enums import SecretKind
 from druks.secrets.models import VaultSecret
 from druks.services import OauthClient, OauthRefreshError
-from druks.testing import init_db
+from druks.testing import init_db, worker_name
 from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 # the way rotation actually persists in production.
 
 PG_BASE = os.environ.get("DRUKS_TEST_PG", "postgresql://druks:druks@localhost:5432")
-DB = "druks_credential_test"
+DB = worker_name("druks_credential_test")
 URL = f"{PG_BASE.replace('postgresql://', 'postgresql+psycopg://')}/{DB}"
 
 

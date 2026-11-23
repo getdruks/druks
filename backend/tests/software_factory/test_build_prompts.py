@@ -6,7 +6,9 @@ import pytest
 from druks.contrib import software_factory
 from druks.contrib.software_factory.contracts import (
     CiReport,
+    CommandCheckOutput,
     FindingOutput,
+    ImplementationOutput,
     ReviewReport,
     TriageOutput,
 )
@@ -70,6 +72,7 @@ async def test_build_operation_prompt_renders(template):
         build=_build(),
         verification="VERIFICATION-BLOCK",
         workspace=_workspace(),
+        can_resume=False,
         **_CALL_KWARGS.get(template, {}),
     )
 
@@ -82,6 +85,7 @@ async def _generate_plan_prompt(
         build=_build(),
         verification="VERIFICATION-BLOCK",
         workspace=_workspace(),
+        can_resume=False,
         answered_questions=answered_questions or [],
         operator_note=operator_note,
         reviewer_notes=reviewer_notes,
@@ -136,7 +140,7 @@ async def test_verification_profile_renders_ci_provenance_per_command():
         "## Verification profile",
         "",
         "**Lint:**",
-        "- `ruff check .` — CI: `Backend / lint`",
+        "- `ruff check .` (CI job `Backend / lint` runs this too)",
         "**Tests:**",
         "- `pytest`",
     ]
@@ -166,12 +170,64 @@ async def test_implement_prompt_renders_the_prior_review():
         build=build,
         verification="VERIFICATION-BLOCK",
         workspace=_workspace(),
+        can_resume=False,
     )
 
     assert "## Prior implementation review" in prompt
     assert "### Round 1 — decision: request_changes" in prompt
     assert "Rename the flag." in prompt
     assert "- **high** The flag keeps its old name. (`app/flags.py:12`)" in prompt
+
+
+def _delivery() -> ImplementationOutput:
+    return ImplementationOutput(
+        type="result",
+        status="success",
+        check_command=None,
+        base_sha="1a2b3c4d",
+        head_sha="5e6f7a8b",
+        commit_sha="5e6f7a8b",
+        pr_number=7,
+        files_changed=["app/flags.py"],
+        acceptance_results=[],
+        checks=[CommandCheckOutput(command="ruff check .", status="pass", exit_code=0, reason="")],
+        known_risks=["The old flag name stays in the changelog."],
+        summary="Renamed the flag.",
+        workspace_path="/home/agent/work/repo",
+        workspace_retention=None,
+    )
+
+
+async def test_implement_prompt_hands_over_the_previous_round():
+    build = _build()
+    build.journal.add(_delivery())
+
+    prompt = await render_prompt(
+        "software_factory/build/implement.md",
+        build=build,
+        verification="VERIFICATION-BLOCK",
+        workspace=_workspace(),
+        can_resume=False,
+    )
+
+    assert "## Your previous round" in prompt
+    assert "You delivered `5e6f7a8b` on this branch." in prompt
+    assert "Renamed the flag." in prompt
+    assert "- `app/flags.py`" in prompt
+    assert "- `ruff check .`: pass" in prompt
+    assert "- The old flag name stays in the changelog." in prompt
+
+
+async def test_implement_prompt_has_no_previous_round_on_the_first_round():
+    prompt = await render_prompt(
+        "software_factory/build/implement.md",
+        build=_build(),
+        verification="VERIFICATION-BLOCK",
+        workspace=_workspace(),
+        can_resume=False,
+    )
+
+    assert "## Your previous round" not in prompt
 
 
 async def test_implement_prompt_puts_red_ci_ahead_of_older_instructions():
@@ -191,6 +247,7 @@ async def test_implement_prompt_puts_red_ci_ahead_of_older_instructions():
         build=build,
         verification="VERIFICATION-BLOCK",
         workspace=_workspace(),
+        can_resume=False,
     )
 
     assert "## CI is red" in prompt
@@ -212,6 +269,7 @@ async def test_a_prompt_lists_each_blocker(template):
         build=build,
         verification="VERIFICATION-BLOCK",
         workspace=_workspace(),
+        can_resume=False,
         **_CALL_KWARGS.get(template, {}),
     )
 
@@ -228,6 +286,7 @@ async def test_a_build_without_blockers_renders_no_builds_on_section():
         build=build,
         verification="VERIFICATION-BLOCK",
         workspace=_workspace(),
+        can_resume=False,
     )
 
     assert "Builds on" not in prompt
@@ -243,6 +302,7 @@ async def test_only_a_linear_planner_proposes_a_split():
             build=build,
             verification="VERIFICATION-BLOCK",
             workspace=_workspace(),
+            can_resume=False,
             **_CALL_KWARGS["generate_plan.md"],
         )
 
@@ -277,3 +337,19 @@ async def test_get_for_repo_raises_when_the_repo_was_transferred(druks_db):
     await ProjectRepo.create(project_id=project.id, full_name="czpython/druks")
     with pytest.raises(FatalError, match="renamed or transferred"):
         await ProjectRepo.get_for_repo("clawhaven/druks", raise_on_missing=True)
+
+
+async def test_implement_prompt_offers_the_run_tool_only_to_an_agent_that_can_resume():
+    async def prompt(can_resume):
+        return await render_prompt(
+            "software_factory/build/implement.md",
+            build=_build(),
+            verification="VERIFICATION-BLOCK",
+            workspace=_workspace(),
+            can_resume=can_resume,
+        )
+
+    assert 'status="needs_check"' not in await prompt(False)
+    offered = await prompt(True)
+    assert 'status="needs_check"' in offered
+    assert "`check_command`" in offered

@@ -13,7 +13,7 @@ from druks.accounts.models import Account
 from druks.database import session_scope
 from druks.events import routes
 from druks.events.models import Event
-from druks.testing import TEST_DATABASE_URL, init_db
+from druks.testing import TEST_DATABASE_URL, init_db, worker_name
 from druks_field_notes.models import Note
 from fastapi import HTTPException
 from sqlalchemy import create_engine, func, select, text
@@ -26,11 +26,12 @@ ADMIN = Account(role=Role.ADMIN)
 
 @pytest.fixture
 async def activity_engine(druks_db):
-    database = make_url(TEST_DATABASE_URL).set(database="druks_activity_test")
+    name = worker_name("druks_activity_test")
+    database = make_url(TEST_DATABASE_URL).set(database=name)
     admin_url = database.set(drivername="postgresql", database="postgres")
     with psycopg.connect(admin_url.render_as_string(hide_password=False), autocommit=True) as admin:
-        admin.execute("DROP DATABASE IF EXISTS druks_activity_test")
-        admin.execute("CREATE DATABASE druks_activity_test")
+        admin.execute(f"DROP DATABASE IF EXISTS {name}")
+        admin.execute(f"CREATE DATABASE {name}")
     schema_engine = create_engine(database)
     init_db(schema_engine)
     schema_engine.dispose()
@@ -42,7 +43,7 @@ async def activity_engine(druks_db):
         with psycopg.connect(
             admin_url.render_as_string(hide_password=False), autocommit=True
         ) as admin:
-            admin.execute("DROP DATABASE druks_activity_test")
+            admin.execute(f"DROP DATABASE {name}")
 
 
 @pytest.fixture
