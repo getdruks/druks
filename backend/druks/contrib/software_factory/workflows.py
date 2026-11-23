@@ -2,6 +2,7 @@ import asyncio
 import functools
 import logging
 import time
+from contextlib import suppress
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -19,13 +20,15 @@ from druks.contrib.software_factory.ticketing.enums import TicketStatus
 from druks.core.apis.exceptions import GitHubRerunRefusedError
 from druks.core.services import Github
 from druks.db import db_session
+from druks.durable import set_run_phase
 from druks.mcp.inbound import get_druks_mcp_server
+from druks.prompts import render_prompt
 from druks.sandbox import SandboxMcpServer, SandboxSecret
 from druks.sandbox.layout import get_related_root, get_work_root
 from druks.services.exceptions import ServiceNotConnectedError
 from druks.settings import get_settings
 from druks.skills.models import Skill
-from druks.workflows import FatalError, Workflow, step
+from druks.workflows import FatalError, WaitTimeout, Workflow, step
 from druks.workspaces import RepoWorkspace
 
 from .app import SoftwareFactory
@@ -391,10 +394,15 @@ class Build(Workflow):
                 return
 
     async def _wait_for_ci(self, head_sha: str) -> CiReport:
-        """Wait until CI has finished on ``head_sha``, and return its verdict."""
+        """Wait until CI has finished on ``head_sha``, and return its verdict. The wait keeps
+        the implementer's box, because a red CI resumes the implementer's session, a file on
+        that box."""
         started_at = await self._now()
         while not (ci_report := await self._read_ci(head_sha, started_at)):
-            await self.sleep(CI_POLL_SECONDS, label="Waiting for CI", until="check.completed")
+            with suppress(WaitTimeout):
+                await self.wait(
+                    "check.completed", label="Waiting for CI", ttl_seconds=CI_POLL_SECONDS
+                )
         self.journal.add(ci_report)
         return ci_report
 
@@ -532,7 +540,10 @@ class Build(Workflow):
     # journal. On replay a @step would skip them, and the journal would stay empty.
     async def implement(self) -> ImplementationOutput:
         effort = IMPLEMENT_EFFORT_BY_SIZE.get(self.journal.plan_size)
-        delivery = await SoftwareFactory.implement(effort=effort)
+        # A red CI continues the implementer's session with the red checks, and the call
+        # starts over with its full prompt when it cannot.
+        resume = self._report_red_ci if self.journal.red_ci_report else None
+        delivery = await SoftwareFactory.implement(effort=effort, resume=resume)
         # The implementer ended its turn to have a declared test command run. Druks runs it
         # on the implementer's box and resumes the same session with the result.
         check_runs = 0
@@ -551,10 +562,18 @@ class Build(Workflow):
             raise FatalError(f"implementation needs clarification: {delivery.summary}")
         return delivery
 
+    async def _report_red_ci(self, *, workspace: BuildWorkspace) -> str:
+        """The message that continues the implementer's session when CI on its head is red:
+        the red-CI rules of the implement prompt."""
+        return await render_prompt(
+            "software_factory/build/_red_ci.md", repo=(await self.subject).repo, build=self
+        )
+
     async def _run_check(self, command: str, *, workspace: BuildWorkspace) -> str:
         """Run the declared test ``command`` in the checkout as the implementer left it, and
         return the message that continues its session: the exit code and the tail of the
         output. The full output stays in a log on the box."""
+        await set_run_phase("running_check")
         declared = [
             entry["command"]
             for entry in (self._profile.get("verification") or {}).get("test_commands", [])

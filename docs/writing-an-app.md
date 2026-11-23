@@ -721,11 +721,11 @@ not five minutes, so that the call that resumes after a long pause reads the
 cache and does not write the whole context again. A template reads
 `can_resume`, which is true when the instruction is `resumable` and its harness can
 resume. Claude can. A harness that cannot resume sets `can_resume` to false, so
-the template offers the agent nothing to end its turn for. A resume on a harness
-that cannot raises `WorkflowError`, and so does a resume with no finished call
-to continue. A resume after the last call's box was released starts over on a
-new box with the full prompt, because the session and the checkout went with
-the old box.
+the template offers the agent nothing to end its turn for. A resume on an
+instruction that is not `resumable` raises `WorkflowError`. A resume that cannot
+continue the session, because the harness cannot resume, the run has no finished
+call, or the last call's box was released, starts over with the full prompt and
+never calls `resume`: the session and the checkout went with the old box.
 
 `RepoWorkspace.get_diff()` returns the change of the checkout since it left the
 default branch: commits, uncommitted edits, and untracked files. It reads the

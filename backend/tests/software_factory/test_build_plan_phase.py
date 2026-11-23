@@ -864,7 +864,7 @@ async def test_needs_clarification_delivery_stops_the_run(monkeypatch):
     reason — the stop is a workflow decision now, not a contract side effect."""
     flow = Build()
 
-    async def bailed(*, effort=None):
+    async def bailed(*, effort=None, resume=None):
         return SimpleNamespace(
             status="needs_clarification",
             summary="AC-3 requires a pure function that performs I/O",

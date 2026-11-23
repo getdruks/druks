@@ -143,7 +143,7 @@ async def test_an_implementer_that_keeps_asking_for_checks_fails_the_run(monkeyp
 )
 async def test_the_implement_effort_follows_the_size_of_the_change(monkeypatch, size, effort):
     flow = _build()
-    flow.journal = SimpleNamespace(plan_size=size)
+    flow.journal = SimpleNamespace(plan_size=size, red_ci_report=None)
     seen = []
 
     async def implement(*, effort=None, resume=None):

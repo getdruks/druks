@@ -6,7 +6,7 @@ import json
 import random
 import subprocess
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager, nullcontext, suppress
+from contextlib import AsyncExitStack, asynccontextmanager, nullcontext, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -1142,7 +1142,16 @@ class Workflow:
         # The wait takes answers before its label shows, so an answer sent on seeing it arrives.
         await DBOS.set_event_async("waiting_on", topic)
         await set_run_phase(label)
-        facts = await DBOS.recv_async(topic, timeout_seconds=ttl_seconds)
+        async with AsyncExitStack() as stack:
+            if self._host:
+                # A lease renews only while something holds it, and the box would expire
+                # in the middle of a long wait.
+                try:
+                    await stack.enter_async_context(sandbox_client.lease(host_id=self._host.id))
+                except HarnessSandboxProvisioningError:
+                    # The box is already gone. A call after the wait provisions another.
+                    await self._reap_run()
+            facts = await DBOS.recv_async(topic, timeout_seconds=ttl_seconds)
         await DBOS.set_event_async("waiting_on", "")
         if facts is None:
             raise WaitTimeout(topic)
@@ -1851,7 +1860,9 @@ class Instruction:
         ``resume`` continues the instruction's last call in this run, on
         its box, as the same conversation: Druks calls ``resume(workspace=...)`` with the
         checkout as the agent left it, and sends the text it returns as the agent's next
-        message. The instruction must be ``resumable``, and its harness must be able to resume."""
+        message. The instruction must be ``resumable``. When the call cannot continue the
+        session, because its harness cannot resume, it has no finished call, or its box was
+        released, it starts over with its full prompt and never calls ``resume``."""
         if not self.id:
             # Built loose — never assigned to an App — so its settings, its
             # registry entry and the call it would record all key on nothing.
@@ -2038,14 +2049,12 @@ class Instruction:
             running = await AgentCall.lookup_running(session, workflow_id, self.id)
             previous = None
             if resume:
-                if not (self.resumable and config.harness_class.can_resume):
+                if not self.resumable:
                     raise WorkflowError(
-                        f"instruction {self.id!r} cannot resume: declare it resumable, and run "
-                        f"it on a harness that resumes, which {config.harness_class.name!r} is not"
+                        f"instruction {self.id!r} cannot resume: declare it resumable"
                     )
-                previous = await AgentCall.lookup_last_succeeded(session, workflow_id, self.id)
-                if not previous:
-                    raise WorkflowError(f"instruction {self.id!r} has no finished call to resume")
+                if config.harness_class.can_resume:
+                    previous = await AgentCall.lookup_last_succeeded(session, workflow_id, self.id)
         model = config.model
         span.set_attributes({"druks.harness": config.harness, "druks.model": model})
         subscription_id = config.subscription.id if config.subscription else None
@@ -2164,9 +2173,9 @@ class Instruction:
                 else:
                     resume_from = None
                 # The session is a file on the box that ran it, and that box holds the checkout
-                # as the agent left it. A long wait releases the box, so a retry can land on
-                # another one. The session and the checkout went with the old box, and the
-                # call starts over with its full prompt.
+                # as the agent left it. A resume that cannot continue it starts over with the
+                # full prompt: a harness that cannot resume, a run with no finished call, or a
+                # box that was released, whose session and checkout went with it.
                 resuming = bool(previous) and previous.sandbox_host_id == runner.host_id
 
                 context_on_box = await self._upload_files(prompt_context, runner.host, call_id)
@@ -2203,7 +2212,6 @@ class Instruction:
                         session_options["resumable"] = True
                     if resuming:
                         # Preparing the workspace would discard the agent's uncommitted work.
-                        await set_run_phase("running_check")
                         prompt = await resume(workspace=runner)
                         session_options["resume_session"] = previous.id
                     else:

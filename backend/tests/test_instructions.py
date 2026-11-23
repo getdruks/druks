@@ -1648,17 +1648,39 @@ async def test_a_call_resumes_only_an_agent_that_declares_it(
         await DUMMY_INSTRUCTION._run(workflow_id="wf-9", resume=run_the_check)
 
 
-async def test_a_resume_needs_a_finished_call_to_continue(
+async def test_a_resume_with_no_finished_call_starts_over_with_the_full_prompt(
     druks_db, tmp_path, monkeypatch, current_run
 ):
     sandbox = _patch_runtime(monkeypatch, tmp_path, {"ok": True})
     _patch_ephemeral(monkeypatch, sandbox)
 
     async def run_the_check(*, workspace):
-        raise AssertionError("nothing to run")
+        raise AssertionError("there is no session to continue")
 
-    with pytest.raises(WorkflowError, match="no finished call"):
-        await RESUMABLE_INSTRUCTION._run(workflow_id="wf-9", resume=run_the_check)
+    await RESUMABLE_INSTRUCTION._run(workflow_id="wf-9", resume=run_the_check)
+
+    kwargs = sandbox.run_agent.await_args.kwargs
+    assert kwargs["prompt"] == "PROMPT:dummy/agent.md:repo=None"
+    assert "resume_session" not in kwargs
+
+
+async def test_a_resume_on_a_harness_that_cannot_resume_starts_over_with_the_full_prompt(
+    druks_db, tmp_path, monkeypatch, current_run
+):
+    sandbox = _patch_runtime(monkeypatch, tmp_path, {"ok": True})
+    _patch_ephemeral(monkeypatch, sandbox)
+    await RESUMABLE_INSTRUCTION._run(workflow_id="wf-9")
+    monkeypatch.setattr(ClaudeHarness, "can_resume", False)
+
+    async def run_the_check(*, workspace):
+        raise AssertionError("this harness has no session to continue")
+
+    await RESUMABLE_INSTRUCTION._run(workflow_id="wf-9", resume=run_the_check)
+
+    kwargs = sandbox.run_agent.await_args.kwargs
+    assert kwargs["prompt"] == "PROMPT:dummy/agent.md:repo=None"
+    assert "resume_session" not in kwargs
+    assert "resumable" not in kwargs
 
 
 async def test_a_resume_on_another_box_starts_over_with_the_full_prompt(

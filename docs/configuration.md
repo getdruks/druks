@@ -620,7 +620,11 @@ reviewer approves the pull request:
 After each push, the build waits for CI on the head before the review. When CI is
 red, Druks reruns each failed Actions run once and waits for CI again. CI that is
 still red goes back to the implementer, and so does a red that has no Actions run
-to rerun, such as `druks-house-rules`. The pull request leaves draft when the review
+to rerun, such as `druks-house-rules`. When the implementer runs on Claude, the red
+round resumes its session with the red-CI rules, in the checkout as the agent left
+it. The build keeps the implementer's box while it waits for CI, so a build holds that
+box for the length of the wait. On another harness, or when the box is gone, the round
+starts a new call with the full prompt. The pull request leaves draft when the review
 of a head with green CI requests no changes, or when a person approves it.
 
 A test command can take minutes. When the implementer runs on Claude, it can end its
