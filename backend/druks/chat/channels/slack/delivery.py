@@ -1,7 +1,7 @@
+import contextlib
 import logging
 import re
 from collections.abc import Sequence
-from contextlib import suppress
 from functools import partial
 
 import aiohttp
@@ -51,7 +51,7 @@ _OUTSIDE_ADDRESS = re.compile(r"https?://[^/?#]*(?P<path>[^?#]*)", re.IGNORECASE
 
 SUBMIT_ACTION = {"id": "submit", "label": "Submit"}
 
-# A number field takes text. Slack's number input works only in a modal.
+# A number field takes text. Slack shows its number input only in a modal.
 FIELD_ELEMENTS = {
     "text": "plain_text_input",
     "text_area": "plain_text_input",
@@ -62,12 +62,12 @@ FIELD_ELEMENTS = {
     "checkbox": "checkboxes",
 }
 
-# The last line of a message that Druks cut to fit Slack. It says what Druks left out. When the
+# The last line of a message that Druks cut to fit Slack. It says what Druks cut. When the
 # installation has an address, a link to all of it follows.
-OMISSION_MESSAGE = "Druks left out the end of this message because Slack limits its length."
+OMISSION_MESSAGE = "Druks cut the end of this message because Slack limits its length."
 OMISSION_LINK = " Read all of it in Druks: {link}"
 TABLE_OMISSION_MESSAGE = (
-    "Druks left out {left:,} of the {total:,} rows of this table because Slack limits its size."
+    "Druks did not send {left:,} of the {total:,} rows of this table because Slack limits its size."
 )
 
 
@@ -75,13 +75,13 @@ def cut_markdown(text: str, limit: int) -> str:
     """``text`` when it fits in ``limit`` characters. Otherwise, the most whole lines of
     ``text`` that fit with the marker after them. A code fence that those lines leave open
     closes before the marker. The marker and what follows it then stay outside the fence.
-    When not even the first line fits, its start takes the place of the lines. A first
+    When not even the first line fits, its start replaces the lines. A first
     line that opens a fence keeps no start, because a part of a fence closes nothing."""
     if len(text) <= limit:
         return text
     room = limit - len(slack.TRUNCATION_MARKER)
     lines: list[str] = []
-    # A newline goes before each line but the first.
+    # Each line except the first has a newline before it.
     size = -1
     open_fence = ""
     for line in text.split("\n"):
@@ -112,8 +112,14 @@ def cut_markdown(text: str, limit: int) -> str:
 
 def get_input(field: dict) -> dict:
     """The input block that shows a form's ``field``. It holds the label, the help text as
-    the hint, whether the field is optional, and an element with its default. The block's
-    id is the field's name. The answer in the element comes back under that name."""
+    the hint, whether the field is optional, and an element with its default. The id of the
+    block is the field's name. Slack sends the answer under the id of the block. Raises
+    FormError for a kind of field that Slack has no input for."""
+    if field["field"] not in FIELD_ELEMENTS:
+        raise FormError(
+            f"Slack has no input for field {field['name']!r} of kind {field['field']!r}. "
+            "Ask for the field on a page of the app."
+        )
     element: dict = {"type": FIELD_ELEMENTS[field["field"]]}
     options = [
         {"text": {"type": "plain_text", "text": option["label"]}, "value": option["value"]}
@@ -155,7 +161,7 @@ def get_input(field: dict) -> dict:
 
 def check_input(block: dict) -> None:
     """Refuse an input block that Slack refuses: a name, a text, or options past their Slack
-    limits. A field's name is the id of its block."""
+    limits. The id of the block names its field."""
     name, element = block["block_id"], block["element"]
     options = element.get("options", [])
     options_limit = slack.OPTIONS_LIMITS[element["type"]]
@@ -237,6 +243,31 @@ def get_button(action: ui.Action, action_id: str) -> dict:
     return {}
 
 
+def get_form(
+    position: int, fields: Sequence[ui.Field], actions: dict[str, ui.Action]
+) -> list[dict]:
+    """An input for each of ``fields``, then a button for each of ``actions``. ``actions``
+    holds each action under the id of its button. The id of each input starts with
+    ``position``, the position of the block of the fields in the blocks of the notification.
+    A button asks with Slack's dialog when its action asks to confirm. When Slack cannot take
+    one of the inputs or buttons, the function returns no block. A button then never sends a form
+    without all of its inputs."""
+    buttons = [get_button(action, action_id) for action_id, action in actions.items()]
+    with contextlib.suppress(FormError):
+        inputs = [
+            {
+                **get_input(field.model_dump()),
+                "block_id": slack.INPUT_ID_PREFIX.format(position=position) + field.name,
+            }
+            for field in fields
+        ]
+        for block in inputs:
+            check_input(block)
+        if all(buttons):
+            return [*inputs, {"type": "actions", "elements": buttons}]
+    return []
+
+
 def get_blocks(
     text: str,
     *,
@@ -251,32 +282,45 @@ def get_blocks(
     """The blocks of a notification's message, in order. First come ``text`` as markdown, or
     ``blocks`` as Slack draws them, with ``deep_link`` on the line after them. A chat agent's
     ``question`` comes after that. Then come an input for each of ``fields``, a button that
-    carries ``token`` for each action, and ``outcome``. Fields without actions are a form.
-    Its one button is its Submit button. Fields with actions are a run's questions and note.
-    An input shows the start of a label that is too long for it. The content holds the whole
-    label. An input that Slack refuses stays out. The message still goes out, with its
-    question in the content.
+    carries ``token`` for each action, and ``outcome``.
 
-    Each Druks block takes a branch of its own. Facts and metrics take a section of fields
-    for each ten, with the title on the first. A divider takes a divider. A link takes a
-    button that opens it. A table takes a data table of its first rows that fit. When rows
-    do not fit, a line above it says how many Druks left out, with the link. A chart takes
-    a chart of its kind under its title, or under its value label when it has no title.
-    Druks cuts each long title of a chart, and each long label of a line, bar, or area
-    chart. A pie takes a segment for each category. Druks cuts no label of a pie. A message
-    draws the first two charts that Slack can draw. An action with no fields takes a
-    button that carries ``token`` and its position, while there is no ``outcome``. The
-    button opens Slack's dialog when the action asks to confirm. An action with no fields
-    alone in a cell of a table takes the same button. An image at an outside address of a
-    png, a jpg, or a gif takes an image block. A gallery takes one for each such image,
-    under its title. Each other image of a gallery keeps its line of the text form, in its
-    place. Any other block, and a block past a limit of Slack, takes its text form. A table
-    that selects rows takes its text form, which holds its actions. Text that follows text
-    joins it in one markdown block. ``blocks`` take the room that the rest leaves, the
-    question included. When the room runs out, the last block holds the text forms of the
-    blocks left. A gallery that does not fit whole is one of them. When the markdown is
-    longer than Slack takes, Druks cuts the end of the blocks. A line in place of the link
-    then says so, with the link."""
+    Fields without actions are a form. Its one button is its Submit button. Fields with
+    actions are a run's questions and note.
+
+    An input shows the start of a label that is too long for it. The content holds the
+    whole label. The message holds no input that Slack refuses. Druks still sends the message,
+    with its question in the content.
+
+    Each kind of Druks block has a branch of its own. Facts and metrics become a section of
+    fields for each ten, with the title on the first. A divider becomes a divider. A link
+    becomes a button that opens it.
+
+    A table becomes a data table of its first rows that fit. When rows do not fit, a line
+    above it says how many rows Druks did not send, with the link. A table that selects rows
+    becomes its text form, which holds its actions.
+
+    A chart becomes a chart of its kind under its title, or under its value label when it has
+    no title. Druks cuts each long title of a chart, and each long label of a line, bar, or
+    area chart. A pie has a segment for each category. Druks cuts no label of a pie. A
+    message draws the first two charts that Slack can draw.
+
+    While there is no ``outcome``, an action becomes an input for each of its fields and a
+    button that carries ``token`` and its position. An action with no fields, alone in a
+    cell of a table, also becomes such a button. A form that sends on a button becomes an
+    input for each of its fields and a button for each of its actions. A button asks with
+    Slack's dialog when its action asks to confirm.
+
+    An image at an outside address of a png, a jpg, or a gif becomes an image block. A
+    gallery becomes one image block for each such image, under its title. Each other image
+    of a gallery keeps its line of the text form, in its place. Any other block, and a block
+    past a limit of Slack, becomes its text form. Text that follows text joins it in one
+    markdown block.
+
+    ``blocks`` use the room that the rest leaves, the question included. When no room is
+    left, the last block holds the text forms of the other blocks. A gallery or a form
+    that does not fit whole is one of them. When the markdown is longer than Slack accepts,
+    Druks cuts the end of the blocks. A line in place of the link then says so, with the
+    link."""
     controls: list[dict] = []
     if fields and actions:
         inputs_by_id = {}
@@ -294,7 +338,7 @@ def get_blocks(
                     ],
                 }
             )
-            with suppress(FormError):
+            with contextlib.suppress(FormError):
                 check_input(block)
                 # Slack refuses a message with two blocks of one id.
                 inputs_by_id.setdefault(block["block_id"], block)
@@ -449,8 +493,8 @@ def get_blocks(
 
                     if deep_link:
                         notice += OMISSION_LINK.format(link=deep_link)
-                    # The line goes above the table. Its link then never comes right before
-                    # the link that ends the message.
+                    # Druks puts the line above the table. Its link is then never directly
+                    # before the link that ends the message.
                     parts.insert(0, {"type": "markdown", "text": notice})
             case ui.Chart(
                 kind="line" | "bar" | "area" as kind,
@@ -521,9 +565,17 @@ def get_blocks(
                         ],
                     }
                     parts = [{"type": "data_visualization", "title": heading, "chart": chart}]
-            case ui.Action(fields=[]) if token and not outcome:
-                if button := get_button(block, encode_action(token, index)):
-                    parts = [{"type": "actions", "elements": [button]}]
+            case ui.Action() if token and not outcome:
+                parts = get_form(index, block.fields, {encode_action(token, index): block})
+            case ui.Form(submit="button") if token and not outcome:
+                parts = get_form(
+                    index,
+                    block.fields,
+                    {
+                        encode_action(token, index, number): action
+                        for number, action in enumerate([block.action, *block.extra_actions])
+                    },
+                )
             case ui.Image():
                 if image_block := get_image_block(block):
                     parts = [image_block]
@@ -539,8 +591,8 @@ def get_blocks(
                     else:
                         parts.append({"type": "markdown", "text": line})
         text_form = "" if parts else block.to_markdown()
-        # One block of the room stays free for the link. When the room runs out, its last
-        # block takes the blocks left as their text forms.
+        # One block of the room stays free for the link. When no room is left, its last
+        # block holds the other blocks as their text forms.
         count = len(content) + len(parts) + bool(text_form)
         is_full = count >= slack.MESSAGE_BLOCKS_LIMIT - len(controls)
         if is_full:
@@ -554,12 +606,12 @@ def get_blocks(
             break
     line = deep_link or ""
     markdown_size = sum(len(part["text"]) for part in content if part["type"] == "markdown")
-    # A line takes a newline before it.
+    # The line adds one newline before it.
     if markdown_size + bool(line) + len(line) + len(question) > slack.MARKDOWN_TEXT_LIMIT:
         line = OMISSION_MESSAGE + (OMISSION_LINK.format(link=deep_link) if deep_link else "")
         room = slack.MARKDOWN_TEXT_LIMIT - len(line) - 1 - len(question)
         kept_parts = []
-        # The content keeps its start, as a cut body does. What follows the cut goes.
+        # The content keeps its start, as a cut body does. Druks removes what follows the cut.
         for part in content:
             if part["type"] == "markdown" and len(part["text"]) > room:
                 if room > len(slack.TRUNCATION_MARKER):
@@ -598,16 +650,19 @@ async def deliver(
 ) -> dict:
     """Post ``body`` as markdown, with ``deep_link`` on the line after it. ``blocks`` are
     the Druks blocks whose text form is ``body`` up to its question. Slack draws them in its
-    place. When Slack refuses them, the body goes out in their place once. Each action
-    becomes a button that carries ``token``. A click then answers this notification. Each
-    of ``fields`` becomes an input above the buttons. Without actions, the button below the
-    inputs is a Submit button that carries ``token``. With ``message_ts``, Druks edits that
-    posted message. ``outcome`` then takes the place of its buttons and inputs. With
-    ``user``, only that person sees the message. ``question_offset`` is where a chat agent's
-    question starts in ``body``. The question keeps its room when Druks cuts the rest to
-    fit, with blocks and without. ``username`` and ``icon_url`` replace the app's name and
-    picture on a new message. Returns Slack's answer, which names the message's channel
-    and ts."""
+    place. When Slack refuses them, Druks sends the body in their place once.
+
+    Each action becomes a button that carries ``token``. A click then answers this
+    notification. Each of ``fields`` becomes an input above the buttons. Without actions,
+    the button below the inputs is a Submit button that carries ``token``.
+
+    With ``message_ts``, Druks edits that posted message. ``outcome`` then replaces its
+    buttons and inputs. With ``user``, only that person sees the message.
+    ``question_offset`` is where a chat agent's question starts in ``body``. The question
+    keeps its room when Druks cuts the rest to fit, with blocks and without.
+
+    ``username`` and ``icon_url`` replace the app's name and picture on a new message.
+    Returns Slack's answer, which names the message's channel and ts."""
     link = f"\n{deep_link}" if deep_link else ""
     reply, question = body, ""
     if question_offset:
@@ -622,7 +677,8 @@ async def deliver(
     )
 
     async def post(parts: list[dict]) -> dict:
-        # from None: these errors can keep the request. Its headers carry the bot token.
+        # Each raise is from None, because these errors can keep the request. Its headers
+        # carry the bot token.
         try:
             if message_ts:
                 response = await client.chat_update(
@@ -665,6 +721,9 @@ async def deliver(
                 )
             )
         except BlocksRefusedError as error:
-            # Slack can refuse a block that Druks draws. The text form then goes in its place.
-            logger.warning("Slack refused the blocks of a message. It goes as text. %s", error)
+            # Slack can refuse a block that Druks draws. Druks then sends the text form in its
+            # place.
+            logger.warning(
+                "Slack refused the blocks of a message. Druks sends it as text. %s", error
+            )
     return await post(message())

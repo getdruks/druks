@@ -16,9 +16,13 @@ def verify_twilio_signature(
 ) -> None:
     """Refuse a request that Twilio did not sign. Twilio signs the URL and the sorted form
     fields with HMAC-SHA1. It signs a stream's handshake with or without a trailing slash
-    on the URL, so either form passes."""
+    on the URL. Either form thus passes."""
     if not signature:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing webhook signature.")
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED,
+            "The request has no webhook signature. Sign the request as Twilio does, with the "
+            "API key of the account.",
+        )
     signed_fields = "".join(f"{name}{fields[name]}" for name in sorted(fields))
     url = url.rstrip("/")
     for signed_url in (url, f"{url}/"):
@@ -29,7 +33,11 @@ def verify_twilio_signature(
         ).digest()
         if hmac.compare_digest(base64.b64encode(digest).decode(), signature):
             return
-    raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid webhook signature.")
+    raise HTTPException(
+        status.HTTP_401_UNAUTHORIZED,
+        "The webhook signature is not correct. Make sure that the Twilio service in Druks "
+        "has the API key of the account.",
+    )
 
 
 class TwilioWebhook(Webhook):
@@ -39,7 +47,7 @@ class TwilioWebhook(Webhook):
     provider = "twilio"
 
     def get_data(self) -> dict[str, str]:
-        # Twilio signs every field it posts, the blank ones too.
+        # Twilio signs every field that it posts, the blank ones too.
         return dict(parse_qsl(self.raw_body.decode(), keep_blank_values=True))
 
     async def request_is_authentic(self) -> bool:

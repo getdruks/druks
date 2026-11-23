@@ -129,7 +129,7 @@ async def get_app_settings(
     ]
     return AppsSettingsResponse(
         allowed_efforts=list(ALLOWED_EFFORTS),
-        apps=[out for out in projected if out.instructions or out.workflows or out.settings],
+        apps=[app for app in projected if app.instructions or app.workflows or app.settings],
         channels=[
             channel.name
             for channel in channel_registry.all()
@@ -140,7 +140,8 @@ async def get_app_settings(
 
 @router.get("/apps/choices", dependencies=[Depends(require_named_app_access)])
 async def get_app_setting_choices(app: str) -> dict[str, list[dict[str, str]]]:
-    """The live choices of an app's settings. The settings page asks when it opens the app."""
+    """The live choices of an app's settings. The settings page asks for them when it
+    opens the app."""
     settings_model = get_app(app).settings_model
     return await reads.list_live_choices(settings_model) if settings_model else {}
 
@@ -161,11 +162,15 @@ async def update_app_settings(
         await SettingsOverride.set_agent_model(session, name, model)
     for name, billing in body.agent_billings.items():
         await SettingsOverride.set_agent_billing(session, name, billing)
-    # A cell set alone must still fit the two it inherits, so the check reads
-    # the stored triple; a rejection rolls the writes back.
+    # A cell set alone must still fit the two that it inherits. The check thus reads the
+    # stored triple. A rejection rolls the writes back.
     for name in {*body.agent_harnesses, *body.agent_models, *body.agent_billings}:
         if not get_instruction(name) and not get_bot(name):
-            raise HTTPException(status_code=422, detail=f"Unknown instruction or bot {name!r}")
+            raise HTTPException(
+                status_code=422,
+                detail=f"Druks has no instruction or bot {name!r}. Select one that an installed "
+                "app declares.",
+            )
     if body.agent_harnesses or body.agent_models or body.agent_billings:
         installation = await InstallationSettings.get_or_create(session)
         await check_agent_configs(session, installation)
@@ -181,14 +186,21 @@ async def update_app_settings(
         for kind, changes in body.workflow_settings.items():
             workflow = get_workflow(kind)
             if not workflow:
-                raise HTTPException(status_code=422, detail=f"Unknown workflow {kind!r}")
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Druks has no workflow {kind!r}. Select one that an installed app "
+                    "declares.",
+                )
             for field, value in changes.items():
                 await workflow.override_setting(field, value)
         for app_name, changes in body.app_settings.items():
             try:
                 app = get_app(app_name)
-            except KeyError as exc:
-                raise HTTPException(status_code=422, detail=f"Unknown app {app_name!r}") from exc
+            except KeyError as error:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Druks has no app {app_name!r}. Select an installed app.",
+                ) from error
             for field, value in changes.items():
                 await app.override_setting(field, value)
             changed_apps.append(app)
@@ -196,21 +208,20 @@ async def update_app_settings(
         for app in changed_apps:
             if problems := (await app.settings()).clean():
                 settings_problems[app.name] = problems
-    except ValueError as exc:
-        # A domain rejection answers 422. override_setting and App.settings() redact each
-        # value they refuse, so no secret reaches the message.
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except ValueError as error:
+        # Druks answers 422 for a domain rejection. override_setting and App.settings() redact each
+        # value that they refuse. No secret thus gets into the message.
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
     if settings_problems:
         raise HTTPException(status_code=422, detail=settings_problems)
 
     if any(
-        field in ("schedule", "schedule_enabled")
+        "schedule" in changes or "schedule_enabled" in changes
         for changes in body.workflow_settings.values()
-        for field in changes
     ):
-        # Repoint the DBOS crons now, not at the next launch; the reconcile reads
-        # the just-written overrides off this request's session.
+        # Update the DBOS crons immediately, not at the next launch. The reconciler reads the
+        # overrides that the session of this request wrote.
         await apply_schedules(session)
 
     if body.agent_models or body.agent_billings:

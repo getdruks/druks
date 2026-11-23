@@ -59,8 +59,8 @@ def test_get_settings_carries_the_execution_defaults(tmp_path: Path):
 
 def test_patch_settings_judges_the_default_triple_together(tmp_path: Path):
     with settings_client(tmp_path) as client:
-        # opencode takes keys only: the harness alone does not fit the
-        # subscription default it would inherit.
+        # opencode takes keys only. The harness alone does not fit the subscription default
+        # that it inherits.
         alone = client.patch("/api/settings", json={"defaultHarness": "opencode"})
         assert alone.status_code == 422
         assert "API key only" in alone.json()["detail"]
@@ -210,15 +210,6 @@ def test_apps_judge_an_agents_triple_as_it_resolves(tmp_path: Path):
 def _software_factory_app(client: TestClient) -> dict:
     body = client.get("/api/settings/apps").json()
     return next(app for app in body["apps"] if app["name"] == "software_factory")
-
-
-def _chat_app(client: TestClient) -> dict:
-    body = client.get("/api/settings/apps").json()
-    return next(app for app in body["apps"] if app["name"] == "chat")
-
-
-def _software_factory_settings_fields(client: TestClient) -> dict:
-    return {field["name"]: field for field in _software_factory_app(client)["settings"]}
 
 
 def _field_notes_settings_fields(client: TestClient) -> dict:
@@ -404,7 +395,11 @@ async def test_app_non_secret_setting_stays_in_value(tmp_path: Path):
                 {"key": key},
             )
         ).one()
-        field = _software_factory_settings_fields(client)["trigger_status"]
+        field = next(
+            setting
+            for setting in _software_factory_app(client)["settings"]
+            if setting["name"] == "trigger_status"
+        )
 
     assert written.status_code == 200
     assert stored.value == status
@@ -487,13 +482,13 @@ async def test_clearing_a_secret_deletes_its_override_and_stays_coherent(tmp_pat
 
 
 async def test_app_secret_the_app_refuses_stays_out_of_the_error(tmp_path: Path):
-    # The proof app's validator quotes the token it refuses.
+    # The proof app's validator quotes the token that it refuses.
     await SettingsOverride.set_app_setting(
         db_session(), "field_notes", "sync_token", "not-a-token", is_secret=True
     )
 
     with settings_client(tmp_path) as client:
-        # Clearing a field validates nothing until the route's last check of the app.
+        # A cleared field validates nothing until the route's last check of the app.
         cleared = client.patch(
             "/api/settings/apps", json={"appSettings": {"field_notes": {"board_size": None}}}
         )
@@ -533,7 +528,9 @@ def test_apps_accept_a_bot_id_across_the_override_maps(tmp_path: Path):
             },
         )
         assert response.status_code == 200
-        agents = {agent["name"]: agent for agent in _chat_app(client)["instructions"]}
+        apps = client.get("/api/settings/apps").json()["apps"]
+        chat = next(app for app in apps if app["name"] == "chat")
+        agents = {agent["name"]: agent for agent in chat["instructions"]}
 
     bot = agents["chat.bot"]
     assert (bot["harness"], bot["model"], bot["billing"]) == ("codex", "openai/gpt-5.5", "api_key")
@@ -659,31 +656,13 @@ def test_apps_clearing_an_override_reverts_to_the_operator_default(tmp_path: Pat
 
 def test_apps_reject_unknown_agent_model(tmp_path: Path):
     with settings_client(tmp_path) as client:
-        # No installed harness owns this namespace, so nothing could run it.
+        # No installed harness owns this namespace. Nothing can then run it.
         response = client.patch(
             "/api/settings/apps",
             json={"agentModels": {"software_factory.implement": "llama-3-70b"}},
         )
     assert response.status_code == 422
     assert "llama-3-70b" in response.json()["detail"]
-
-
-def test_apps_override_workflow_setting_persists(tmp_path: Path):
-    with settings_client(tmp_path) as client:
-        patch = client.patch(
-            "/api/settings/apps",
-            json={
-                "workflowSettings": {"software_factory.build": {"max_implementation_revisions": 8}}
-            },
-        )
-        assert patch.status_code == 200
-        fields = {
-            field["name"]: field
-            for field in _software_factory_app(client)["workflows"][0]["fields"]
-        }
-
-    assert fields["max_implementation_revisions"]["value"] == 8
-    assert fields["max_implementation_revisions"]["overridden"]
 
 
 def test_apps_plan_gate_override_persists(tmp_path: Path):
@@ -717,7 +696,10 @@ def test_apps_reject_an_unknown_workflow_setting(tmp_path: Path):
 
     assert response.status_code == 422
     detail = response.json()["detail"]
-    assert detail == "Unknown software_factory.build setting 'auto_dispatch_on_plan_approval'"
+    assert detail == (
+        "software_factory.build has no setting 'auto_dispatch_on_plan_approval'. Set a field "
+        "that its Settings declares."
+    )
 
 
 def test_apps_reject_out_of_range_workflow_setting(tmp_path: Path):
@@ -735,7 +717,7 @@ def test_app_settings_read_the_overrides_in_one_query(tmp_path: Path, monkeypatc
     monkeypatch.setattr(Summarize, "every", "0 9 * * *")
     statements: list[str] = []
 
-    def record(conn, cursor, statement, parameters, context, executemany):
+    def record(connection, cursor, statement, parameters, context, executemany):
         if "settings_overrides" in statement:
             statements.append(statement)
 

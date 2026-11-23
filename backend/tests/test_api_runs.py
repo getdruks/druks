@@ -12,12 +12,11 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture
 def client(tmp_path: Path, druks_db):
-    # druks_db pre-seeds the same database that create_app opens, so we
-    # just need a vanilla app — the route handlers will open their own
-    # per-request Sessions against the same engine and see the seeded rows.
-    # AgentCall.artifact_dir derives from get_settings().artifacts_dir;
-    # point that at tmp_path so the property and the test agree on
-    # where to look for run files.
+    # druks_db seeds the database that create_app opens. A plain app is thus enough.
+    # Each route handler opens its own Session on the same engine and reads the
+    # seeded rows. AgentCall.artifact_dir comes from get_settings().artifacts_dir.
+    # The settings set it to tmp_path, so that the property and the test read run
+    # files in the same place.
     settings = make_settings(tmp_path)
     app = configure_app_for_test(settings=settings)
     with TestClient(app) as client:
@@ -56,12 +55,12 @@ async def test_list_files_inventories_call_artifacts(
 
     assert response.status_code == 200
     files = response.json()
-    # The slot the file occupies is its role; each carries the file name the
-    # client composes into the download URL.
+    # The slot that a file takes is its role. Each slot carries the file name that the
+    # client puts into the download URL.
     assert files["stdout"]["name"] == "stdout.jsonl"
     assert files["stderr"]["name"] == "stderr.log"
     assert files["response"]["name"] == "output.json"
-    assert files["metadata"] is not None
+    assert files["metadata"]
 
 
 async def test_get_agent_call_files_raises_for_unknown_call(druks_db):
@@ -169,8 +168,8 @@ async def test_transcript_of_an_abandoned_call_is_cached_immutably(
     client: TestClient,
     druks_db,
 ):
-    # The call never wrote finished_at, but its run died — nothing will append
-    # to that log again, so the chunk is as permanent as a finished call's.
+    # The call never wrote finished_at. But its run failed. Nothing thus appends to that
+    # log again. The chunk is as permanent as the chunk of a finished call.
     call_id = await _seed_call_id(druks_db, finished=False, run_state="failed")
 
     response = client.get(
@@ -205,8 +204,8 @@ async def test_transcript_stream_emits_chunk_then_finishes(
     client: TestClient,
     druks_db,
 ):
-    # The terminal seeded run streams its stdout in one tick: a transcript.chunk
-    # carrying the log, then agent_call.finished (which ends the SSE).
+    # The seeded run is terminal. It streams its stdout in one tick: a transcript.chunk
+    # that carries the log, then agent_call.finished, which ends the SSE.
     call_id = await _seed_call_id(druks_db)
 
     response = client.get(
@@ -233,7 +232,7 @@ async def test_transcript_stream_rejects_a_negative_offset(
     )
 
     assert response.status_code == 400
-    assert response.json()["detail"] == "offset must be >= 0."
+    assert response.json()["detail"] == "offset -1 is less than 0. Pass an offset of 0 or more."
 
 
 def test_transcript_stream_unknown_call_returns_unified_404(client: TestClient, druks_db):
@@ -253,8 +252,8 @@ async def test_get_file_serves_inventory_paths(
     call_id = await _seed_call_id(druks_db)
 
     files = client.get(f"/api/field_notes/transcripts/{call_id}/files").json()
-    # Compose the download URL the way the client does: the listing's own route
-    # plus the file's name — the wire carries names only.
+    # Build the download URL as the client does: the route of the file list, then the
+    # file's name. The wire carries only names.
     name = files["response"]["name"]
 
     response = client.get(f"/api/field_notes/transcripts/{call_id}/files/{name}")
@@ -276,7 +275,7 @@ async def test_get_file_rejects_path_traversal(
     assert response.status_code == 404
     assert response.json() == {
         "error": "HTTP_404",
-        "detail": "File not found for this call.",
+        "detail": "The call has no file of this name. Name a file that its file list shows.",
     }
 
 
@@ -293,20 +292,20 @@ async def test_get_file_missing_returns_404(
     assert response.status_code == 404
     assert response.json() == {
         "error": "HTTP_404",
-        "detail": "File not found for this call.",
+        "detail": "The call has no file of this name. Name a file that its file list shows.",
     }
 
 
 async def test_agent_call_artifact_layout(druks_db, tmp_path):
-    # Layout sub-dir is the call id; the sandbox runner streams every run's stdout
-    # to stdout.jsonl, so the layout is the same whichever harness ran the call.
+    # The subdirectory of the layout is the call id. The sandbox runner streams the
+    # stdout of every run to stdout.jsonl. The layout is thus the same for every harness.
     note = await Note.create(body="artifact layout")
     run = await seed_run(druks_db, kind=Summarize.kind, subject=note)
     call = await seed_call(druks_db, run, "summarize", model="claude-opus-4-7", status="running")
-    sub = Path(call.artifact_dir) / call.id
-    assert call.artifact_layout.transcript == sub / "stdout.jsonl"
-    assert call.artifact_layout.stderr == sub / "stderr.log"
-    assert call.artifact_layout.output == sub / "output.json"
+    directory = Path(call.artifact_dir) / call.id
+    assert call.artifact_layout.transcript == directory / "stdout.jsonl"
+    assert call.artifact_layout.stderr == directory / "stderr.log"
+    assert call.artifact_layout.output == directory / "output.json"
 
 
 async def test_a_run_reads_with_its_app_and_work_item(druks_client, druks_db):
@@ -327,7 +326,7 @@ async def test_a_run_reads_with_its_app_and_work_item(druks_client, druks_db):
 
 
 async def test_a_person_reads_the_run_of_another_account(druks_client, druks_db):
-    # The first account is the default one, so the second one is another person's.
+    # The first account is the default one. The second one is thus another person's.
     await Account.get_or_create(druks_db, "service@example.invalid")
     other = await Account.get_or_create(druks_db, "another@example.invalid")
     run = await seed_run(druks_db, kind=Summarize.kind, account_id=other.id)

@@ -53,7 +53,7 @@ def client(tmp_path: Path, druks_db):
 
 @pytest.fixture
 async def account(druks_db):
-    # The account that configure_app_for_test signs requests in as.
+    # configure_app_for_test sends each request as this account.
     return await Account.get_or_create(druks_db, "op@example.com")
 
 
@@ -134,7 +134,7 @@ def test_openapi_pins_platform_and_app_agent_routes(client: TestClient):
 async def test_review_request_returns_the_run_id_start_hands_back(
     client: TestClient, account: Account, monkeypatch
 ):
-    # A start route checks the GitHub service identity before it spends a run.
+    # A start route checks the GitHub service identity before it starts a run.
     await connect_service(
         "github",
         identity={"app_id": "1", "slug": "druks-operator"},
@@ -273,11 +273,11 @@ def test_software_factory_start_translates_an_unknown_tracker_ticket(
         "message": "ENG-9999 doesn't exist in Linear",
         "retryable": False,
     }
-    assert "aclose" in fake.calls  # the tracker closes even on failure
+    assert "aclose" in fake.calls  # The tracker closes even on a failure.
 
 
 def test_software_factory_start_reports_a_missing_tracker_configuration(client: TestClient):
-    # Default settings select Linear but carry no API key. No tracker resolves.
+    # The default settings select Linear but carry no API key. No tracker resolves.
     # That is an error of the operator's configuration, not a 404 or a 500.
     response = client.post("/api/software_factory/work-items/ENG-1/start")
 
@@ -319,7 +319,7 @@ async def test_review_request_refuses_when_github_is_not_connected(client: TestC
 
 
 def test_agent_routes_sit_behind_the_gate(tmp_path, druks_db):
-    # Header mode: an unasserted request is a 401, not none-mode's setup 409.
+    # In header mode, an unasserted request is a 401, not the setup 409 of none mode.
     app = configure_app_for_test(
         settings=make_settings(
             tmp_path,
@@ -712,7 +712,7 @@ async def test_answer_gate_keys_empty_request_changes_on_note_required(
     assert rejected.json() == {
         "code": "INVALID_GATE_ANSWER",
         "message": (
-            "request_changes needs an answer or a note to guide the re-plan. Answer a "
+            "request_changes needs an answer or a note to guide the next plan. Answer a "
             "question, or write a note."
         ),
         "retryable": False,
@@ -749,7 +749,7 @@ async def test_answer_gate_requires_an_aware_parked_at(client: TestClient, druks
         json={"parkedAt": "2026-07-19T10:00:00", "control": "approve"},
     )
 
-    assert naive.status_code == 422  # Pydantic's, not the agent taxonomy
+    assert naive.status_code == 422  # Pydantic refuses the request, not the agent taxonomy.
 
 
 async def test_cancel_run_route(client: TestClient, druks_db):
@@ -796,7 +796,7 @@ async def test_transcript_route_matches_the_read_machinery(client: TestClient, d
     assert response.status_code == 200
     chunk = read_transcript_chunk(call, "stdout", offset=0, limit=7)
     assert response.json() == chunk.model_dump(mode="json", by_alias=True)
-    # The 7-byte cut lands in the middle of é. The window serves one � at the seam.
+    # The 7-byte cut is in the middle of é. The window serves one � at the seam.
     assert response.json()["text"] == "hello �"
 
 
@@ -825,7 +825,7 @@ async def test_the_resume_route_takes_only_a_valid_answer_to_an_open_gate(
     assert empty_changes.json() == {
         "error": "HTTP_422",
         "detail": (
-            "request_changes needs an answer or a note to guide the re-plan. Answer a "
+            "request_changes needs an answer or a note to guide the next plan. Answer a "
             "question, or write a note."
         ),
     }
@@ -838,7 +838,7 @@ async def test_the_resume_route_takes_only_a_valid_answer_to_an_open_gate(
     assert ok.status_code == 204
     assert resume_spy == [{"id": run.id, "action": "approve", "answers": {}, "note": "go"}]
 
-    # After the answer lands, Druks writes the receipt and clears the gate. A second
+    # After the answer arrives, Druks writes the receipt and clears the gate. A second
     # submit from the dashboard is then a conflict.
     run.answer_parked_at = run.input_requested_at
     run.input_gate = None

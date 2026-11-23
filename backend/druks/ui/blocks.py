@@ -42,7 +42,7 @@ _ALIGNMENT_RULE = {"start": "---", "end": "---:"}
 
 
 def _subject_identity(value):
-    """``follows=`` takes the subject a page or a region watches, or a subject
+    """``follows=`` takes the subject that a page or a region watches, or a subject
     class for every subject of that type. Druks streams these subjects. It
     rereads the page on each snapshot that it sends."""
     if not value or isinstance(value, dict | Follows):
@@ -57,14 +57,14 @@ def _subject_identity(value):
             # A subject id goes to the stream in a URL, as text.
             return {"subject_type": identity["type"], "subject_id": str(identity["id"])}
     raise ValueError(
-        "follows= takes the subject a page watches, or its class for every subject of that "
-        f"type, not {type(value).__name__}. The stream carries subjects, not runs. Give the "
-        "subject itself."
+        "follows= takes the subject that a page watches, or its class for every subject of "
+        f"that type, not {type(value).__name__}. The stream carries subjects, not runs. Give "
+        "the subject itself."
     )
 
 
 class Follows(Schema):
-    """The subject a page or a named region watches. An empty ``subject_id``
+    """The subject that a page or a named region watches. An empty ``subject_id``
     watches every subject of the type."""
 
     subject_type: str
@@ -97,7 +97,7 @@ def _check_field_names(*, owner: str, fields: list[FormField], arguments: dict) 
     repeated_names = sorted({name for name in names if names.count(name) > 1})
     if repeated_names:
         raise ValueError(
-            f"{owner} has two fields named {repeated_names}. One would take the value of the "
+            f"{owner} has two fields named {repeated_names}. One then takes the value of the "
             "other. Give each field its own name."
         )
     taken = sorted(set(names) & set(arguments))
@@ -109,8 +109,8 @@ def _check_field_names(*, owner: str, fields: list[FormField], arguments: dict) 
 
 
 def iter_parts(parts: Iterable[Schema], *kinds: type[Part]) -> Iterator[Part]:
-    """Every block, value, and control of ``kinds`` among ``parts`` and inside
-    them, however deep, in the order they hold them."""
+    """Every block, value, and control of ``kinds`` among ``parts`` and inside them at
+    any depth, in the order that they hold them."""
     for part in parts:
         if isinstance(part, kinds):
             yield part
@@ -183,7 +183,7 @@ def get_absolute_url(path: str) -> str:
 
 def _link(words: str, path: str) -> str:
     if address := get_absolute_url(path):
-        # A bracket would end the words.
+        # A bracket ends the words of a link.
         words = words.replace("[", "\\[").replace("]", "\\]")
         return f"[{words}]({address})"
     return words
@@ -202,26 +202,26 @@ def _linked(words: str, link: "Link | None") -> str:
 
 class PageBlock(Schema):
     """What every block shares. ``block`` names its kind on the wire.
-    ``check_placement`` refuses a place where the block cannot work.
+    ``check_placement`` refuses a place that is wrong for the block.
     ``to_markdown`` gives its text form."""
 
     block: str
 
     def check_placement(self, *, followed: bool, regions: set[str], region: str = "") -> None:
-        """Raise when this block cannot sit where the page put it. ``followed``
+        """Raise when this block cannot be where the page put it. ``followed``
         tells whether an ancestor watches a subject. ``region`` names the nearest
         region around the block. ``regions`` holds the region names already in use."""
 
     def to_markdown(self) -> str:
         """The block as markdown that names no channel. A link with an address in
-        its ``url`` stays a link. A link without one shows only its words. A form and
-        the controls of a gate have no text form. They define no ``to_markdown``. An
-        action has a text form only when it knows its page."""
+        its ``url`` stays a link. A link without one shows only its words. The controls
+        of a gate have no text form. They define no ``to_markdown``. An action and a form
+        have a text form only when they hold the address of their page."""
         raise NoTextFormError(type(self).__name__)
 
     def subjects(self) -> list[tuple[str, str]]:
-        """The ``(subject_type, subject_id)`` of every status and gate in this block,
-        however deep. A read uses them to get the status of each subject."""
+        """The ``(subject_type, subject_id)`` of every status and gate in this block, at
+        any depth. A read uses them to get the status of each subject."""
         return [
             (part.subject.subject_type, part.subject.subject_id)
             for part in iter_parts([self], SubjectStatus, GateControls)
@@ -262,7 +262,9 @@ class Link(PageBlock):
     def check_placement(self, *, followed: bool, regions: set[str], region: str = "") -> None:
         if self.label:
             return
-        raise ValueError("a Link that stands on its own has no label. Give it the words it shows.")
+        raise ValueError(
+            "a Link that stands on its own has no label. Give it the words that it shows."
+        )
 
     @model_validator(mode="after")
     def _one_destination(self) -> "Link":
@@ -292,7 +294,7 @@ class Link(PageBlock):
                     address = f"/{app}{page.get_path(dict.fromkeys(page.parameters, subject_id))}"
         elif self.page:
             for page in pages:
-                # A link that lacks an argument of its page's route has no address.
+                # A link without an argument of its page's route has no address.
                 if page.name == self.page and set(page.parameters) <= set(self.arguments):
                     address = f"/{app}{page.get_path(self.arguments)}".rstrip("/")
         return address
@@ -320,8 +322,8 @@ class Action(PageBlock):
     confirm: str = ""
     refresh: Literal["none", "page", "region"] = "page"
     link: Link | None = None
-    # The page where a person runs the action. Druks names it in the context that a
-    # review stores.
+    # The page where a person runs the action. Druks names it in the context that
+    # ``review()`` stores.
     url: str = Field(default="", exclude_if=lambda url: not url)
 
     @model_serializer(mode="wrap")
@@ -352,7 +354,7 @@ class Action(PageBlock):
         if self.refresh != "region" or region:
             return
         raise ValueError(
-            f"action {self.label!r} refreshes its region, and it sits in none. Put it in a "
+            f"action {self.label!r} refreshes its region. It is in no region. Put it in a "
             'named Section, or refresh the page with refresh="page".'
         )
 
@@ -373,7 +375,8 @@ class Action(PageBlock):
             )
 
     def to_markdown(self) -> str:
-        # Only an action that knows its page has a text form: its label, linked to the page.
+        # Only an action that holds the address of its page has a text form: its label,
+        # linked to the page.
         if self.url:
             return _link(self.label, self.url)
         raise NoTextFormError(type(self).__name__)
@@ -408,12 +411,12 @@ class Form(PageBlock):
         if self.submit == "change" and self.extra_actions:
             raise ValueError(
                 f"form {self.title!r} submits on change and also has extra actions. "
-                "An extra action is a button. Give the form a button, or drop extra_actions."
+                "An extra action is a button. Give the form a button, or remove extra_actions."
             )
         if self.submit == "change" and self.action.confirm:
             raise ValueError(
                 f"form {self.title!r} submits on change and also asks to confirm. "
-                "A confirm needs a button. Give the form a button, or drop confirm."
+                "A confirm needs a button. Give the form a button, or remove confirm."
             )
         _check_field_names(
             owner=f"form {self.title!r}",
@@ -427,6 +430,16 @@ class Form(PageBlock):
                 arguments=extra.arguments,
             )
         return self
+
+    def to_markdown(self) -> str:
+        # Only a form that holds the address of its page has a text form. Its actions link to
+        # that page.
+        if self.action.url:
+            return _titled(
+                self.title,
+                _join([self.description, _controls([self.action, *self.extra_actions])]),
+            )
+        raise NoTextFormError(type(self).__name__)
 
 
 class Text(PageBlock):
@@ -466,7 +479,7 @@ class Quote(PageBlock):
 
 
 class Callout(PageBlock):
-    """A short message the reader should not miss. The tone selects the
+    """A short message that the reader must not miss. The tone selects the
     presentation. The app writes the words. ``controls`` are the next step
     that the message points at."""
 
@@ -534,7 +547,7 @@ class PageValue(Schema):
     """What every value shares."""
 
     def check_placement(self, *, followed: bool, regions: set[str], region: str = "") -> None:
-        """Raise when this value cannot sit where the page put it."""
+        """Raise when this value cannot be where the page put it."""
 
     def to_markdown(self) -> str:
         """The value as markdown, the way a fact, a list item, or a table cell
@@ -593,9 +606,10 @@ class StatusValue(PageValue):
 
 class SubjectStatus(PageValue):
     """Where the work on one subject stands. The shell shows "needs you" when
-    the subject waits on the operator. It shows ``working`` while Druks works on
-    it, what stopped it, or "idle". Druks reads ``status`` each time it serves
-    the value. A stored value keeps no status."""
+    the subject waits on the operator. It shows ``working`` while a run of the
+    subject is scheduled or running. Otherwise it shows what stopped the run, or
+    "idle". Druks reads ``status`` each time it serves the value. A stored value
+    keeps no status."""
 
     value: Literal["subject_status"] = "subject_status"
     subject: Subject
@@ -641,8 +655,8 @@ class GateControls(PageBlock):
         if followed:
             return
         raise ValueError(
-            "GateControls sits in nothing that follows a subject. An answered gate would then "
-            "stay on screen. Put it in a Page or Section with follows=."
+            "GateControls is in nothing that follows a subject. An answered gate then stays "
+            "on screen. Put it in a Page or Section with follows=."
         )
 
     @model_serializer(mode="wrap")
@@ -656,7 +670,7 @@ class GateControls(PageBlock):
 
 
 class TimeValue(PageValue):
-    """A moment. ``empty`` is the word the shell shows when there is none."""
+    """A moment. ``empty`` is the word that the shell shows when there is none."""
 
     value: Literal["time"] = "time"
     when: AwareDatetime | None
@@ -726,7 +740,7 @@ class Timeline(PageBlock):
     @model_validator(mode="after")
     def _oldest_first(self) -> "Timeline":
         # Druks sorts here, at full precision. A browser compares only milliseconds.
-        # It sees two times a few microseconds apart as the same moment. The sort is
+        # It treats two times that differ by a few microseconds as the same moment. The sort is
         # stable. Items with the same time keep the order that the app gave them.
         self.items.sort(key=lambda item: item.when)
         return self
@@ -746,8 +760,8 @@ class ProgressStep(Schema):
 
 
 class Progress(PageBlock):
-    """How far along work is. Set ``completed`` for a share of ``total``, give
-    ``steps`` for staged work, or give neither when the end is unknown."""
+    """How much of the work is done. For a share of ``total``, set ``completed``. For staged
+    work, give ``steps``. When the end is unknown, give neither."""
 
     block: Literal["progress"] = "progress"
     label: str
@@ -764,13 +778,13 @@ class Progress(PageBlock):
             return self
         if self.steps:
             raise ValueError(
-                f"Progress {self.label!r} gives both completed and steps. Staged work reads as "
-                "its steps. Give one or the other."
+                f"Progress {self.label!r} gives both completed and steps. The shell shows staged "
+                "work as its steps. Give one or the other."
             )
         if self.completed > self.total:
             raise ValueError(
-                f"Progress {self.label!r} has completed {self.completed} of {self.total}. "
-                "Set completed to at most total."
+                f"Progress {self.label!r} sets completed to {self.completed}, more than its "
+                f"total {self.total}. Set completed to at most total."
             )
         return self
 
@@ -798,7 +812,7 @@ class Image(PageBlock):
 
 class FileSummary(Schema):
     """One file, as the shell shows it. Druks builds the download address from
-    the id. A download then always goes through the platform's own route and its
+    the id. A download then always uses the platform's own route and its
     identity check."""
 
     model_config = ConfigDict(from_attributes=True)
@@ -815,7 +829,7 @@ class FileSummary(Schema):
 
 
 class Files(PageBlock):
-    """Files an operator can preview or download. ``files`` takes
+    """Files that an operator can preview or download. ``files`` takes
     ``druks.files.File`` objects."""
 
     block: Literal["files"] = "files"
@@ -838,7 +852,7 @@ class Chart(PageBlock):
     """Numbers over categories. Every series carries one point for each
     category. The shell then reads the same table that the chart draws. A pie
     draws each point of its one series as a share of the whole. Each point of a
-    pie is above zero."""
+    pie is more than zero."""
 
     block: Literal["chart"] = "chart"
     kind: Literal["line", "bar", "area", "pie"] = "line"
@@ -874,7 +888,7 @@ class Chart(PageBlock):
                 raise ValueError(
                     f"pie chart {name} has a point of zero or less for the categories "
                     f"{categories_at_or_below_zero}. A pie draws each point as a share of "
-                    "the whole. Give each point a number above zero."
+                    "the whole. Give each point a number more than zero."
                 )
         return self
 
@@ -1001,25 +1015,26 @@ class Table(PageBlock):
         if self.actions and not self.select:
             raise ValueError(
                 f"table {self.title!r} has actions and no select. Name the argument "
-                "the selected keys fill."
+                "that the selected keys fill."
             )
         if self.select and not self.actions:
             raise ValueError(
                 f"table {self.title!r} names select and has no actions. Give it "
-                "actions, or drop select."
+                "actions, or remove select."
             )
         if not self.select:
             return self
         if not all(row.key for row in self.rows):
             raise ValueError(
-                f"table {self.title!r} can select rows, and a row has no key. Give each row a key."
+                f"table {self.title!r} can select rows. One of its rows has no key. Give each "
+                "row a key."
             )
         keys = [row.key for row in self.rows]
         repeated_keys = sorted({key for key in keys if keys.count(key) > 1})
         if repeated_keys:
             raise ValueError(
                 f"table {self.title!r} has two rows keyed {repeated_keys}. The shell "
-                "cannot tell which one the operator picked. Give each row its own key."
+                "cannot identify the row that the operator picked. Give each row its own key."
             )
         for action in self.actions:
             if action.fields:
@@ -1044,8 +1059,8 @@ class Table(PageBlock):
             self.empty.check_placement(followed=followed, regions=regions, region=region)
 
     def to_markdown(self) -> str:
-        # An action has a text form only when it knows its page. A table that selects
-        # rows has one only then.
+        # An action has a text form only when it holds the address of its page. A table
+        # that selects rows has one only then.
         actions = _controls(self.actions)
         body = ""
         if self.rows:
@@ -1102,10 +1117,11 @@ class Stack(BlockParent):
 
 
 class Columns(BlockParent):
-    """Blocks across the page. ``even`` shares the width. ``sidebar`` keeps
-    the last column a rail. ``split`` fills the page with two panes that scroll
-    on their own. The first holds a list. The second holds what the list opened.
-    The columns stack on a narrow screen."""
+    """Blocks across the page. ``even`` shares the width. ``sidebar`` keeps the last
+    column a rail. The columns stack on a narrow screen.
+
+    ``split`` fills the page with two panes that scroll on their own. The first holds a
+    list. The second holds what the list opened."""
 
     block: Literal["columns"] = "columns"
     layout: Literal["even", "sidebar", "split"] = "even"
@@ -1152,10 +1168,13 @@ class Card(BlockParent):
 
 
 class Cards(PageBlock):
-    """One card for each of a set of things. ``wrap`` lets the shell fit as
-    many across as the screen takes. ``stack`` is one column. ``tiles`` is a
+    """One card for each of a set of things. ``wrap`` lets the shell put as many
+    cards in a row as the screen holds. ``stack`` is one column. ``tiles`` is a
     wrap of squares. An image fills each card. The shell crops the image to the
-    square. ``drop`` is the action that a card dragged onto this list submits."""
+    square.
+
+    ``drop`` is the action that a card submits when a person drags it onto this
+    list."""
 
     block: Literal["cards"] = "cards"
     title: str = ""
@@ -1182,7 +1201,7 @@ class Cards(PageBlock):
             self.empty.check_placement(followed=followed, regions=regions, region=region)
 
     def to_markdown(self) -> str:
-        # The drop is an action. It has a text form only when it knows its page.
+        # The drop is an action. It has a text form only when it holds the address of its page.
         drop = ""
         if self.drop:
             drop = self.drop.to_markdown()
@@ -1208,7 +1227,7 @@ class Section(BlockParent):
         if self.name in regions:
             raise ValueError(
                 f"this page has two regions named {self.name!r}. The shell replaces a region "
-                "by name. It cannot tell the two apart. Give each region its own name."
+                "by name. It cannot select one of the two. Give each region its own name."
             )
         if self.name:
             regions.add(self.name)

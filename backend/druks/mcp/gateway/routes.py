@@ -11,8 +11,8 @@ from druks.mcp.gateway import exceptions as gate_errors
 from druks.mcp.gateway import schemas, services
 from druks.teams.dependencies import require_call_access, require_run_access
 
-# Docstrings here are the derived tool descriptions. operation_id is the tool name. A
-# rename of either one is a break, never a refactor side effect.
+# The docstrings here are the derived tool descriptions. operation_id is the tool name.
+# A rename of either one is a break, never a side effect of a refactor.
 router = APIRouter(prefix="/api", tags=["agent"])
 
 
@@ -48,10 +48,11 @@ async def get_gate(
     response_model_by_alias=True,
     responses=agent_error_responses(
         gate_errors.InvalidGateAnswer(
-            "The ask offers no control 'merge'. Answer with a control that the ask offers."
+            "The ask offers no control 'merge'. Answer with a control that it offers."
         ),
         gate_errors.GateAnswerNotAllowed(
-            "Only the admin of the number that started this run can answer it."
+            "Only the admin of the number that started this run can answer it. Ask that admin "
+            "to answer it."
         ),
         RunNotFound("run-123"),
         gate_errors.GateRoundStale("run-123"),
@@ -65,7 +66,7 @@ async def answer_gate(
     body: schemas.AnswerGateRequest,
 ) -> schemas.GateAnswerResponse:
     """Answer the gate that get_gate showed, and resume the run. parkedAt must echo
-    get_gate's value unchanged. A repeat answer to the same parkedAt reports
+    get_gate's value unchanged. A second answer to the same parkedAt reports
     already_answered. An empty request_changes is valid only when get_gate's ask has
     context: text that is not blank, or a list of one or more blocks."""
     return await services.answer_gate(

@@ -24,8 +24,8 @@ if TYPE_CHECKING:
 
 
 def mint_correlation_token() -> str:
-    # 256 bits, URL-safe. It is the default of Notification.correlation_token, so that every
-    # row gets one at flush.
+    # A URL-safe token of 256 bits. It is the default of Notification.correlation_token.
+    # Every row thus gets one at flush.
     return secrets.token_urlsafe(32)
 
 
@@ -51,12 +51,12 @@ class Notification(Base, Uuid7Pk):
         ),
     )
 
-    # The subject ({type, id}) of the run that the notification is about. None when that run
-    # has no subject, or when the notification is about no run.
+    # The subject ({type, id}) of the run that the notification is about. None when that
+    # run has no subject, or when the notification is about no run.
     subject: Mapped[dict | None] = mapped_column(JSONB, default=None)
     # Why it fired: a machine category, such as "gate.parked".
     reason: Mapped[str]
-    # Markdown that the caller writes. Never a template.
+    # Markdown that the caller writes. It is never a template.
     body: Mapped[str]
     # The Druks blocks whose text form is the body, as JSON. A channel that draws blocks
     # draws these. A channel that draws none sends the body. None for a body of text.
@@ -67,15 +67,15 @@ class Notification(Base, Uuid7Pk):
     actions: Mapped[list[dict] | None] = mapped_column(JSONB, default=None)
     # The druks.ui fields of a chat agent's form, or of a parked run's questions and note.
     fields: Mapped[list[dict] | None] = mapped_column(JSONB, default=None)
-    # Reply-routing back to a parked run: (run_id, run_parked_at) is the exact
-    # round that a click answers. The row stores it, because a run can re-park a new
-    # round before the human acts.
+    # The parked run that a reply goes to. (run_id, run_parked_at) is the exact round that
+    # a click answers. The row stores it, because a run can park again on a new round
+    # before the person acts.
     run_id: Mapped[str | None] = mapped_column(
         ForeignKey("durable_runs.id", ondelete="SET NULL"), default=None
     )
     run_parked_at: Mapped[datetime | None] = mapped_column(default=None)
     # The end that the run of a status announced in its last step. DBOS records that end
-    # only after the step. A send that comes first reads it here.
+    # only after the step. A send that comes first thus reads it here.
     run_end: Mapped[str | None] = mapped_column(default=None)
     # A human view-link. The buttons carry the respond capability. This link never does.
     deep_link: Mapped[str | None] = mapped_column(default=None)
@@ -96,7 +96,7 @@ class Notification(Base, Uuid7Pk):
     message_id: Mapped[str | None] = mapped_column(default=None)
     # How many times deliver() ran for this row, across outbox retries.
     attempts: Mapped[int] = mapped_column(default=0)
-    # Druks stores only a sanitized error here, because API responses show it.
+    # Druks stores only a sanitized error. API responses show it.
     last_error: Mapped[str | None] = mapped_column(default=None)
     delivered_at: Mapped[datetime | None] = mapped_column(default=None)
     # When the person marked the notification read.
@@ -122,9 +122,9 @@ class Notification(Base, Uuid7Pk):
         run_parked_at: datetime | None = None,
         deep_link: str | None = None,
     ) -> "Notification":
-        # The create seam: persist the row and enqueue nothing. The column default
-        # mints the token. A workflow step can then call it. The body of the workflow
-        # enqueues the outbox afterwards.
+        # The create seam. It persists the row and enqueues nothing. The column default
+        # mints the token. A workflow step can then call it. The body enqueues the outbox
+        # afterwards.
         notification = cls(
             conversation_id=conversation_id,
             account_id=account_id,
@@ -155,26 +155,27 @@ class Notification(Base, Uuid7Pk):
         limit: int = 50,
     ) -> list["Notification"]:
         """The notifications sent to ``account_id``, newest first: all of them, or those
-        with ``reason`` that Druks created at or after ``since``. With ``kinds``, a
+        with ``reason`` that Druks made at or after ``since``. With ``kinds``, a
         notification about a run counts only when the run is of those workflows. The list
-        leaves out the status of a run, because the run edits it in place."""
-        stmt = select(cls).where(
+        holds no status of a run, because the run edits it in place."""
+        statement = select(cls).where(
             cls.account_id == account_id, cls.reason != constants.STATUS_REASON
         )
         if reason:
-            stmt = stmt.where(cls.reason == reason)
+            statement = statement.where(cls.reason == reason)
         if since:
-            stmt = stmt.where(cls.created_at >= since)
+            statement = statement.where(cls.created_at >= since)
         if kinds is not None:  # ast-grep-ignore: rule-2
             # druks.durable loads the chat models, which import this module.
             from druks.durable.models import Run  # noqa: PLC0415
 
-            stmt = stmt.outerjoin(Run, Run.id == cls.run_id).where(
+            statement = statement.outerjoin(Run, Run.id == cls.run_id).where(
                 or_(cls.run_id.is_(None), Run.kind.in_(kinds))
             )
-        # uuid7 ids are time-ordered. They break a created_at tie toward the newest.
-        stmt = stmt.order_by(cls.created_at.desc(), cls.id.desc()).limit(limit)
-        return list(await session.scalars(stmt))
+        # uuid7 ids are time-ordered. Of two rows with the same created_at, the newer comes
+        # first.
+        statement = statement.order_by(cls.created_at.desc(), cls.id.desc()).limit(limit)
+        return list(await session.scalars(statement))
 
     @classmethod
     async def mark_all_read(cls, session: AsyncSession, account_id: str) -> None:
@@ -203,8 +204,8 @@ class Notification(Base, Uuid7Pk):
         cls, session: AsyncSession, conversation_id: str
     ) -> "list[Row[Notification, Run]]":
         """The status of each run that the conversation started, with the run that has it
-        now. The list holds the status of a run that ended, and a status whose send
-        failed."""
+        now. The list holds the status of a run that ended, and a status that Druks could
+        not send."""
         # druks.durable loads the chat models, which import this module.
         from druks.durable.models import Run  # noqa: PLC0415
 
@@ -212,7 +213,7 @@ class Notification(Base, Uuid7Pk):
             select(cls, Run)
             .join(Run, Run.id == cls.run_id)
             .where(cls.conversation_id == conversation_id, cls.reason == constants.STATUS_REASON)
-            # uuid7 ids are time-ordered, so the oldest status comes first.
+            # uuid7 ids are time-ordered. The oldest status thus comes first.
             .order_by(cls.id)
         )
         return list(rows.all())
@@ -227,9 +228,9 @@ class Notification(Base, Uuid7Pk):
     async def list_open(
         cls, session: AsyncSession, run_id: str, parked_at: datetime
     ) -> list["Notification"]:
-        """The posted messages that still show buttons for the question that the run parked
-        on at ``parked_at``."""
-        stmt = select(cls).where(
+        """The posted messages that still show buttons for the question that the run
+        parked on at ``parked_at``."""
+        statement = select(cls).where(
             cls.run_id == run_id,
             cls.run_parked_at == parked_at,
             cls.state == NotificationState.DELIVERED.value,
@@ -237,7 +238,7 @@ class Notification(Base, Uuid7Pk):
             # A message without buttons stores JSON null, which is not SQL NULL.
             cls.actions != JSONB.NULL,
         )
-        return list(await session.scalars(stmt))
+        return list(await session.scalars(statement))
 
     @classmethod
     async def list_open_questions(
@@ -246,12 +247,12 @@ class Notification(Base, Uuid7Pk):
         """The questions of the conversation's agent that no answer closed yet, posted or
         still in the queue. A notification of the conversation with no run is its agent's
         question."""
-        stmt = select(cls).where(
+        statement = select(cls).where(
             cls.conversation_id == conversation_id,
             cls.run_id.is_(None),
             cls.state != NotificationState.ACKNOWLEDGED.value,
         )
-        return list(await session.scalars(stmt))
+        return list(await session.scalars(statement))
 
     @property
     def is_acknowledged(self) -> bool:
@@ -267,37 +268,37 @@ class Notification(Base, Uuid7Pk):
         )
 
     def get_action_at(self, position: list[int]) -> dict:
-        """The action at ``position`` in the blocks: the index of a block, or the indexes of
-        a table, its row, and the cell. Raises InvalidChoiceError when a line of text took
-        the place of the action, because the action ran."""
-        match position:
-            case [index]:
-                part = self.blocks[index]
-            case [index, row, cell]:
-                part = self.blocks[index]["rows"][row]["cells"][cell]
-        match part:
-            case {"block": "action"}:
-                return part
-            case {"value": "controls", "controls": [{"block": "action"} as action]}:
+        """The action at ``position`` in the blocks. The position is the index of a block. A
+        form adds the number of one of its actions. Number 0 is the form's own action, and its
+        extra actions follow. A table adds the row and the cell. Raises InvalidChoiceError when
+        a line of text replaced the action, because the action ran."""
+        match position, self.blocks[position[0]]:
+            case [_], {"block": "action"} as action:
                 return action
+            case [_, number], {"block": "form", "action": action, "extraActions": extra_actions}:
+                return [action, *extra_actions][number]
+            case [_, row, cell], {"block": "table", "rows": rows}:
+                match rows[row]["cells"][cell]:
+                    case {"value": "controls", "controls": [{"block": "action"} as action]}:
+                        return action
         raise InvalidChoiceError(constants.ACTION_GONE_MESSAGE)
 
     async def replace(self, stack: ui.Stack, *, run: "Run") -> None:
         """Make ``stack`` the report of the status. ``run`` is the run that reports: the run
-        of the status, or a run that retries it and takes the status."""
+        of the status, or a run that retries it and becomes the run of the status."""
         self.blocks = [block.model_dump(mode="json", by_alias=True) for block in stack.blocks]
         self.body = stack.to_markdown()
         self.run_id = run.id
         self.deep_link = run.get_link()
-        # A run that reports has not ended.
+        # A run that reports has no end yet.
         self.run_end = None
         self.updated_at = Base.utc_now()
         await self.session.flush()
 
     async def follow(self, run: "Run", *, state: str) -> None:
-        """Follow ``run``: the run of the status, or a run that retries it and takes the
-        status. ``state`` is the state that the run announced. The status keeps it when it
-        is an end."""
+        """Follow ``run``: the run of the status, or a run that retries it and becomes the
+        run of the status. ``state`` is the state that the run announced. The status keeps
+        it when it is an end."""
         self.run_id = run.id
         self.deep_link = run.get_link()
         self.run_end = state if state in constants.RUN_ENDS else None
@@ -307,7 +308,7 @@ class Notification(Base, Uuid7Pk):
     async def draw(self, run: "Run") -> ui.Stack:
         """The status as its message shows it: the report and, while ``run`` waits or after
         it ends, where the run stands. Then each step that the report shows in progress
-        takes that state. A callout at the end says it."""
+        gets that state. A callout at the end says it."""
         stack = ui.Stack(self.blocks)
         state = self.run_end or run.state
         if state in constants.RUN_STATE_CALLOUTS:
@@ -322,16 +323,17 @@ class Notification(Base, Uuid7Pk):
         return stack
 
     async def mark_action_run(self, position: list[int], *, username: str) -> None:
-        """Replace the action at ``position`` with the line that says ``username`` ran it,
-        and write the body again. In a table, the line takes the place of the cell. A later
-        click on that position then runs nothing."""
+        """Replace the action at ``position`` with the line that says ``username`` ran it.
+        Then write the body again. For a form, the line replaces the whole form. In a table,
+        the line replaces the cell. A later click on an action of that block or cell then
+        runs nothing."""
         line = constants.ACTION_RUN_MESSAGE.format(
             username=username, label=self.get_action_at(position)["label"]
         )
         # The change goes on a copy, because SQLAlchemy sees no change inside the loaded JSON.
         blocks = copy.deepcopy(self.blocks)
         match position:
-            case [index]:
+            case [index] | [index, _]:
                 blocks[index] = ui.Text(line).model_dump(mode="json", by_alias=True)
             case [index, row, cell]:
                 cells = blocks[index]["rows"][row]["cells"]
@@ -342,8 +344,8 @@ class Notification(Base, Uuid7Pk):
         await self.session.flush()
 
     async def mark_delivered(self, message_id: str | None = None) -> None:
-        """Record the posted message. A notification that a claim took while its message
-        posted stays acknowledged."""
+        """Record the posted message. A notification that a claim acknowledged during the
+        post stays acknowledged."""
         await self.session.execute(
             update(Notification)
             .where(Notification.id == self.id)
@@ -356,7 +358,8 @@ class Notification(Base, Uuid7Pk):
                     ),
                     else_=NotificationState.DELIVERED.value,
                 ),
-                # A status sends again after a send that failed. That error is then over.
+                # Druks sends a status again after a send that failed. A send that succeeds
+                # clears that error.
                 last_error=None,
                 delivered_at=Base.utc_now(),
                 updated_at=Base.utc_now(),
@@ -371,8 +374,8 @@ class Notification(Base, Uuid7Pk):
         await self.session.flush()
 
     async def mark_acknowledged(self) -> bool:
-        # Atomic claim: exactly one concurrent responder wins the transition. The
-        # loser's duplicate send already collapsed on the DBOS round key.
+        # An atomic claim. Exactly one concurrent responder makes the transition. DBOS already
+        # deduplicated the send of the other responder by the round key.
         claimed = await self.session.execute(
             update(Notification)
             .where(

@@ -1,10 +1,10 @@
-# An unlinked person's link, and the message it holds, live this long.
+# An unlinked person's link, and the message that it holds, stay valid this long.
 LINK_TTL_SECONDS = 600
 LINK_KEY = "chat:slack:link:{token}"
-# A person who stays unlinked hears the welcome again after this long.
+# A person who stays unlinked gets the welcome again after this long.
 WELCOME_TTL_SECONDS = 30 * 24 * 60 * 60
 WELCOME_KEY = "chat:slack:welcome:{user}"
-# A person's untagged replies in a thread reach their agent while the last message
+# A person's untagged replies in a thread go to their agent while the last message
 # of their conversation there is younger than this.
 JOINED_THREAD_SECONDS = 24 * 60 * 60
 # How much of a thread the agent reads.
@@ -14,10 +14,10 @@ LINK_MESSAGE = (
 )
 UNLINKED_REPLY = (
     "<@{user}>, your Slack account is not connected to Druks yet. "
-    "I sent you a direct message with the link to connect it."
+    "Connect it with the link in the direct message that I sent you."
 )
 UNACCEPTED_AUTOMATION_REPLY = (
-    "I do not answer this automation yet. A Druks admin can accept it here: {url}"
+    "I do not answer this automation yet. Ask a Druks admin to accept it here: {url}"
 )
 WELCOME_TEMPLATE = "chat/channels/slack/welcome.md"
 # Slack's limit for the text of all the markdown blocks of one message.
@@ -72,3 +72,7 @@ IMAGE_ALT_TEXT_LIMIT = 2000
 IMAGE_TITLE_LIMIT = 2000
 # What a button that opens a link sends as its action. A click on it answers no notification.
 LINK_BUTTON_ACTION_ID = "link"
+# The id of each input of a block of a notification starts with the position of the block.
+# Two blocks can then have fields of one name. The inputs of an approval keep the names of
+# their fields.
+INPUT_ID_PREFIX = "{position}."

@@ -42,7 +42,7 @@ from druks.notifications.constants import (
 )
 from druks.notifications.exceptions import AnswerNotAllowedError, DeliveryError
 from druks.notifications.models import Notification
-from druks.notifications.services import create_park_notification
+from druks.notifications.services import create_park_notification, get_action_request
 from druks.secrets.models import Audience, VaultSecret
 from druks.settings import configure_settings, get_settings
 from druks.teams.models import Team
@@ -169,10 +169,10 @@ def test_match_webhook_resolves_slack_interactivity():
 
 
 def test_signature_verifier_against_a_known_answer(monkeypatch):
-    # A fixed vector, computed apart from the code under test and from _signed_headers.
-    # A mirror-image bug in the base string then cannot hide. The vector holds the
-    # verifier to Slack's v0:{ts}:{body} algorithm itself. The clock stops at the
-    # vector's epoch.
+    # This fixed vector comes from a computation that uses neither the code under test nor
+    # _signed_headers. A mirror-image bug in the base string then cannot hide. The test makes
+    # sure that the verifier uses Slack's own v0:{ts}:{body} algorithm. The clock stays at the
+    # epoch of the vector.
     body = b"payload=%7B%22type%22%3A%22ping%22%7D"
     timestamp = "1234567890"
     known = "v0=b14d6fbbfab2d9b2cb99c67b41b6289778e8bf6f4b534b69451b9e7ba1f878dd"
@@ -195,7 +195,7 @@ def test_signature_verifier_against_a_known_answer(monkeypatch):
 async def test_unsigned_or_stale_requests_401_and_never_resume(
     tmp_path, druks_db, resume_spy, slack_card
 ):
-    run, notification = await _parked_notification(druks_db)
+    _, notification = await _parked_notification(druks_db)
     body = _interactivity_body(encode_button(notification.correlation_token, "approve"))
     with _client(tmp_path) as client:
         no_headers = client.post("/_external/slack/interactivity/", content=body)
@@ -242,8 +242,8 @@ async def test_signed_click_routes_through_respond(
         message_ts=_MESSAGE_TS,
         outcome="<@U7> chose Approve.",
     )
-    # The request's own session committed the transition. Drop the cached instance of
-    # the ambient (task-scoped) session to read it.
+    # The request's own session committed the transition. Clear the cache of the ambient,
+    # task-scoped session to read it.
     ambient_db_session().expunge_all()
     assert (await ambient_db_session().get(Notification, notification.id)).state == "acknowledged"
     assert notification.correlation_token not in response.text
@@ -253,7 +253,7 @@ async def test_signed_click_routes_through_respond(
 async def test_dead_round_click_is_acknowledged_without_resume(
     tmp_path, druks_db, resume_spy, slack_card, started
 ):
-    run, notification = await _parked_notification(druks_db)
+    _, notification = await _parked_notification(druks_db)
     await notification.mark_acknowledged()
     with _client(tmp_path) as client:
         body = _interactivity_body(encode_button(notification.correlation_token, "approve"))
@@ -343,7 +343,7 @@ async def test_click_that_is_not_the_clickers_to_answer_explains_it_to_the_click
 
 
 async def _form_question(druks_db) -> Notification:
-    """A form that the agent of a Slack chat with U7 asked, as its turn left it."""
+    """An open form that the agent of a Slack chat with U7 sent at the end of its turn."""
     account = await Account.get_or_create(druks_db, "op@example.com")
     conversation = Conversation(
         account_id=account.id,
@@ -472,8 +472,9 @@ async def _approval(
     druks_db, *blocks: ui.Block, is_in_a_chat: bool = False
 ) -> tuple[Run, Notification]:
     """A run parked on _REVIEW_ASK with ``blocks`` as its context, and the notification that
-    its park made. The notification is for its account, or in the thread of its Slack chat
-    with U7. On an installation with an endpoint, the notification links to the run's page."""
+    its park made. The notification is for the run's account, or in the thread of its Slack
+    chat with U7. On an installation with an endpoint, the notification links to the run's
+    page."""
     account = await Account.get_or_create(druks_db, "op@example.com")
     conversation_id = None
     if is_in_a_chat:
@@ -494,7 +495,7 @@ async def _approval(
         input_gate="review",
         input_request={
             **_REVIEW_ASK,
-            # Each action holds the page of its run, as review stores it.
+            # Each action holds the page of its run, as ``review()`` stores it.
             "context": [
                 block.model_dump(
                     mode="json", by_alias=True, context={"action_url": f"/runs/{run_id}"}
@@ -537,7 +538,7 @@ def _text(value: str | None) -> dict:
                 "question:database": _select(_option("Postgres", "postgres")),
                 "question:cache": _select(_option("Redis", "redis")),
                 "note": _text(None),
-                # Inputs that the approval does not offer.
+                # The inputs that the approval does not offer.
                 "question:ghost": _select(_option("Ghost", "ghost")),
                 "database": _text("mysql"),
             },
@@ -616,7 +617,7 @@ async def test_a_click_that_needs_a_note_tells_only_the_person_when_the_note_is_
 async def test_malformed_payloads_400_never_500_never_resume(
     tmp_path, druks_db, resume_spy, slack_card
 ):
-    run, notification = await _parked_notification(druks_db)
+    _, notification = await _parked_notification(druks_db)
     malformed = [
         b"not-a-form",
         urlencode({"payload": "not json"}).encode(),
@@ -625,7 +626,8 @@ async def test_malformed_payloads_400_never_500_never_resume(
         urlencode({"payload": json.dumps({"type": "block_actions", "actions": []})}).encode(),
         _interactivity_body("not-an-encoded-button!!"),
     ]
-    # A real button for the parked round, each time without one field the handler needs.
+    # Each payload has a real button for the parked round. The loop deletes one field that
+    # the handler needs, a different one each time.
     for field in ("user", "channel", "message"):
         payload = _interactivity_payload(encode_button(notification.correlation_token, "approve"))
         del payload[field]
@@ -731,10 +733,19 @@ def _archive(note: Note) -> ui.Action:
     return ui.Action(label="Archive", operation="archive_note", arguments={"note_id": note.id})
 
 
+def _note_form() -> ui.Form:
+    return ui.Form(
+        title="Rack 3",
+        fields=[ui.TextAreaField(name="body", label="Note", is_required=True)],
+        action=ui.Action(label="Write a note", operation="write_note"),
+        extra_actions=[ui.Action(label="Write another note", operation="write_note")],
+    )
+
+
 @pytest.fixture
 def slack_api(monkeypatch):
-    """Slack's Web API, answered locally. Records each call as its method and its
-    arguments. Each of ``refusals`` refuses one next call."""
+    """Slack's Web API, answered locally. It records each call as its method and its
+    arguments. Each item of ``refusals`` refuses the next call."""
     fake = SimpleNamespace(calls=[], refusals=[])
 
     async def api_call(client, api_method, *, json=None, **request):
@@ -768,13 +779,16 @@ async def member(druks_db):
     return account
 
 
-async def _click(action_id: str, *, user: str = "U7") -> httpx.Response:
-    """Click the button ``action_id`` as Slack user ``user``. A second click is not a retry
-    of the first, because Slack stamps each click with its own time. The API overrides no
-    dependency. The route of an action checks the credential of its call itself."""
+async def _click(action_id: str, *, user: str = "U7", state: dict | None = None) -> httpx.Response:
+    """Click the button ``action_id`` as Slack user ``user``, with ``state``, the inputs of
+    the message keyed by the ids of their blocks. Slack stamps each click with its own time. A
+    second click is thus not a retry of the first. The API overrides no dependency. The
+    route of an action thus checks the credential of its call itself."""
     api = configure_app_for_test(settings=get_settings(), authenticated=False)
     payload = _interactivity_payload(action_id, user=user)
     payload["actions"][0]["action_ts"] = str(time.time_ns())
+    if state:
+        payload["state"] = {"values": state}
     body = urlencode({"payload": json.dumps(payload)}).encode()
     async with asgi_client(api) as client:
         return await client.post(
@@ -849,7 +863,7 @@ async def test_a_click_on_a_row_s_action_runs_it_on_the_note_of_that_row_as_the_
         "member@example.com",
     ]
     stored = await druks_db.get(Notification, approval.id)
-    # The line takes the place of the cell. Every other part keeps its place.
+    # The line replaces the cell. Every other part keeps its place.
     line = ui.TextValue("member@example.com ran Archive.").model_dump(mode="json", by_alias=True)
     first_row, second_row = blocks[1]["rows"]
     ran_row = {**second_row, "cells": [second_row["cells"][0], line]}
@@ -917,6 +931,12 @@ async def _ran(druks_db, note: Note) -> Notification:
     return approval
 
 
+async def _form_ran(druks_db, note: Note) -> Notification:
+    _, approval = await _approval(druks_db, _note_form())
+    await approval.mark_action_run([1, 0], username="member@example.com")
+    return approval
+
+
 async def _with_no_route(druks_db, note: Note) -> Notification:
     shred = ui.Action(label="Shred", operation="shred_note", arguments={"note_id": note.id})
     _, approval = await _approval(druks_db, shred)
@@ -941,25 +961,59 @@ async def _in_a_chat(druks_db, note: Note) -> Notification:
 
 
 @pytest.mark.parametrize(
-    ("make", "user", "reason"),
+    ("make", "user", "position", "reason"),
     [
-        (_answered, "U7", "This notification was already acknowledged."),
-        (_ran, "U7", "This action already ran."),
-        (_with_no_route, "U7", "The app field_notes has no route for this action now."),
-        (_with_no_path_value, "U7", "This action carries no path value for note_id."),
-        (_with_a_dot_as_its_path_value, "U7", "This action carries no path value for note_id."),
-        (_in_a_chat, "U8", "Only the person of this conversation can run its actions."),
+        (_answered, "U7", [1], "This notification was already acknowledged."),
+        (_ran, "U7", [1], "This action already ran."),
+        # The line of a form replaces every action of the form.
+        (_form_ran, "U7", [1, 1], "This action already ran."),
+        (
+            _with_no_route,
+            "U7",
+            [1],
+            "The app field_notes has no route for this action at this time. Ask an admin to "
+            "add the route to the app again.",
+        ),
+        (
+            _with_no_path_value,
+            "U7",
+            [1],
+            "This action carries no path value for note_id. Give the action an argument or "
+            "a required field with each of these names.",
+        ),
+        (
+            _with_a_dot_as_its_path_value,
+            "U7",
+            [1],
+            "This action carries no path value for note_id. Give the action an argument or "
+            "a required field with each of these names.",
+        ),
+        (
+            _in_a_chat,
+            "U8",
+            [1],
+            "Only the person of this conversation can run its actions. Ask that person to "
+            "run this action.",
+        ),
     ],
-    ids=["answered", "ran", "no-route", "no-path-value", "dot-path-value", "another-persons-chat"],
+    ids=[
+        "answered",
+        "ran",
+        "form-that-ran",
+        "no-route",
+        "no-path-value",
+        "dot-path-value",
+        "another-persons-chat",
+    ],
 )
 async def test_an_action_that_cannot_run_runs_nothing_and_only_the_clicker_reads_why(
-    druks_db, slack_card, member, started, make, user, reason
+    druks_db, slack_card, member, started, make, user, position, reason
 ):
     note = await Note.create(body="Fan noise on rack 3.")
     approval = await make(druks_db, note)
     await druks_db.commit()
 
-    response = await _click(encode_action(approval.correlation_token, 1), user=user)
+    response = await _click(encode_action(approval.correlation_token, *position), user=user)
 
     assert response.json() == {"accepted": False}
     (explained,) = started.await_args_list
@@ -1037,7 +1091,8 @@ async def test_an_action_runs_only_for_a_person_whose_account_can_use_its_app(
     assert (reply["method"], reply["user"], reply["text"]) == (
         "chat.postEphemeral",
         "U8",
-        "outsider@example.com cannot use the app field_notes.",
+        "outsider@example.com cannot use the app field_notes. Ask an admin to add "
+        "outsider@example.com to a team that lists the app.",
     )
     assert edit["method"] == "chat.update"
 
@@ -1045,7 +1100,7 @@ async def test_an_action_runs_only_for_a_person_whose_account_can_use_its_app(
 async def test_a_value_that_the_route_refuses_is_named_to_the_clicker_alone(
     druks_db, slack_card, member, started, slack_api
 ):
-    # A "?" that Druks did not encode would end the path. No route would answer it.
+    # A "?" that Druks did not encode ends the path. No route then answers it.
     archive = ui.Action(label="Archive", operation="archive_note", arguments={"note_id": "7?draft"})
     _, approval = await _approval(druks_db, archive)
     await druks_db.commit()
@@ -1179,8 +1234,8 @@ async def test_an_answer_while_an_action_runs_keeps_its_outcome_and_the_action_s
     await druks_db.commit()
     await _click(encode_action(approval.correlation_token, 1))
 
-    # The route answers, then the edit of an approval lands before the action's own edit.
-    await call_action(approval.id, [1], account_id=member.id, user="U7")
+    # The route answers. Then the edit for the approval occurs before the action's own edit.
+    await call_action(approval.id, [1], values={}, account_id=member.id, user="U7")
     await _click(encode_button(approval.correlation_token, "approve"))
     await _run(started.await_args)
     await replace_buttons(approval.id, channel="C1", message_ts=_MESSAGE_TS, outcome="")
@@ -1188,3 +1243,160 @@ async def test_an_answer_while_an_action_runs_keeps_its_outcome_and_the_action_s
     (edit,) = slack_api.calls
     assert edit["blocks"][0]["text"].startswith("# Review\n\nmember@example.com ran Archive.")
     assert edit["blocks"][-1]["text"]["text"].startswith("<@U7> chose Approve.")
+
+
+# The inputs of a message that holds _note_form at position 1 and an action at 2.
+_NOTES = {
+    "1.body": _text("Fan 3 is fixed."),
+    "2.body": _text("Rack 4 hums."),
+    # The inputs of no block: the approval's own note, and the name of a field with no position.
+    "note": _text("Keep the queue."),
+    "body": _text("Not a note."),
+}
+
+
+@pytest.mark.parametrize(
+    ("position", "label", "body", "kept"),
+    [
+        ([1, 0], "Write a note", "Fan 3 is fixed.", "2.body"),
+        ([1, 1], "Write another note", "Fan 3 is fixed.", "2.body"),
+        ([2], "Write it here", "Rack 4 hums.", "1.body"),
+    ],
+    ids=["form", "extra-action-of-the-form", "action-with-fields"],
+)
+async def test_a_click_sends_the_inputs_of_its_block_to_the_route_as_the_clicker(
+    druks_db, slack_card, member, started, slack_api, position, label, body, kept
+):
+    write = ui.Action(
+        label="Write it here",
+        operation="write_note",
+        fields=[ui.TextAreaField(name="body", label="Note", is_required=True)],
+    )
+    _, approval = await _approval(druks_db, _note_form(), write)
+    await druks_db.commit()
+
+    assert (
+        await _click(encode_action(approval.correlation_token, *position), state=_NOTES)
+    ).json() == {"accepted": True}
+    action_run = started.await_args
+    assert action_run.args[1:3] == (approval.id, position)
+    assert action_run.kwargs["values"] == {"body": body}
+    await _run(action_run)
+
+    druks_db.expunge_all()
+    assert (await druks_db.execute(select(Note.body, Note.written_by))).all() == [
+        (body, "member@example.com")
+    ]
+    assert (await druks_db.get(Notification, approval.id)).blocks[position[0]] == ui.Text(
+        f"member@example.com ran {label}."
+    ).model_dump(mode="json", by_alias=True)
+    (edit,) = slack_api.calls
+    # Druks removes the inputs of the block that ran. The inputs of the other block and of the
+    # approval stay.
+    assert [block["block_id"] for block in edit["blocks"] if block["type"] == "input"] == [
+        kept,
+        "question:database",
+        "question:cache",
+        "note",
+    ]
+
+
+async def test_a_click_with_an_empty_required_input_names_the_field_and_saves_nothing(
+    druks_db, slack_card, member, started
+):
+    _, approval = await _approval(druks_db, _note_form())
+    await druks_db.commit()
+
+    assert (
+        await _click(encode_action(approval.correlation_token, 1, 0), state={"1.body": _text("  ")})
+    ).json() == {"accepted": False}
+    started.assert_awaited_once_with(
+        explain_reason, "C1", user="U7", reason='Answer "Note".', thread_ts=_THREAD_TS
+    )
+    assert not (await druks_db.scalars(select(Note))).all()
+
+
+# The answers to the form of the test that follows, in the shapes that Slack's inputs
+# give them.
+_ANSWERS = {
+    "title": "Fix it",
+    "notes": "",
+    "budget": "15",
+    "where": "production",
+    "tags": ["shelf", "rack"],
+    "size": "l",
+    "notify": True,
+    # No field of the form takes it.
+    "note": "Keep the queue.",
+}
+# The same answers as the dashboard sends them.
+_SENT = {
+    "title": "Fix it",
+    "notes": "",
+    "budget": 15,
+    "where": "production",
+    "tags": ["shelf", "rack"],
+    "size": "l",
+    "notify": True,
+}
+
+
+@pytest.mark.parametrize(
+    ("position", "answers", "path", "body"),
+    [
+        ([1, 0], {}, "/api/field_notes/notes", {"to": "rack 3", **_SENT}),
+        ([1, 1], {}, "/api/field_notes/notes/7/archive", _SENT),
+        (
+            [1, 0],
+            {"budget": " "},
+            "/api/field_notes/notes",
+            {"to": "rack 3", **_SENT, "budget": None},
+        ),
+    ],
+    ids=["action", "extra-action", "no-number"],
+)
+async def test_a_form_sends_its_arguments_then_its_answers_as_the_dashboard_does(
+    druks_db, position, answers, path, body
+):
+    ship = ui.Form(
+        fields=parse_fields(FORM_TEXT),
+        action=ui.Action(label="Ship", operation="write_note", arguments={"to": "rack 3"}),
+        extra_actions=[ui.Action(label="Hold", operation="archive_note", arguments={"note_id": 7})],
+    )
+    _, approval = await _approval(druks_db, ship)
+
+    request = await get_action_request(
+        druks_db,
+        approval.correlation_token,
+        position,
+        user_id="U7",
+        values={**_ANSWERS, **answers},
+    )
+
+    assert (request["method"], request["path"], request["body"]) == ("POST", path, body)
+
+
+@pytest.mark.parametrize(
+    ("field", "answer", "path"),
+    [
+        (
+            ui.TextField(name="note_id", label="Note"),
+            "7?draft",
+            "/api/field_notes/notes/7%3Fdraft/archive",
+        ),
+        (ui.NumberField(name="note_id", label="Note"), "0", "/api/field_notes/notes/0/archive"),
+        (ui.NumberField(name="note_id", label="Note"), "7.5", "/api/field_notes/notes/7.5/archive"),
+    ],
+    ids=["encoded", "zero", "decimal"],
+)
+async def test_an_answer_fills_the_path_of_the_route_and_stays_out_of_its_body(
+    druks_db, field, answer, path
+):
+    archive = ui.Form(fields=[field], action=ui.Action(label="Archive", operation="archive_note"))
+    _, approval = await _approval(druks_db, archive)
+
+    request = await get_action_request(
+        druks_db, approval.correlation_token, [1, 0], user_id="U7", values={"note_id": answer}
+    )
+
+    assert (request["path"], request["body"]) == (path, {})

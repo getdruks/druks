@@ -1,4 +1,5 @@
 import importlib.util
+import itertools
 import json
 import re
 from collections.abc import Callable, Coroutine, Sequence
@@ -6,12 +7,12 @@ from datetime import datetime
 from functools import wraps
 from pathlib import Path
 from types import ModuleType
-from typing import TYPE_CHECKING, Annotated, Any, ClassVar
+from typing import TYPE_CHECKING, Annotated, ClassVar
 
 from pydantic import BaseModel, Field, SecretStr, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-# Every layer imports druks.apps, so this module loads no models. A method that
+# Every layer imports druks.apps. This module thus loads no models. A method that
 # reads the database imports what it needs when it runs.
 from druks.exceptions import ObjectNotFound
 from druks.redis import get_client
@@ -42,41 +43,42 @@ if TYPE_CHECKING:
     from druks.ui import Page
     from druks.ui.page import PageRoute
 
-    # A check the app owns returns a verdict on one of its own preconditions
-    # using the same ``CheckResult`` shape as a core check; sync or async.
-    Check = Callable[[], "CheckResult | Coroutine[Any, Any, CheckResult]"]
+    # A check that the app owns returns a verdict on one of its own preconditions. It
+    # uses the same ``CheckResult`` shape as a core check. It can be sync or async.
+    Check = Callable[[], "CheckResult | Coroutine"]
 
 
-# An app name keys the ``/api/<name>`` namespace, the ``alembic_version_<name>``
-# table, the ``<name>_`` table prefix, and ``app:<name>:`` settings — so it must
-# be a lowercase SQL/URL-safe identifier. Public: the scaffolder validates against the
-# same rule so ``druks create app`` can't emit a package that fails this check.
+# An app name keys the ``/api/<name>`` namespace and the ``alembic_version_<name>``
+# table. It also keys the ``<name>_`` table prefix and the ``app:<name>:`` settings.
+# It must thus be a lowercase identifier that is safe in SQL and in a URL. The
+# scaffolder validates a name against the same rule, so that ``druks create app``
+# cannot emit a package that fails this check.
 NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
-# Segments under ``/api/<name>`` the platform serves for every app: the
-# agent-call reads, the page snapshots, and the upload door. Neither a subject
-# type nor an app router can take one, so an app can never shadow a platform
-# read.
+# The platform serves these segments under ``/api/<name>`` for every app: the
+# agent-call reads, the page snapshots, and the upload route. Neither a subject type
+# nor an app router can take one. An app thus never shadows a platform read.
 RESERVED_SEGMENTS = frozenset({"transcripts", "pages", "uploads"})
 
 
-# A secret-kind settings field: unset is an empty ``SecretStr`` — falsy, so
-# ``if self.token:`` reads set-ness and ``.get_secret_value()`` never needs a guard.
+# A settings field of the secret kind. An unset field is an empty ``SecretStr``, which
+# is falsy. ``if self.token:`` thus tells whether the field is set.
+# ``.get_secret_value()`` never needs a guard.
 Secret = Annotated[SecretStr, Field(default=SecretStr(""))]
 
 
 class AppSettings(BaseModel):
     def clean(self) -> dict[str, str]:
-        """Problems with the resolved settings, keyed by the field the operator
-        must fix. Advisory at rest, blocking on save: the settings form rejects
-        a save that would create them; doctor reports the ones already stored."""
+        """The problems of the resolved settings, keyed by the field that the operator
+        must fix. The settings form refuses a save that creates a problem. Doctor reports
+        the problems of the settings that Druks already stores."""
         return {}
 
 
 class _OwnRegistry:
     """A registry that each App class has for itself."""
 
-    def __init__(self, name: str, *, key: Callable[[Any], str]) -> None:
+    def __init__(self, name: str, *, key: Callable[..., str]) -> None:
         self._name = name
         self._key = key
 
@@ -84,90 +86,95 @@ class _OwnRegistry:
         self._attribute = f"_{attribute}"
 
     def __get__(self, instance: object, owner: type) -> Registry:
-        # Python names the attributes of a class before it runs __init_subclass__,
-        # so the first reader makes the class its registry.
+        # Python names the attributes of a class before it runs __init_subclass__. The
+        # first reader thus makes the class its registry.
         if self._attribute not in owner.__dict__:
             setattr(owner, self._attribute, Registry(self._name, key=self._key))
         return owner.__dict__[self._attribute]
 
 
 class App:
-    """A pluggable application. Subclass it, set ``name``, and register the
-    subclass under the ``druks.apps`` entry-point group. At boot the loader
-    calls ``discover``, which imports the package's conventionally-named modules —
-    that import is where the app's webhooks, workflows, instructions, and
-    subscribers self-register.
+    """A pluggable application. To make one, subclass it and set ``name``. Then
+    register the subclass under the ``druks.apps`` entry-point group. At boot, the
+    loader calls ``discover``, which imports the package's modules that have the
+    conventional names. That import is where the app's webhooks, workflows,
+    instructions, and subscribers register themselves.
 
-    Used as a class, never instantiated: an app is a stateless install
-    singleton, so an instance would only be ceremony.
+    Druks uses an app as a class and never makes an instance. An app is a stateless
+    singleton of the installation. An instance has no use.
     """
 
     name: ClassVar[str]
-    # Tables this app owns are prefixed ``<name>_`` — the SQLAlchemy stand-in for a
-    # Django ``app_label``, derived from ``name``. The platform scopes the app's
-    # autogenerate to this prefix and tracks its history in ``alembic_version_<name>``.
+    # The names of the tables that this app owns start with ``<name>_``, which comes
+    # from ``name``. The prefix is the SQLAlchemy equivalent of a Django ``app_label``.
+    # The platform scopes the app's autogenerate to this prefix. It tracks the app's
+    # history in ``alembic_version_<name>``.
     table_prefix: ClassVar[str]
-    # Whether this app's tables must carry the ``<name>_`` prefix. True for a
-    # normally-shipped app, so its schema can't collide with core or another
-    # app. An app whose tables instead live in the platform's own migration
-    # history — bundled and predating the prefix convention — sets this False to opt
-    # those tables out of the boot-time check.
+    # Whether this app's tables must carry the ``<name>_`` prefix. It is True for an
+    # app that ships normally. The schema of such an app thus cannot collide with core
+    # or with another app. A bundled app from before the prefix convention keeps its
+    # tables in the platform's own migration history. Such an app sets this to False.
+    # The boot-time check then skips its tables.
     prefix_tables: ClassVar[bool] = True
-    # The rail glyph, named from the Lucide set the frontend bundles (e.g.
-    # "telescope", "hammer" — see the UI's APP_ICONS for the available names). An
-    # app just names one, so a separately-shipped package gets a glyph without
-    # touching the frontend; unknown names fall back to the default.
+    # The rail glyph, by its name in the Lucide set that the frontend bundles, for
+    # example "telescope" or "hammer". The UI's APP_ICONS lists the available names. An
+    # app only names a glyph. A package that ships on its own thus gets a glyph with no
+    # change to the frontend. An unknown name gets the default glyph.
     icon: ClassVar[str] = "box"
-    # One-line blurb shown in the settings pane when the app is selected.
+    # The one-line description that the settings pane shows when a person selects the app.
     description: ClassVar[str] = ""
-    # The app's navigation tabs, as page names in the order they show. Each
-    # names a static top-level page, and the tab wears that page's label, so an
-    # app never spells a label twice. An app that ships its own frontend
-    # declares its tabs there instead.
+    # The app's navigation tabs, as page names in the order that they show. Each one
+    # names a static top-level page. The tab shows that page's label. An app thus never
+    # writes a label twice. An app that ships its own frontend declares its tabs there
+    # instead.
     navigation: ClassVar[list[str]] = []
-    # The app's top-level package, walked by ``discover``. Defaults to the
-    # package the subclass is defined in — the ``<package>/app.py`` convention
-    # means that's always the app's root — so it's only set explicitly when the
-    # class lives somewhere other than its package root.
+    # The app's top-level package, which ``discover`` walks. It defaults to the package
+    # that defines the subclass. By the ``<package>/app.py`` convention, that package is
+    # always the app's root. An app thus sets it only when the class is outside its
+    # package root.
     package: ClassVar[str]
-    # ``builtin`` apps carry platform-core settings rather than a user-facing
-    # app — the settings UI folds their instructions into the Druks tab instead of
-    # giving them their own.
+    # A ``builtin`` app carries settings of the platform core, not of an app that people
+    # use. The settings UI shows its instructions in the Druks tab. It gives the app no
+    # tab of its own.
     builtin: ClassVar[bool] = False
-    # The app's declared ``Settings`` inner class, if any — operator knobs that
-    # belong to the app itself rather than one of its workflows. Mirrors a
-    # workflow's ``Settings``.
+    # The app's declared ``Settings`` inner class, if it has one. It holds the values
+    # that the operator sets for the app itself, not for one of its workflows. It
+    # has the same role as the ``Settings`` of a workflow.
     settings_model: ClassVar[type[AppSettings] | None] = None
     # What the app answers people with in chat. Declare it as ``bot = Bot(...)``.
     bot: "ClassVar[Bot | None]" = None
-    # The checks this app contributes to ``druks doctor`` — one per precondition
-    # beyond resolved-settings coherence (for example, whether its provider is reachable).
-    # ``druks doctor`` runs each through the same ``CheckResult`` report as its core
-    # checks, isolating a raising one under this app's name so it can't hide a
-    # core failure. Default none; declare a list to add them.
+    # The checks that this app adds to ``druks doctor``, one for each precondition beyond
+    # the coherence of the resolved settings. An example is whether its provider
+    # answers. ``druks doctor`` runs each one through the same ``CheckResult`` report
+    # as its core checks. It reports a check that raises under this app's name, so that
+    # the check cannot hide a core failure. The default is none. Declare a list to add
+    # them.
     checks: "ClassVar[list[Check]]" = []
-    # What this app's code declares. Each thing files itself here when Python
+    # What this app's code declares. Each thing registers itself here when Python
     # defines it.
     workflows = _OwnRegistry("workflows", key=lambda cls: cls.kind)
     instructions = _OwnRegistry("instructions", key=lambda instruction: instruction.id)
     page_routes = _OwnRegistry("pages", key=lambda page_route: page_route.key)
     browser_sessions = _OwnRegistry("browser_sessions", key=lambda session: session.name)
 
-    def __init_subclass__(cls, **kwargs: Any) -> None:
+    def __init_subclass__(cls, **kwargs) -> None:
         super().__init_subclass__(**kwargs)
         name = getattr(cls, "name", None)
         if not name:
-            raise TypeError(f"{cls.__name__} must set a `name`")
+            raise TypeError(
+                f"{cls.__name__} must set a `name`. Set `name` to a lowercase identifier."
+            )
         if not NAME_RE.match(name):
             raise TypeError(
-                f"app name {name!r} must match {NAME_RE.pattern!r} — it keys the "
-                "/api/<name> namespace, the version table, and settings keys"
+                f"app name {name!r} must match {NAME_RE.pattern!r}. It keys the /api/<name> "
+                "namespace, the version table, and the settings keys. Rename the app to "
+                "match the pattern."
             )
         if "subject_type" in cls.__dict__:
             raise TypeError(
-                f"{cls.__name__} declares subject_type — a workflow declares what its runs "
-                "are about (``subject = YourSubject``), and an app's subjects follow "
-                "from its workflows"
+                f"{cls.__name__} declares subject_type. A workflow declares what it is "
+                "about, with ``subject = YourSubject``. An app's subjects follow from its "
+                "workflows. Remove subject_type from the app."
             )
         cls.table_prefix = f"{name}_"
         if "package" not in cls.__dict__:
@@ -175,24 +182,30 @@ class App:
         declared = cls.__dict__.get("Settings")
         if declared:
             if not isinstance(declared, type) or not issubclass(declared, AppSettings):
-                raise SettingsDeclarationError(f"{cls.__name__}.Settings must subclass AppSettings")
+                raise SettingsDeclarationError(
+                    f"{cls.__name__}.Settings must subclass AppSettings. Declare it as "
+                    "``class Settings(AppSettings)``."
+                )
             validate_settings_declaration(declared)
             cls.settings_model = declared
-        # Filed here so the package's models, workflows and pages find their app
-        # as Python defines them.
+        # Druks registers the app here, so that the package's models, workflows and pages
+        # find their app as Python defines them.
         register_app(cls)
 
     @classmethod
     async def settings(cls) -> AppSettings:
         """The app's settings. A field takes its secret file's value, else the operator's
         override, else its default. Raises ``TypeError`` when the app declares no
-        ``Settings``, and ``ValueError`` without the refused value when the settings refuse one."""
+        ``Settings``. Raises ``ValueError`` without the refused value when the settings
+        refuse a value."""
         from druks.db import db_session
         from druks.user_settings.models import SettingsOverride
 
         model = cls.settings_model
         if not model:
-            raise TypeError(f"app {cls.name!r} declares no Settings")
+            raise TypeError(
+                f"app {cls.name!r} declares no Settings. Declare a Settings class on the app."
+            )
         values = {
             name: await SettingsOverride.app_setting(
                 db_session(),
@@ -207,40 +220,47 @@ class App:
         try:
             return model.model_validate(values)
         except ValidationError as error:
-            # A validator can quote the value it refuses, and a value can be a secret.
+            # A validator can quote the value that it refuses. A value can be a secret.
             raise ValueError(
                 f"The settings of {cls.name} are invalid: "
-                f"{redacted_validation_message(model, error)}"
+                f"{redacted_validation_message(model, error)}. Fix the settings that this "
+                "message names."
             ) from None
 
     @classmethod
     def configured_settings(cls) -> dict[str, str]:
-        """The secret settings that configuration sets: the file ``apps.<name>.<field>``
-        in DRUKS_SECRETS_DIR, read at startup. The settings form cannot change them."""
+        """The secret settings that configuration sets. Each one is the file
+        ``apps.<name>.<field>`` in DRUKS_SECRETS_DIR, which Druks reads at startup. The
+        settings form cannot change them."""
         table = get_settings().apps.get(cls.name, {})
         return {field: value for field, value in table.items() if field != "enabled"}
 
     @classmethod
-    async def override_setting(cls, field: str, value: Any) -> None:
-        """An operator's override for one declared setting; ``None`` clears it back
-        to the declared default. Raises ``ValueError`` so the API layer can 422 it."""
+    async def override_setting(cls, field: str, value) -> None:
+        """Save an operator's override of one declared setting. ``None`` removes the
+        override. The declared default then applies. Raises ``ValueError``, which the API
+        answers with 422."""
         from druks.db import db_session
         from druks.user_settings.models import SettingsOverride
 
         model = cls.settings_model
         if not model or field not in model.model_fields:
-            raise ValueError(f"Unknown {cls.name} setting {field!r}")
+            raise ValueError(
+                f"{cls.name} has no setting {field!r}. Set a field that its Settings declares."
+            )
         if field in cls.configured_settings():
             raise ValueError(
-                f"{field} is managed by configuration. Change the file apps.{cls.name}.{field} "
-                "in DRUKS_SECRETS_DIR."
+                f"Configuration sets {field}. Change the file apps.{cls.name}.{field} in "
+                "DRUKS_SECRETS_DIR."
             )
         if value is not None:
             value = coerce_setting_value(model, field, value)
             validate_setting_override(model, (await cls.settings()).model_dump(), field, value)
             live = field_live_choices(model.model_fields[field])
             if live and not await live.accepts(value):
-                raise ValueError(f"{field}: {value!r} is not one of the listed choices")
+                raise ValueError(
+                    f"{field}: {value!r} is not one of the listed choices. Select a listed choice."
+                )
         await SettingsOverride.set_app_setting(
             db_session(),
             cls.name,
@@ -251,8 +271,8 @@ class App:
 
     @classmethod
     async def get_cached(cls, key: str):
-        """What this app cached under ``key``, or ``None`` when it was never set, its TTL
-        ran out, or the app cleared it."""
+        """What this app cached under ``key``. It is ``None`` when the app never set it,
+        when its TTL ended, or when the app cleared it."""
         if stored := await get_client().get(cls._cache_key(key)):
             return json.loads(stored)
 
@@ -284,13 +304,13 @@ class App:
 
     @classmethod
     async def read_ask(cls, session: AsyncSession, run: "Run") -> dict:
-        """The ask that ``run`` is parked on, as Druks shows it. Each status in the blocks of
+        """The ask that ``run`` waits on, as Druks shows it. Each status in the blocks of
         its context holds where the work on its subject stands at this read, from the runs
         of this app."""
         from druks import ui
 
         ask = await run.get_ask()
-        # Only an in-app ask holds blocks, and a context of text holds none.
+        # Only an in-app ask holds blocks. A context of text holds none.
         if ask.get("presentation") == "in_app" and (
             stack := ui.Stack.from_context(ask.get("context", ""))
         ):
@@ -303,10 +323,10 @@ class App:
 
     @classmethod
     def subjects(cls) -> "list[type[Subject] | type[StoredSubject]]":
-        """The subjects this app's workflows declare, ordered by subject type. An
-        identity-only ``Subject`` must implement ``list_summaries()``; a
-        ``StoredSubject`` has a board by default. The check compares method identity
-        and does not call the method."""
+        """The subjects that this app's workflows declare, ordered by subject type. An
+        identity-only ``Subject`` must implement ``list_summaries()``. A ``StoredSubject``
+        has a board by default. The check compares method identity and does not call the
+        method."""
         from druks.durable.datastructures import Subject
 
         stub = Subject.list_summaries.__func__
@@ -314,23 +334,23 @@ class App:
         for subject_class in declared:
             if subject_class.subject_type in RESERVED_SEGMENTS:
                 raise AppSubjectContractError(
-                    f"{subject_class.__name__} is a {subject_class.subject_type!r} subject; "
-                    "that segment serves every app's platform reads. Name it for what it is"
+                    f"{subject_class.__name__} is a {subject_class.subject_type!r} subject. "
+                    "That segment serves every app's platform reads. Name it for what it is."
                 )
             if subject_class.list_summaries.__func__ is stub:
                 raise AppSubjectContractError(
                     f"app {cls.name!r} declares subject {subject_class.__name__} "
-                    f"without list_summaries(); the board calls it. Implement "
+                    "without list_summaries(). The board calls it. Implement "
                     f"list_summaries() on {subject_class.__name__}."
                 )
         return sorted(declared, key=lambda subject_class: subject_class.subject_type)
 
     @classmethod
     def pages(cls) -> "list[PageRoute]":
-        """The pages this app declares, in route-match order — imported first,
-        like ``routers()`` does, so a headless caller reads the whole surface.
-        Empty for an app that ships no ``pages.py``. Raises
-        ``PageRouteError`` on a table a request could not resolve."""
+        """The pages that this app declares, in route-match order. Like ``routers()``, it
+        imports the app first. A headless caller thus reads the whole surface. The list
+        is empty for an app that ships no ``pages.py``. Raises ``PageRouteError`` on a
+        table that a request cannot resolve."""
         from druks.ui.page import list_pages_for_app
 
         cls.discover()
@@ -338,8 +358,8 @@ class App:
 
     @classmethod
     def navigation_pages(cls) -> "list[PageRoute]":
-        """The pages ``navigation`` names, in the order it names them. The shell
-        shows one tab for each, labelled by the page."""
+        """The pages that ``navigation`` names, in the order that it names them. The
+        shell shows one tab for each, with the page's label."""
         declared = {page.name: page for page in cls.pages()}
         chosen = []
         for name in cls.navigation:
@@ -349,46 +369,44 @@ class App:
                 continue
             raise PageRouteError(
                 f"app {cls.name!r} navigation names {name!r}. A navigation entry must be a "
-                f"static top-level page the shell can open with no parameters. This app "
-                f"declares {sorted(declared)}."
+                "static top-level page that the shell can open with no parameters. This app "
+                f"declares {sorted(declared)}. Name one of its static top-level pages."
             )
         return chosen
 
     @classmethod
     def discover(cls) -> list[ModuleType]:
-        """Import the app's capability modules so its webhooks, workflows,
-        instructions, and subscribers self-register. The default walks ``package``;
-        override to customize discovery (the Django ``AppConfig.ready`` escape
-        hatch — the override, not a platform special-case, is how a weird app
-        stays weird). Returns the imported modules so ``get_routers`` can read the
-        routers off the ``routes`` ones."""
+        """Import the app's capability modules, so that its webhooks, workflows,
+        instructions, and subscribers register themselves. The default walks
+        ``package``. Override it to customize discovery. It has the role of Django's
+        ``AppConfig.ready``. An unusual app stays unusual through the override,
+        not through a special case in the platform. Returns the imported modules, so
+        that ``get_routers`` can read the routers from the ``routes`` modules."""
         return autodiscover(cls.package)
 
     @classmethod
     def capability_modules(cls) -> list[ModuleType]:
-        """The app's imported capability modules — the ``routes``,
-        ``subscribers``, ``workflows``, and ``webhooks`` leaves ``discover``
-        walks. Enumerates the app's route/subscriber/webhook surface
-        headlessly (each ``@subscribe`` and ``Webhook`` self-registers on
-        import, so the modules are the surface); an alias for ``discover`` read
-        as a surface rather than a side effect."""
+        """The app's imported capability modules: the ``routes``, ``subscribers``,
+        ``workflows``, and ``webhooks`` leaves that ``discover`` walks. It lists the
+        app's routes, subscribers and webhooks with no web app. Each ``@subscribe`` and
+        each ``Webhook`` registers itself on import. The modules are thus the surface.
+        It is an alias for ``discover``, named for the surface instead of the side effect."""
         return cls.discover()
 
     @classmethod
     def routers(cls) -> "list[APIRouter]":
-        """Every router the app mounts, enumerated without the web app —
-        its declared ``routes`` routers plus the free read-sides. Builds the
-        ``APIRouter`` objects but constructs no FastAPI app, so a CLI or eval can
-        read the app's route surface without booting the platform."""
+        """Every router that the app mounts, listed without the web app: its declared
+        ``routes`` routers and the read-sides that Druks gives every app. It builds the
+        ``APIRouter`` objects. It makes no FastAPI app. A CLI or an eval can thus read the
+        route surface of the app when the platform does not run."""
         return cls.get_routers(cls.discover())
 
     @classmethod
     def migrations_dir(cls) -> Path | None:
-        """The app's own migration history root (``<package>/migrations``),
-        or None when it ships no migrations — a builtin whose tables live in
-        core's schema, or a not-yet-migrated app. The ``versions/`` dir it
-        contains is what ``druks init-db`` upgrades under
-        ``alembic_version_<name>``."""
+        """The root of the app's own migration history, ``<package>/migrations``. It is
+        None when the app ships no migrations. Examples are a builtin app whose tables
+        are in core's schema, and an app with no migrations yet. ``druks init-db``
+        upgrades the ``versions/`` directory in it under ``alembic_version_<name>``."""
         package_dir = cls.package_dir()
         if package_dir:
             migrations = package_dir / "migrations"
@@ -397,9 +415,9 @@ class App:
 
     @classmethod
     def package_dir(cls) -> Path | None:
-        """Filesystem root of ``package`` — where the app's shipped non-module
-        assets (``migrations/``, ``dist/``) live. None when the package has no
-        location (a namespace-less or frozen import)."""
+        """The filesystem root of ``package``, where the app's shipped assets that are
+        not modules are, such as ``migrations/`` and ``dist/``. It is None when the
+        package has no location, as for a namespace-less or frozen import."""
         spec = importlib.util.find_spec(cls.package)
         if spec and spec.submodule_search_locations:
             return Path(spec.submodule_search_locations[0])
@@ -407,21 +425,20 @@ class App:
 
     @classmethod
     def get_data_dir(cls) -> Path:
-        """The one directory the app writes outside the database:
-        ``<data_dir>/apps/<name>``, created on first use. A cached tool
-        binary or a tool's state lives here, never under ``~``: the process
-        user has no home it can write, and only the instance data directory
-        survives a release."""
+        """The one directory that the app writes outside the database:
+        ``<data_dir>/apps/<name>``. Druks makes it on first use. A cached tool binary or
+        a tool's state is here, never under ``~``. The process user has no home that
+        it can write. Only the instance data directory survives a release."""
         directory = get_settings().data_dir / "apps" / cls.name
         directory.mkdir(parents=True, exist_ok=True)
         return directory
 
     @classmethod
     def frontend_dist(cls) -> Path | None:
-        """The app's built frontend (``<package>/dist``), if it ships one.
-        A dist is an ESM module the shell mounts, not a document — ``entry.js``
-        is its marker. Inside the package, not the project root, so the same
-        path resolves for a wheel and an editable install alike."""
+        """The app's built frontend, ``<package>/dist``, if it ships one. A dist is an ESM
+        module that the shell mounts, not a document. ``entry.js`` marks it. It is inside
+        the package, not at the project root. The same path thus resolves for a wheel and
+        for an editable install."""
         package_dir = cls.package_dir()
         if package_dir:
             dist = package_dir / "dist"
@@ -430,15 +447,16 @@ class App:
 
     @classmethod
     def get_routers(cls, modules: list[ModuleType]) -> "list[APIRouter]":
-        """Every router mounted under the app's namespace: the ones it declares in
-        its ``routes`` modules, plus the generic read-side it gets for free —
-        ``/transcripts`` always, and one subject read-side
-        (``/<subject_type>`` → status + timeline + live stream) per subject its
-        workflows declare. The platform's come first: those segments are its own.
-        Override to add a router built outside a ``routes`` module."""
-        # The platform's routers are narrow — each confined to its own segment — so
-        # matching them first costs an app nothing anywhere else and leaves it
-        # no way to take a read the platform serves, not even with a catch-all.
+        """Every router under the app's namespace: the routers that its ``routes``
+        modules declare, and the generic read-sides that Druks gives every app. These are
+        always ``/transcripts``, ``/pages`` and ``/uploads``, and one subject read-side
+        for each subject that its workflows declare. A subject read-side,
+        ``/<subject_type>``, serves the status, the timeline and a live stream. The
+        platform's routers come first, because those segments are its own. Override it to
+        add a router that you build outside a ``routes`` module."""
+        # Each platform router holds only its own segment. Druks matches them first. That
+        # costs an app nothing anywhere else. It also leaves the app no way to take a read
+        # that the platform serves, not even with a catch-all.
         return [
             cls._get_transcript_routes(),
             cls._get_page_routes(),
@@ -449,22 +467,24 @@ class App:
 
     @classmethod
     def _declared_routers(cls, modules: "list[ModuleType]") -> "list[APIRouter]":
-        """The routers the app itself declares in its ``routes`` modules."""
-        # Local, not module-top: keeps FastAPI off the import graph so the loader
-        # stays importable headlessly; enumerating routers is where it's really needed.
+        """The routers that the app itself declares in its ``routes`` modules."""
+        # This import is local, not at the module top. It keeps FastAPI off the import
+        # graph, so that the loader stays importable headlessly. Only this list of
+        # routers needs FastAPI.
         from fastapi import APIRouter
 
         seen: set[int] = set()
         declared: list[APIRouter] = []
-        for module in modules:
-            if module.__name__.rsplit(".", 1)[-1] != "routes":
-                continue
+        routes_modules = [
+            module for module in modules if module.__name__.rpartition(".")[2] == "routes"
+        ]
+        for module in routes_modules:
             for value in vars(module).values():
                 if isinstance(value, APIRouter) and id(value) not in seen:
                     seen.add(id(value))
-                    # Every path the router would mount, prefixed or not: a
-                    # reserved first segment anywhere in it takes a platform read.
-                    # Starlette route kinds differ, so read the path defensively.
+                    # These are the paths that the router mounts, with or without its
+                    # prefix. A reserved first segment in any of them takes a
+                    # platform read. Starlette route kinds differ. Some have no path.
                     taken = {
                         f"{value.prefix}{getattr(route, 'path', '')}".strip("/").partition("/")[0]
                         for route in value.routes
@@ -472,29 +492,29 @@ class App:
                     reserved = sorted(taken & RESERVED_SEGMENTS)
                     if reserved:
                         raise AppRouteConflict(
-                            f"app {cls.name!r} mounts a router on {reserved}, and those "
-                            "segments serve every app's platform reads. Name the router for "
-                            "its own resource."
+                            f"app {cls.name!r} mounts a router on {reserved}. Those segments "
+                            "serve every app's platform reads. Name the router for its own "
+                            "resource."
                         )
                     declared.append(value)
         return declared
 
     @classmethod
     def operations(cls) -> "dict[str, Operation]":
-        """Every route this app declares that names an ``operation_id``, keyed
-        by it. An ``Action`` names one, and the shell resolves it here rather
-        than making an author repeat a URL."""
+        """Every route that this app declares with an ``operation_id``, keyed by that
+        id. An ``Action`` names one. The shell resolves it here, so that an author does
+        not write a URL twice."""
         found: dict[str, Operation] = {}
         for router in cls._declared_routers(cls.discover()):
             for route in router.routes:
-                # Starlette route kinds differ; only an API route carries these.
-                name = getattr(route, "operation_id", "") or ""
+                # Starlette route kinds differ. Only an API route carries these.
+                name = getattr(route, "operation_id", None)
                 if not name:
                     continue
                 if name.startswith(f"{cls.name}_"):
                     raise AppRouteConflict(
                         f"app {cls.name!r} declares operation {name!r}. Druks adds the app "
-                        f"name to every operation id. Declare "
+                        "name to every operation id. Declare "
                         f"{name.removeprefix(f'{cls.name}_')!r}."
                     )
                 # An APIRoute's own path already carries its router's prefix.
@@ -503,20 +523,20 @@ class App:
                     raise AppRouteConflict(
                         f"app {cls.name!r} declares operation {name!r} twice, on "
                         f"{found[name].method} {found[name].path} and on {path}. An "
-                        "action names one operation, so give each route its own."
+                        "action names one operation. Give each route its own."
                     )
                 methods = sorted(getattr(route, "methods", set()) - {"HEAD", "OPTIONS"})
                 if len(methods) > 1:
                     raise AppRouteConflict(
                         f"app {cls.name!r} declares operation {name!r} on {methods}. An "
-                        "action calls one method, so give each its own route."
+                        "action calls one method. Give each method its own route."
                     )
                 found[name] = Operation(id=name, method=methods[0] if methods else "GET", path=path)
         return {name: found[name] for name in sorted(found)}
 
     @classmethod
     def _get_page_routes(cls) -> "APIRouter":
-        """The page function is the endpoint, so FastAPI validates every route
+        """The page function is the endpoint. FastAPI thus validates every route
         parameter against the declared signature."""
         from fastapi import APIRouter
 
@@ -529,8 +549,8 @@ class App:
         router = APIRouter(prefix="/pages", tags=[f"{cls.name}:pages"])
         for declaration in declarations:
             router.add_api_route(
-                # The landing page's route is "/", and its snapshot answers at
-                # the bare /pages.
+                # The landing page's route is "/". Its snapshot answers at the bare
+                # /pages.
                 declaration.route.rstrip("/"),
                 cls._page_endpoint(declaration, operations, back=declaration.parent or landing),
                 methods=["GET"],
@@ -551,8 +571,8 @@ class App:
 
     @classmethod
     async def _get_home_page(cls) -> "Page":
-        """The home an app gets when it declares no landing page: one live table
-        for each subject type, with the summary's own fields as columns and where
+        """The home that an app gets when it declares no landing page. It has one live
+        table for each subject type. The columns are the summary's own fields and where
         the work on each subject stands."""
         from druks import ui
         from druks.accounts.context import current_account_id
@@ -576,10 +596,10 @@ class App:
             label = subject_type.replace("_", " ")
             summaries = await cls._list_summaries(subject_class, account_id)
             facts = [summary.model_dump(exclude={"id", "key"}) for summary in summaries]
-            # A nested value has no cell, so the summary's scalars are the columns.
+            # A nested value has no cell. The summary's scalars are thus the columns.
             fields = [
                 name
-                for name in dict.fromkeys(name for fact in facts for name in fact)
+                for name in dict.fromkeys(itertools.chain.from_iterable(facts))
                 if all(
                     isinstance(fact.get(name), str | bool | int | float | datetime | None)
                     for fact in facts
@@ -625,9 +645,9 @@ class App:
         *,
         back: "PageRoute | None",
     ):
-        """``wraps`` keeps the page function's signature, so FastAPI still
-        validates every route parameter. A page whose subject is missing answers
-        an empty state that links ``back``. The page serializes with where the
+        """``wraps`` keeps the page function's signature. FastAPI thus still validates
+        every route parameter. For a page whose subject does not exist, the
+        route answers with an empty state that links ``back``. The page serializes with where the
         work on each of its subjects stands, from one read."""
         from fastapi.responses import JSONResponse
 
@@ -668,12 +688,12 @@ class App:
 
     @classmethod
     def _get_transcript_routes(cls) -> "APIRouter":
-        """The agent-call read-side every app gets for free: a paginated read and a
-        live tail of a call's stdout/stderr, plus its artifact files (prompt, response,
-        transcript streams, metadata) listed and downloadable. Keyed by the platform's own
-        ``AgentCall`` and mounted under ``/api/<name>/transcripts`` — an app writes
-        none of it."""
-        # Keep FastAPI and the durable read-side off the import graph so the loader
+        """The agent-call read-side that Druks gives every app. It has a paginated read
+        and a live tail of a call's stdout and stderr. It also lists the call's artifact
+        files (prompt, response, transcript streams, metadata) for download. The
+        platform's own ``AgentCall`` keys it, under ``/api/<name>/transcripts``. An app
+        writes none of it."""
+        # Keep FastAPI and the durable read-side off the import graph, so that the loader
         # stays importable headlessly.
         import mimetypes
         from typing import Literal
@@ -691,14 +711,14 @@ class App:
 
         default_limit = 64 * 1024
         max_limit = 256 * 1024
-        # A call that has stopped writing never appends to its log again, so the
-        # byte range this serves is permanent. Private: a shared cache must not keep a
-        # transcript that only some accounts can read.
+        # A call that no longer runs never appends to its log again. The byte range
+        # that this serves is thus permanent. The cache is private, because a shared cache
+        # must not keep a transcript that only some accounts can read.
         settled_cache = "private, max-age=31536000, immutable"
 
         async def require_own_call(request: Request, session: SessionDep) -> None:
-            # The loader gates this router on the app, so a call of another app, or of
-            # an app that is not installed, answers as unknown.
+            # The loader puts this router behind the access check of the app. Druks thus
+            # answers a call of another app, or of an app that is not installed, as unknown.
             call = await AgentCall.get(session, request.path_params["call_id"])
             workflow = call.run.workflow
             if not workflow or workflow.app != cls.name:
@@ -720,10 +740,14 @@ class App:
             limit: int = default_limit,
         ) -> TranscriptChunk:
             if offset < 0:
-                raise HTTPException(status.HTTP_400_BAD_REQUEST, "offset must be >= 0.")
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    f"offset {offset} is less than 0. Pass an offset of 0 or more.",
+                )
             if not 0 < limit <= max_limit:
                 raise HTTPException(
-                    status.HTTP_400_BAD_REQUEST, f"limit must be in 1..{max_limit}."
+                    status.HTTP_400_BAD_REQUEST,
+                    f"limit {limit} is not in 1..{max_limit}. Pass a limit in that range.",
                 )
             call = await AgentCall.get(session, call_id)
             if call.live_status == AgentCallStatus.RUNNING:
@@ -740,7 +764,10 @@ class App:
             offset: int = 0,
         ) -> StreamingResponse:
             if offset < 0:
-                raise HTTPException(status.HTTP_400_BAD_REQUEST, "offset must be >= 0.")
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    f"offset {offset} is less than 0. Pass an offset of 0 or more.",
+                )
             return EventStream(reads.stream_transcript(engine, call_id, stream, offset=offset))
 
         @router.get("/files", response_model=AgentCallFiles, response_model_by_alias=True)
@@ -757,7 +784,10 @@ class App:
             call = await AgentCall.get(session, call_id)
             resolved = call.get_file_path(file_name)
             if not resolved:
-                raise HTTPException(status.HTTP_404_NOT_FOUND, "File not found for this call.")
+                raise HTTPException(
+                    status.HTTP_404_NOT_FOUND,
+                    "The call has no file of this name. Name a file that its file list shows.",
+                )
             media_type, _ = mimetypes.guess_type(resolved.name)
             return FileResponse(
                 resolved,
@@ -770,8 +800,8 @@ class App:
 
     @classmethod
     def _get_upload_routes(cls) -> "APIRouter":
-        """The door an UploadField posts to. The app owning the file is this
-        route's own, so a caller cannot file bytes under another app's name."""
+        """The route that an UploadField posts to. The app that owns the file is this
+        route's own. A caller thus cannot store bytes under the name of another app."""
         import mimetypes
         from pathlib import PurePosixPath
 
@@ -796,8 +826,8 @@ class App:
             name = PurePosixPath(file.filename or "file").name
             stored = await File.create(
                 name=name,
-                # The name types the file, the way it does for an agent's own
-                # files. What the browser claims is the browser's claim.
+                # The name gives the file its type, as it does for an agent's own files.
+                # Druks does not use the type that the browser claims.
                 content_type=mimetypes.guess_type(name)[0] or "application/octet-stream",
                 content=content,
                 app=cls.name,
@@ -811,9 +841,9 @@ class App:
     async def _list_summaries(
         cls, subject_class: "type[Subject] | type[StoredSubject]", account_id: str | None
     ) -> "Sequence[SubjectSummary]":
-        """The rows of this app's board for ``subject_class``. A subject declared in
-        another app's package lists that app's work, so the board lists the subjects
-        this app's own runs keep open instead."""
+        """The rows of this app's board for ``subject_class``. A subject that another
+        app's package declares lists that app's work. The board thus lists the subjects
+        that this app's own runs keep open."""
         module = subject_class.__module__
         if module == cls.package or module.startswith(cls.package + "."):
             return await subject_class.list_summaries(account_id)
@@ -824,12 +854,12 @@ class App:
     def _get_subject_routes(
         cls, subject_class: "type[Subject] | type[StoredSubject]"
     ) -> "APIRouter":
-        """The board and one subject (header + status + timeline + phase), each with a
-        point-in-time read and a ``/stream`` that pushes the whole snapshot on change.
-        Mounted at ``/api/<name>/<subject_type>`` for every subject the app's
-        workflows declare. Every read here is keyed by identity, so an app that
-        keeps no row for its subject gets the same surface as one that does. The board
-        reads pass the caller to ``list_summaries``."""
+        """The board and one subject (header, status, timeline and phase). Each has a
+        point-in-time read and a ``/stream`` that pushes the whole snapshot on a change.
+        Druks mounts them at ``/api/<name>/<subject_type>`` for every subject that the
+        app's workflows declare. Identity keys every read here. An app that keeps no row
+        for its subject thus gets the same surface as one that does. The board reads pass
+        the caller to ``list_summaries``."""
         from fastapi import APIRouter, Depends, HTTPException, status
         from fastapi.responses import StreamingResponse
 
@@ -876,7 +906,8 @@ class App:
         async def list_subjects(session: SessionDep) -> SubjectList:
             return await board(session, current_account_id.get())
 
-        # ``/stream`` before ``/{subject_id}`` so the literal path wins over the id matcher.
+        # ``/stream`` comes before ``/{subject_id}``, so that FastAPI matches the literal path
+        # before the id matcher.
         @router.get("/stream", response_class=StreamingResponse)
         async def stream_board(engine: EngineDep) -> StreamingResponse:
             # The generator polls after the request context ends. Capture the caller here.
@@ -888,9 +919,10 @@ class App:
 
             return EventStream(stream(snapshot))
 
-        # A subject id is whatever identifies it — "7" for a row, "owner/repo#7" for a
-        # pull request — so the id matcher spans separators, and the subject's own
-        # ``/stream`` is declared ahead of it to keep the greedy match off it.
+        # A subject id is whatever identifies the subject, such as "7" for a row or
+        # "owner/repo#7" for a pull request. The id matcher thus spans separators. The
+        # route of the subject's own ``/stream`` comes before it, so that the greedy match
+        # does not take that path.
         @router.get("/{subject_id:path}/stream", response_class=StreamingResponse)
         async def stream_subject(
             subject_id: str, engine: EngineDep, account: Account = Depends(current_account)
@@ -914,14 +946,18 @@ class App:
                 session, subject_id, await account.list_usable_kinds()
             )
             if not response:
-                raise HTTPException(status.HTTP_404_NOT_FOUND, f"No {subject_type} {subject_id!r}.")
+                raise HTTPException(
+                    status.HTTP_404_NOT_FOUND,
+                    f"Druks has no {subject_type} {subject_id!r}. Open a {subject_type} that the "
+                    "board lists.",
+                )
             return response
 
         return router
 
     @classmethod
     async def on_startup(cls) -> None:
-        """Converge runtime state when the API process boots — after app load
-        and DBOS launch. Default no-op; an app overrides it to sync schedules or
-        similar. The caller logs a failure and moves on, so one app can't wedge
+        """Converge the runtime state when the API process boots, after the apps load and
+        DBOS launches. It does nothing by default. An app overrides it, for example to sync
+        schedules. The caller logs a failure and continues. One app thus cannot stop the
         boot."""

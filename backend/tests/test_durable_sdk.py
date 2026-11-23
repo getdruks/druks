@@ -90,7 +90,7 @@ PG_BASE = os.environ.get("DRUKS_TEST_PG", "postgresql://druks:druks@localhost:54
 DB = "druks_durable_test"
 URL = f"{PG_BASE.replace('postgresql://', 'postgresql+psycopg://')}/{DB}"
 
-# Each test names its agent: Druks refuses a second agent with the same name.
+# Each test names its agent. Druks refuses a second agent with the same name.
 AGENT = {
     "description": "Does the work it is given.",
     "instructions": "Do the work you are given.",
@@ -409,14 +409,14 @@ async def runtime():
                 raise asyncio.CancelledError("Simulated worker interruption")
 
     configure_settings(Settings(database_url=URL))  # pyright: ignore[reportCallIssue]
-    # Before DBOS starts: DBOS spans its workflows only when tracing is on.
+    # This comes before DBOS starts. DBOS records spans for its workflows only when tracing is on.
     read_spans = capture_spans(get_settings())
-    # An earlier module may have built the client on its own database.
+    # The client can come from an earlier module, on the database of that module.
     get_dbos_client.cache_clear()
     init_dbos()
     await launch()
-    # A run starts as an account that can use the workflow's app, so the app
-    # answers by name. It is not installed: it has no package for the loader.
+    # A run starts as an account that can use the workflow's app. The registry must thus
+    # find the app by its name. It is not installed. It has no package for the loader.
     installed = registry.iter_apps()
     apps = pytest.MonkeyPatch()
     apps.setattr(registry, "iter_apps", lambda: [*installed, DurableSdk])
@@ -462,7 +462,8 @@ async def runtime():
 
 @pytest.fixture
 def declared_workflows():
-    # A test that defines a workflow inside this fixture leaves the app's workflows as found.
+    # A test that defines a workflow inside this fixture leaves the app's workflows as it found
+    # them.
     saved = dict(DurableSdk.workflows._items)
     yield
     DurableSdk.workflows._items.clear()
@@ -481,7 +482,9 @@ async def _wait_for_run(engine, workflow_id, predicate):
         if row and predicate(row):
             return row
         await asyncio.sleep(0.1)
-    raise AssertionError(f"timed out; last={await _get_run(engine, workflow_id)}")
+    raise AssertionError(
+        f"The wait timed out. The last row was {await _get_run(engine, workflow_id)}."
+    )
 
 
 async def _wait_for_phase(workflow_id: str, phase: str) -> None:
@@ -602,7 +605,7 @@ async def test_a_run_reads_how_long_its_steps_took_not_its_wait_at_a_gate(runtim
     await _wait_for_run(runtime.engine, workflow_id, lambda run: run.state == RunState.FINISHED)
 
     [duration] = [float(line.partition(":")[2]) for line in SINK if line.startswith("duration:")]
-    # The two steps' 0.5 s, not the second the run stood parked.
+    # The duration counts the 0.5 s of the two steps, not the second that the run was parked.
     assert 0.5 <= duration < 0.9
 
 
@@ -932,7 +935,7 @@ def _fake_ephemeral_returning(output: dict, *, seen: list[dict], held: list[bool
                 started_at=datetime.now(UTC),
             )
 
-        # Neither the boot nor the run sits inside a unit of work.
+        # Neither the boot nor the run is inside a unit of work.
         held.append(_holds_a_connection())
         yield SimpleNamespace(run_agent=_run_agent, id="host-test")
 
@@ -1047,8 +1050,8 @@ async def test_db_session_on_a_task_with_no_bound_session_raises(runtime):
 
 
 async def test_cancel_and_answer_bring_their_own_session(runtime):
-    # A workflow body holds no session and cancels a subject's run before it
-    # starts a changed one, so both read like start() does.
+    # A workflow body holds no session. It cancels a subject's run before it starts a
+    # changed one. Both thus read as start() does.
     async def body() -> None:
         await runtime.SampleFlow.cancel(Widget(id=7))
         await runtime.SampleFlow.answer(Widget(id=7), "review")
@@ -1089,7 +1092,7 @@ async def test_enqueue_inside_a_step_fails_the_run(runtime):
 async def test_a_body_enqueues_its_task_as_the_runs_child(runtime):
     workflow_id = await runtime.EnqueueInBodyFlow.start(subject=None)
     await _wait_for_run(runtime.engine, workflow_id, lambda run: run.state == RunState.FINISHED)
-    # A replay finds the child instead of enqueuing the task again.
+    # A replay finds the child. It does not enqueue the task again.
     children = (
         select(func.count())
         .select_from(workflow_status)
@@ -1200,8 +1203,8 @@ async def test_an_ask_to_an_agent_starts_a_run_as_the_asker_who_can_use_the_app(
             current_account_id.reset(account_token)
             current_conversation_id.reset(conversation_token)
     finally:
-        # The runtime's database outlives this test. A team that lists field_notes would
-        # keep every later account outside it out of the app.
+        # The runtime's database stays after this test. While a team lists field_notes, no later
+        # account outside the team can use the app.
         async with session_scope(runtime.engine) as session:
             await (await Team.get(session, id=team.id)).delete()
     await _wait_for_run(runtime.engine, workflow_id, lambda run: run.state == RunState.FINISHED)
@@ -1443,20 +1446,20 @@ async def test_run_signature_is_enforced(runtime):
 
 
 async def test_a_workflow_declares_exactly_one_body(runtime):
-    with pytest.raises(WorkflowError, match="exactly one is allowed"):
+    with pytest.raises(WorkflowError, match="A workflow defines exactly one of the two"):
 
         class BothFlow(Workflow):
             async def run(self) -> None: ...
             async def run_multistep(self) -> None: ...
 
-    with pytest.raises(WorkflowError, match="must define run"):
+    with pytest.raises(WorkflowError, match="defines neither run"):
 
         class NeitherFlow(Workflow):
             async def other(self) -> None: ...
 
 
 async def test_step_on_run_or_run_multistep_is_rejected(runtime):
-    with pytest.raises(WorkflowError, match="doesn't take @step"):
+    with pytest.raises(WorkflowError, match="does not take @step"):
 
         class StepOnRunFlow(Workflow):
             @step
@@ -1715,7 +1718,7 @@ async def test_a_concurrent_start_of_a_held_subject_returns_the_live_run(
         async with session_scope(runtime.engine):
             workflow_id = await HeldFlow.start(subject=subject)
             second = asyncio.create_task(start_in_another_transaction())
-            # The second start waits until this transaction commits, so the two overlap.
+            # The second start waits until this transaction commits. The two thus overlap.
             await asyncio.sleep(0.5)
             assert not second.done()
         assert await second == workflow_id
@@ -1731,14 +1734,14 @@ async def test_a_slot_freed_before_the_holder_read_is_claimed(runtime, monkeypat
     enqueue = DBOSClient.enqueue_in_transaction
     calls = []
 
-    def collide_once(self, conn_or_session, options, *args):
+    def collide_once(self, connection_or_session, options, *args):
         calls.append(options["workflow_id"])
         if len(calls) == 1:
             # A holder that ended between the collision and the read leaves the slot free.
             raise DBOSQueueDeduplicatedError(
                 options["workflow_id"], options["queue_name"], options["deduplication_id"]
             )
-        return enqueue(self, conn_or_session, options, *args)
+        return enqueue(self, connection_or_session, options, *args)
 
     monkeypatch.setattr(DBOSClient, "enqueue_in_transaction", collide_once)
     async with session_scope(runtime.engine):
@@ -1879,8 +1882,9 @@ async def test_failed_retry_attempts_keep_separate_terminal_records(runtime, dec
 async def test_a_read_on_the_box_holds_no_connection(
     runtime, monkeypatch, declared_workflows, body
 ):
-    # Whether the agent is a step of its own or runs inside the body's step, a read
-    # in prepare() commits on its own, so the box holds no connection through the run.
+    # The agent can be a step of its own, or run inside the body's step. Either way, a
+    # read in prepare() commits on its own. The box thus holds no connection through
+    # the run.
     monkeypatch.setattr(
         "druks.sandbox.client.Client.ephemeral",
         _fake_ephemeral_returning({"action": "go"}, seen=[], held=[]),
@@ -2093,7 +2097,7 @@ async def test_field_notes_activity_through_admission_review_failure_and_replay(
 
 
 def _get_spans(runtime, workflow_id: str) -> list[ReadableSpan]:
-    """What leaves the process for a run: each span of the trace of each execution, and
+    """What the process exports for a run: each span of the trace of each execution, and
     the trace of a wait that a cancel ends."""
     spans = runtime.read_spans()
     traces = {
@@ -2138,7 +2142,7 @@ async def test_each_execution_of_a_run_spans_its_run_and_its_steps(
         await self.deliver()
         executions.append(self.workflow_id)
         if is_recovered and len(executions) == 1:
-            # The process stops after the steps, so recovery runs the body again.
+            # The process stops after the steps. Recovery thus runs the body again.
             raise asyncio.CancelledError
 
     TwoStepFlow = type(
@@ -2236,7 +2240,7 @@ async def test_a_gate_wait_spans_from_the_recorded_park_to_its_end(
         await _wait_for_run(runtime.engine, workflow_id, lambda run: stops)
         await DBOS.resume_workflow_async(workflow_id)
     parked = await _wait_for_run(runtime.engine, workflow_id, lambda run: run.input_requested_at)
-    # A person takes a while to answer.
+    # A person needs some time to answer.
     await asyncio.sleep(0.2)
     await end(HoldFlow, subject, parked)
     await _wait_for_run(runtime.engine, workflow_id, lambda run: not run.is_active)
@@ -2314,7 +2318,7 @@ async def test_an_agent_call_spans_under_its_run_with_the_usage_it_reports(
         "druks.model": recorded.model,
         **usage,
     }
-    # A failure leaves as the type of its exception, never as its text.
+    # The process exports a failure as the type of its exception, never as its text.
     for span in (run, call):
         assert [event.attributes["exception.type"] for event in span.events] == exception_types
         assert not span.status.description
@@ -2386,7 +2390,7 @@ async def test_a_due_time_whose_tool_refuses_the_call_fails_and_is_told_in_the_c
     ("tool", "cron", "refusal"),
     [
         ("field_notes_scna", "0 9 * * *", "No tool is named 'field_notes_scna'"),
-        # DBOS would read a sixth field as seconds at the start.
+        # DBOS reads a sixth field as seconds at the start.
         ("field_notes_scan", "0 */2 * * * 0", "is not a cron"),
         ("field_notes_scan", "0 9 30 2 *", "never comes due"),
     ],
@@ -2433,7 +2437,7 @@ async def test_a_person_makes_their_schedule_in_a_chat_and_only_they_change_it(
     api.add_exception_handler(PermissionDenied, _permission_denied_handler)
     api.add_exception_handler(exceptions.ValidationError, _validation_error_handler)
     api.include_router(schedules_router, dependencies=[Depends(current_conversation)])
-    # The MCP surface names the tools a schedule may call.
+    # The MCP surface names the tools that a schedule can call.
     create_mcp_app(api)
     owner_id = await _get_or_create_account_id(runtime.engine, "planner@example.com")
     other_id = await _get_or_create_account_id(runtime.engine, "other@example.com")

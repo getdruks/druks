@@ -164,7 +164,7 @@ async def test_a_block_context_reads_where_the_work_stands_each_time(
     async def answer(*args, **kwargs):
         parked = await druks_db.get(Run, summarize.workflow_id, populate_existing=True)
         asks.append(await read_ask(druks_db, parked))
-        # Another app works on the other note, and its run is not this app's work.
+        # A run of another app is about the other note. That run is not this app's work.
         await seed_run(druks_db, kind=PullRequestReview.kind, subject=other, state="running")
         asks.append(await read_ask(druks_db, parked))
         await seed_run(druks_db, kind=Summarize.kind, subject=other, state="failed")
@@ -188,21 +188,28 @@ async def test_a_block_context_reads_where_the_work_stands_each_time(
     assert "status" not in stored[0]["context"][0]["facts"][0]["value"]
 
 
-@pytest.mark.parametrize(
-    "context, refused",
-    [
-        ([ui.Section(blocks=[ui.GateControls(_NOTE)])], "GateControls"),
-        ([ui.Stack([ui.Form(action=ui.Action(label="Save", operation="write_note"))])], "Form"),
-    ],
-    ids=["gate controls", "form"],
-)
-async def test_review_refuses_a_part_with_no_text_form_before_it_parks(
-    druks_db, summarize, context, refused
-):
+async def test_review_refuses_a_part_with_no_text_form_before_it_parks(druks_db, summarize):
     with pytest.raises(NoTextFormError) as raised:
-        await summarize.review(context=context)
+        await summarize.review(context=[ui.Section(blocks=[ui.GateControls(_NOTE)])])
 
-    assert raised.value.block == refused
+    assert raised.value.block == "GateControls"
+    assert not list(await druks_db.scalars(select(Event)))
+
+
+async def test_review_refuses_a_secret_field_before_it_parks(druks_db, summarize):
+    form = ui.Form(
+        fields=[ui.SecretField(name="token", label="Token")],
+        action=ui.Action(label="Save", operation="write_note"),
+    )
+
+    with pytest.raises(ValueError) as refused:
+        await summarize.review(context=[form])
+
+    assert str(refused.value) == (
+        "review takes no SecretField in its context. Field 'token' is one. A chat message "
+        "that shows the review holds no secret input and no file input. Remove the field from "
+        "the review. Ask for it on a page of the app."
+    )
     assert not list(await druks_db.scalars(select(Event)))
 
 

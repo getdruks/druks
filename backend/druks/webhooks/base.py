@@ -1,7 +1,6 @@
 import hashlib
 import json
 import logging
-from typing import Any
 
 from fastapi import HTTPException, Request, status
 from fastapi.responses import Response
@@ -21,35 +20,32 @@ logger = logging.getLogger(__name__)
 
 
 class Webhook:
-    """Base class for one provider/category integration.
+    """The base class of one webhook of a provider: one category of its events.
 
-    Subclasses set ``provider`` and ``category`` (or override ``path``),
-    then implement ``request_is_authentic``, ``get_action``, and one
-    ``on_<action>`` method per action they handle. The base class owns
-    body reading, authentication dispatch, deduplication, and routing
-    to the right ``on_<action>`` method.
+    A subclass sets ``provider`` and ``category``, or overrides ``path``. It then
+    implements ``request_is_authentic``, ``get_action``, and one ``on_<action>`` method
+    for each action that it handles. The base class reads the body, checks the
+    authentication, ignores a duplicate delivery, and calls the right ``on_<action>``
+    method.
 
-    Mark a class as ``abstract = True`` to opt out of auto-registration
-    (e.g. when defining an intermediate base that other subclasses
-    inherit from).
+    Set ``abstract = True`` on a class that Druks must not register. An example is an
+    intermediate base that other subclasses inherit from.
     """
 
     abstract: bool = False
     provider: str | None = None
     category: str | None = None
     path: str | None = None
-    # Populated by __init_subclass__ for concrete subclasses.
-    pattern: Any = None
+    # __init_subclass__ sets it on a concrete subclass.
+    pattern = None
 
-    def __init_subclass__(cls, **kwargs: Any) -> None:
+    def __init_subclass__(cls, **kwargs) -> None:
         super().__init_subclass__(**kwargs)
 
-        # If this class didn't set ``abstract`` explicitly, reset to
-        # False so abstractness doesn't cascade from a parent. Checking
-        # ``cls.__dict__`` (not the MRO) is the only way to tell "the
-        # subclass declared this" from "we inherited it" — without this
-        # distinction, a grandchild of an abstract base would re-inherit
-        # ``abstract = True`` and silently never register.
+        # A class that does not set ``abstract`` itself is not abstract. A parent thus
+        # does not pass its abstractness to its subclasses. Only ``cls.__dict__``, not
+        # the MRO, tells a declared value from an inherited one. Without this check, a
+        # grandchild of an abstract base inherits ``abstract = True`` and never registers.
         if "abstract" not in cls.__dict__:
             cls.abstract = False
 
@@ -59,66 +55,55 @@ class Webhook:
         if not cls.path:
             if not cls.provider or not cls.category:
                 raise TypeError(
-                    f"{cls.__name__}: concrete Webhook subclass must set either "
-                    "`path` or both `provider` and `category`.",
+                    f"Webhook {cls.__name__} has no path. Set `path`, or set both "
+                    "`provider` and `category`."
                 )
             cls.path = f"{cls.provider}/{cls.category}/"
 
-        # Starlette's compile_path anchors to ``^/...$``. We store the
-        # convention path WITHOUT a leading slash (``"github/events/"``)
-        # so it composes cleanly with the catch-all ``{hook_path:path}``
-        # FastAPI route — but we compile with a leading slash so the
-        # regex matches the same shape the router hands us.
+        # Starlette's compile_path anchors to ``^/...$``. Druks stores the convention path
+        # with no leading slash, such as ``"github/events/"``. The path then joins the
+        # catch-all ``{hook_path:path}`` route of FastAPI. Druks compiles it with a leading
+        # slash, so that the regex matches the shape that the router gives.
         cls.pattern, _, _ = compile_path("/" + cls.path)
         webhook_registry.register(cls)
 
-    def __init__(self, request: Request, kwargs: dict[str, Any], settings: Settings) -> None:
+    def __init__(self, request: Request, kwargs: dict, settings: Settings) -> None:
         self.request = request
         self.kwargs = kwargs
         self.settings = settings
         self.raw_body: bytes = b""
-        self._data_cached: Any = _UNSET
+        self._data_cached = _UNSET
 
     @property
-    def data(self) -> Any:
+    def data(self):
         if self._data_cached is _UNSET:
             self._data_cached = self.get_data()
         return self._data_cached
 
-    def get_data(self) -> Any:
-        """Parse the request body. Default: JSON decode the raw bytes.
-
-        Override for form-encoded payloads, signed envelopes, etc.
-        """
+    def get_data(self):
+        """Parse the request body. The default decodes the raw bytes as JSON. Override it
+        for a form-encoded payload or a signed envelope."""
         return json.loads(self.raw_body)
 
     def get_action(self) -> str:
-        """Return a token that selects which ``on_<action>`` runs.
-
-        The framework calls ``getattr(self, f"on_{action}")``. Return any
-        string that's also a valid Python identifier — including
-        underscores — and define a matching method.
-        """
+        """Return the token that selects the ``on_<action>`` method that runs. The base
+        class calls ``getattr(self, f"on_{action}")``. Return a string that is a valid
+        Python identifier. Define the method that matches it."""
         raise NotImplementedError
 
     async def request_is_authentic(self) -> bool:
-        """Verify the request is from the claimed provider.
-
-        Return ``True`` if the request should be processed, ``False`` to
-        reject with a generic 401. Subclasses may also raise
-        ``HTTPException`` directly for richer responses (e.g. 403
-        "Repository not allowed").
-        """
+        """Return whether the request comes from the provider that it names. ``False``
+        refuses the request with a generic 401. A subclass can also raise
+        ``HTTPException`` itself for a more specific answer, for example 403
+        "Repository not allowed"."""
         raise NotImplementedError
 
     def get_delivery_key(self) -> str | None:
-        """Return a stable key for at-most-once delivery, or None to skip.
-
-        Default disables dedup. Subclasses return e.g. the
-        ``x-github-delivery`` header or a payload-derived hash; storage
-        is the base class's job (``deliveries.mark_delivery``).
-        """
-        return None
+        """A stable key that delivers each event at most once, or ``None``, which disables
+        the check. The default is ``None``. A subclass returns a key such as the
+        ``x-github-delivery`` header or a hash of the payload. The base class stores the
+        key with ``deliveries.mark_delivery``."""
+        return
 
     def get_actor_id(self) -> str | None:
         """The provider's id for the person whose request this delivery is, or None when
@@ -131,30 +116,26 @@ class Webhook:
         return
 
     async def on_duplicate(self) -> Response:
-        """Response for a re-delivery of a key we've already stored.
-
-        Default: 200 with a small JSON body — providers see success and
-        won't retry, but the operator can grep logs to spot replays.
-        """
+        """The answer to a delivery of a key that Druks already stored. The default is a
+        200 with a small JSON body. The provider then gets a success response and does not retry.
+        The operator can find the replays in the logs."""
         return Response(
             content=b'{"accepted":false,"duplicate":true}',
             media_type="application/json",
         )
 
     async def on_unhandled(self, action: str) -> Response:
-        """Fallback when no ``on_<action>`` method matches.
-
-        Default returns 200 so unknown event types from the provider
-        don't trigger their retry loop. Override to log or raise.
-        """
+        """The answer when no ``on_<action>`` method matches. The default is a 200, so
+        that an unknown event type of the provider does not start its retry loop.
+        Override it to log or to raise."""
         return Response(
             content=b'{"accepted":true,"handled":false}',
             media_type="application/json",
         )
 
-    def log_ignored(self, *, event: str, reason: str, **extra: Any) -> None:
-        # Operators grep ``webhook_ignored_reason=`` to find events that
-        # arrived but didn't fire a handler. Keep the message shape stable.
+    def log_ignored(self, *, event: str, reason: str, **extra) -> None:
+        # Operators search for ``webhook_ignored_reason=`` to find the events that
+        # arrived and fired no handler. Keep the shape of the message stable.
         fields = {"webhook_event": event, "webhook_ignored_reason": reason, **extra}
         logger.info("webhook ignored: %s (%s)", reason, event, extra=fields)
 
@@ -187,17 +168,19 @@ class Webhook:
         if not authentic:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid webhook signature.",
+                detail="The webhook signature is not correct. Make sure that Druks trusts the "
+                "key or the secret that the sender signs with.",
             )
 
-        provider = self.provider or self.path or "unknown"
+        provider = self.provider or self.path
         key = self.get_delivery_key()
         if not await mark_delivery(provider, key):
             return await self.on_duplicate()
 
-        # The claim is held for the attempt so concurrent duplicates still short-circuit;
-        # if the handler or its commit fails, release it so the provider's retry re-processes
-        # instead of being silently swallowed as a duplicate until the dedup TTL expires.
+        # The claim stays for the whole attempt, so that a concurrent duplicate still stops early.
+        # If the handler or its commit fails, Druks releases the claim. The retry of the
+        # provider then runs the handler again. Without the release, the retry counts as a
+        # duplicate until the TTL of the claim ends.
         try:
             action = self.get_action()
             handler = getattr(self, f"on_{action}", None)
@@ -215,8 +198,8 @@ class Webhook:
             await session.commit()
             return response
         except PermissionDenied as error:
-            # Druks refused the account behind the delivery. A second delivery gets the
-            # same answer, so the claim stays and the sender gets an acknowledgement.
+            # Druks refused the account of the delivery. A second delivery gets the
+            # same answer. The claim thus stays. The sender gets an acknowledgement.
             await session.rollback()
             logger.info("webhook refused: %s", error)
             return Response(

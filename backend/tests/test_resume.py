@@ -51,7 +51,7 @@ async def test_resume_sends_the_offered_control_as_the_action(druks_db, monkeypa
 
 
 async def test_resume_passes_free_text_answers_and_note_as_content(druks_db, monkeypatch):
-    # An answer in the operator's own words and their note go into the reply unchanged.
+    # An answer in the operator's own words and their note stay unchanged in the reply.
     # They are content for the next pass of the plan. Druks takes an answer only to a
     # question of the ask, and never maps it to a control.
     captured: dict = {}
@@ -80,18 +80,18 @@ async def test_resume_passes_free_text_answers_and_note_as_content(druks_db, mon
 
 
 async def test_resume_rejects_an_answer_to_a_question_that_was_not_asked(druks_db, monkeypatch):
-    # Free text is only ever an answer. It must land on a question that the ask posed.
+    # Free text is only an answer. It must answer a question that the ask posed.
     async def fake_resume(self, **fields):
         raise AssertionError("must not resume on an invalid answer")
 
     monkeypatch.setattr(Run, "resume", fake_resume)
     await _park(druks_db)
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(HTTPException) as refused:
         await resume_run(
             druks_db, "r1", ResumeRequest(control="approve", answers={"q9": "whatever"})
         )
-    assert exc.value.status_code == 422
+    assert refused.value.status_code == 422
 
 
 async def test_resume_accepts_empty_request_changes_when_it_needs_no_note(druks_db, monkeypatch):
@@ -146,6 +146,6 @@ async def test_resume_rejects_a_blank_answer(druks_db, monkeypatch):
     monkeypatch.setattr(Run, "resume", fake_resume)
     await _park(druks_db)
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(HTTPException) as refused:
         await resume_run(druks_db, "r1", ResumeRequest(control="approve", answers={"q1": "   "}))
-    assert exc.value.status_code == 422
+    assert refused.value.status_code == 422

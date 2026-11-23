@@ -13,23 +13,25 @@ def verify_hmac_sha256(
 ) -> None:
     """Verify a GitHub-style HMAC-SHA256 signature header.
 
-    Raises ``HTTPException`` directly so handlers can call this inline
-    from ``request_is_authentic``.
+    Raises ``HTTPException`` itself, so that a handler can call it inline from
+    ``request_is_authentic``.
     """
     if not secret:
         raise HTTPException(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
-            "Webhook secret is not set.",
+            "Druks has no webhook secret for this provider. Set the webhook secret of its service.",
         )
     if not signature:
         raise HTTPException(
             status.HTTP_401_UNAUTHORIZED,
-            "Missing webhook signature.",
+            "The request has no webhook signature. Make sure that the webhook of the provider "
+            "has the secret that Druks has.",
         )
 
     expected = prefix + hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
     if not hmac.compare_digest(expected, signature):
         raise HTTPException(
             status.HTTP_401_UNAUTHORIZED,
-            "Invalid webhook signature.",
+            "The webhook signature is not correct. Make sure that the webhook of the provider "
+            "has the secret that Druks has.",
         )

@@ -24,7 +24,7 @@ def test_the_ticket_s_chart_reads_as_the_block_that_its_call_makes():
         series=[ui.ChartSeries(label="Builds", points=[4, 7])],
     )
 
-    # Six levels deep, where a form takes five.
+    # The chart nests six levels deep. A form nests five.
     assert parse_blocks(TICKET_CHART) == stored(chart)
 
 
@@ -142,7 +142,7 @@ def test_the_blocks_run_none_of_their_text(tmp_path, call, reason):
         ),
         (
             '[Section(blocks=[Link(url="https://example.com/a")])]',
-            "a Link that stands on its own has no label. Give it the words it shows.",
+            "a Link that stands on its own has no label. Give it the words that it shows.",
         ),
         ('[Facts(title="Owners"), Text("")]', "The blocks show nothing."),
     ],

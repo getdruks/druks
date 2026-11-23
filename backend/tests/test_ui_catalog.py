@@ -7,19 +7,20 @@ from druks import ui
 from druks.ui.blocks import PageBlock
 from druks.ui.exceptions import NoTextFormError
 
-# The page the dashboard tests render: one of every block the contract carries.
+# The page that the dashboard tests render: one of every block that the contract carries.
 CATALOG = json.loads((Path(__file__).parents[2] / "frontend/src/druksui/catalog.json").read_text())
 BLOCKS = {model.model_fields["block"].default: model for model in get_args(get_args(ui.Block)[0])}
 VALUES = {model.model_fields["value"].default: model for model in get_args(get_args(ui.Value)[0])}
-# A block with no text form defines no ``to_markdown`` of its own. An action has a text form
-# only when it knows its page, and no action of the catalog does.
-REFUSED = {"action"} | {
+# A block with no text form defines no ``to_markdown`` of its own. An action and a form have
+# a text form only when they hold the address of their page. No action or form of the
+# catalog holds it.
+REFUSED = {"action", "form"} | {
     kind for kind, model in BLOCKS.items() if model.to_markdown is PageBlock.to_markdown
 }
 
 
 def entries(value):
-    """Every block and value in ``value``, however deep."""
+    """Every block and value in ``value``, at any depth."""
     if isinstance(value, list):
         for item in value:
             yield from entries(item)
@@ -37,7 +38,7 @@ def kind(entry) -> str:
 
 
 def without_refused(value):
-    """``value`` with every block the operator acts through taken out, and the
+    """``value`` without the blocks that the operator acts through, and without the
     selection that their actions ran on."""
     if isinstance(value, list):
         return [without_refused(item) for item in value if not is_refused(item)]
@@ -56,7 +57,7 @@ def is_refused(value) -> bool:
 
 
 def read(entry):
-    # A catalog value carries the status that its page was served with, and keeps it.
+    # A catalog value carries the status that Druks served its page with. The value keeps it.
     return (BLOCKS.get(entry.get("block")) or VALUES[entry["value"]]).model_validate(entry)
 
 
@@ -68,7 +69,8 @@ def test_only_the_blocks_the_operator_acts_through_have_no_text_form():
 
 
 def test_the_catalog_carries_every_block_and_value():
-    # So that a block added to the contract is in the catalog, and its text form is checked.
+    # A block that someone adds to the contract must then be in the catalog. The tests that
+    # follow then check its text form.
     assert {kind(entry) for entry in ENTRIES} == set(BLOCKS) | set(VALUES)
 
 

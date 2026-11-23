@@ -50,10 +50,10 @@ async def link_session(session: SessionDep, app: Annotated[str, Body(embed=True)
     """Link a number for the Bot of an app."""
     try:
         bot = get_app(app).bot
-    except KeyError as exc:
-        raise HTTPException(404, f"Unknown app {app!r}") from exc
+    except KeyError as error:
+        raise HTTPException(404, f"Druks has no app {app!r}. Select an installed app.") from error
     if not bot:
-        raise HTTPException(404, f"App {app!r} declares no Bot.")
+        raise HTTPException(404, f"App {app!r} declares no Bot. Select an app that declares a Bot.")
     owner = await Account.create_for_bot(session, AccountKind.BOT)
     if bot.access == BotAccess.PRIVATE:
         identity = {"app": app, "operators": {}}
@@ -74,7 +74,7 @@ async def get_qr(session: SessionDep, session_id: str) -> dict[str, str]:
     if connection and connection.is_live:
         client = await Waha.get_client(session, connection)
         return await client.get_qr()
-    raise HTTPException(404, "Session not found.")
+    raise HTTPException(404, "The session does not exist. Choose one of the sessions of the app.")
 
 
 @router.post(
@@ -84,12 +84,12 @@ async def get_qr(session: SessionDep, session_id: str) -> dict[str, str]:
     dependencies=[Depends(current_admin_account)],
 )
 async def relink_session(session: SessionDep, session_id: str) -> VaultSecret:
-    """Take a new scan on a number that lost its link."""
+    """Link a number again after it lost its link."""
     connection = await Waha.get_session(session, session_id)
     if connection and connection.is_live:
         await Waha.relink(session, connection)
         return connection
-    raise HTTPException(404, "Session not found.")
+    raise HTTPException(404, "The session does not exist. Choose one of the sessions of the app.")
 
 
 @router.delete(
@@ -98,7 +98,9 @@ async def relink_session(session: SessionDep, session_id: str) -> VaultSecret:
 async def remove_session(session: SessionDep, session_id: str) -> None:
     connection = await Waha.get_session(session, session_id)
     if not connection:
-        raise HTTPException(404, "Session not found.")
-    # Removing is idempotent: a second delete finds the session removed.
+        raise HTTPException(
+            404, "The session does not exist. Choose one of the sessions of the app."
+        )
+    # The delete is idempotent. A second delete finds the session removed.
     if connection.is_live:
         await Waha.unlink(session, connection, "user")

@@ -5,9 +5,9 @@ from druks.notifications.exceptions import MalformedButtonError
 
 
 def encode_button(token: str, choice_id: str) -> str:
-    # base64url keeps the id opaque and URL-safe for any token/choice alphabet. "."
-    # can never appear inside an encoded part. The split point is then unambiguous.
-    # Distinct pairs cannot collide.
+    # base64url keeps the id opaque and URL-safe for any alphabet of tokens and choices.
+    # "." can never appear inside an encoded part. The split point is thus unambiguous.
+    # Two distinct pairs cannot collide.
     return f"{_encode_part(token)}.{_encode_part(choice_id)}"
 
 
@@ -27,8 +27,9 @@ def decode_button(action_id: str) -> tuple[str, str]:
 
 def encode_action(token: str, *position: int) -> str:
     """The id of the button that runs the action at ``position`` in the blocks of the
-    notification of ``token``. The position is the index of a block, or the indexes of a
-    table, its row, and the cell. The id carries no operation and no arguments."""
+    notification of ``token``. The position is the index of a block. A form adds the number
+    of one of its actions. A table adds the row and the cell. The id carries no operation
+    and no arguments."""
     indexes = ",".join(str(index) for index in position)
     return f"{encode_button(token, indexes)}.action"
 
@@ -44,8 +45,8 @@ def decode_action(action_id: str) -> tuple[str, list[int]]:
 
 
 def is_action_button(action_id: str) -> bool:
-    """Whether the id has the three parts of an action's button. A choice of a gate never
-    reads as an action, because the id of a choice has two."""
+    """Whether the id has the three parts of an action's button. The id of a choice has
+    two. Druks thus never parses a choice of a gate as an action."""
     return isinstance(action_id, str) and action_id.count(".") == 2
 
 
@@ -55,5 +56,6 @@ def _encode_part(value: str) -> str:
 
 def _decode_part(part: str) -> str:
     padded = part + "=" * (-len(part) % 4)
-    # Without validate=True, b64decode drops foreign characters and accepts a tampered id.
+    # validate=True makes b64decode refuse a tampered id. Without it, b64decode ignores
+    # foreign characters with no error.
     return base64.b64decode(padded, altchars=b"-_", validate=True).decode()

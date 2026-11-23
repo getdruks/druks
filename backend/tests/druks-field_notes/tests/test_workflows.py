@@ -48,7 +48,7 @@ async def test_a_review_shows_its_facts_and_table_on_the_dashboard_and_in_the_ap
         return {"action": "approve"}
 
     monkeypatch.setattr(DBOS, "run_step_async", call_through)
-    # The approval goes out from a queue of its own.
+    # Druks sends the approval from a queue of its own.
     monkeypatch.setattr(DBOS, "enqueue_workflow_async", mock.AsyncMock())
     monkeypatch.setattr(DBOS, "recv_async", answer)
 
@@ -106,6 +106,39 @@ async def test_a_review_offers_an_action_of_the_app_and_its_approval_keeps_it(
     assert shown["approval"]["body"] == "# Review\n\n- **Body**: Fan noise on rack 3.\n\nArchive"
 
 
+async def test_a_review_offers_a_form_of_the_app_and_its_approval_keeps_it(druks_db, monkeypatch):
+    note = await Note.create(body="Fan noise on rack 3.")
+    run = await seed_run(druks_db, kind=Summarize.kind, subject=note)
+    workflow = Summarize()
+    workflow._workflow_id = run.id
+    workflow._subject = note.identity
+    shown = {}
+
+    async def call_through(options, function, *args, **kwargs):
+        return await function(*args, **kwargs)
+
+    async def answer(*args, **kwargs):
+        await druks_db.refresh(run)
+        shown["ask"] = await run.get_ask()
+        shown["approval"] = await get_rendered_ask(druks_db, run)
+        return {"action": "approve"}
+
+    monkeypatch.setattr(DBOS, "run_step_async", call_through)
+    monkeypatch.setattr(DBOS, "enqueue_workflow_async", mock.AsyncMock())
+    monkeypatch.setattr(DBOS, "recv_async", answer)
+    form = ui.Form(
+        title="Rack 3",
+        fields=[ui.TextAreaField(name="body", label="Note", is_required=True)],
+        action=ui.Action(label="Write a note", operation="write_note"),
+    )
+
+    assert (await workflow.review(context=[form])).action == "approve"
+    stored = form.model_dump(mode="json", by_alias=True, context={"action_url": f"/runs/{run.id}"})
+    assert shown["ask"]["context"] == [stored]
+    assert shown["approval"]["blocks"][1] == stored
+    assert shown["approval"]["body"] == "# Review\n\n### Rack 3\n\nWrite a note"
+
+
 async def test_summarize_keeps_one_status_that_each_report_replaces(druks_db, monkeypatch):
     note = await Note.create(body="Fan noise on rack 3.")
     run = await seed_run(druks_db, kind=Summarize.kind, subject=note)
@@ -119,7 +152,7 @@ async def test_summarize_keeps_one_status_that_each_report_replaces(druks_db, mo
         return await function(*args, **kwargs)
 
     monkeypatch.setattr(DBOS, "run_step_async", call_through)
-    # The approval goes out from a queue of its own.
+    # Druks sends the approval from a queue of its own.
     monkeypatch.setattr(DBOS, "enqueue_workflow_async", mock.AsyncMock())
     monkeypatch.setattr(DBOS, "recv_async", mock.AsyncMock(return_value={"action": "approve"}))
     monkeypatch.setattr(FieldNotes, "summarize", staticmethod(summarize))
@@ -131,7 +164,7 @@ async def test_summarize_keeps_one_status_that_each_report_replaces(druks_db, mo
 
     druks_db.expunge_all()
     status = await Notification.get_status(druks_db, run.id)
-    # The gist took the place of the first report, and the review's answer let the run go on.
+    # The gist took the place of the first report. The review's answer let the run continue.
     assert status.body == "- **Gist**: Fan 3 is loud."
     assert ui.Stack(status.blocks).blocks[0] == ui.Facts([ui.Fact("Gist", "Fan 3 is loud.")])
 
