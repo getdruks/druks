@@ -229,7 +229,9 @@ class Build(Workflow):
         # Steps read the policy, the profile, the settings, and the blockers, so replay
         # reuses them.
         resolved = await self._load_policy_and_profile()
-        self._policy = RepoPolicy.model_validate(resolved["policy"])
+        # The stored policy passed the file's check when the build started. The copy of an
+        # older build can hold a key that the config no longer has.
+        self._policy = RepoPolicy.model_validate(resolved["policy"], extra="ignore")
         self._profile = resolved["profile"]
         self._settings = await self._load_settings()
         self._blockers = await self._load_blockers()

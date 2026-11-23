@@ -29,10 +29,10 @@ class TestResolveAppConfig:
         """No org-wide .druks tier — one repo, one file, one fetch."""
         calls = _fake_fetch(
             monkeypatch,
-            {(REPO, ".druks/software_factory/config.yml"): "sandbox:\n  image: repo-image\n"},
+            {(REPO, ".druks/software_factory/config.yml"): "on_approval: merge\n"},
         )
         policy = await RepoPolicy.resolve(REPO)
-        assert policy.sandbox.image == "repo-image"
+        assert policy.on_approval == "merge"
         assert calls == [(REPO, ".druks/software_factory/config.yml")]
 
     async def test_unknown_key_fails_loudly(self, monkeypatch):
@@ -172,7 +172,7 @@ class TestLoadPolicyAndProfile:
         from druks.contrib.software_factory.models import Project, ProjectRepo
 
         async def _live(cls, repo):
-            return RepoPolicy.model_validate({"sandbox": {"image": "live"}})
+            return RepoPolicy.model_validate({"on_approval": "merge"})
 
         monkeypatch.setattr(RepoPolicy, "resolve", classmethod(_live))
 
@@ -182,7 +182,7 @@ class TestLoadPolicyAndProfile:
         await ProjectRepo.create(project_id=project.id, full_name=REPO)
 
         resolved = await self._flow(repo=REPO)._load_policy_and_profile()
-        assert RepoPolicy.model_validate(resolved["policy"]).sandbox.image == "live"
+        assert RepoPolicy.model_validate(resolved["policy"]).on_approval == "merge"
         assert resolved["profile"] == {}  # registered but not yet profiled
 
 
