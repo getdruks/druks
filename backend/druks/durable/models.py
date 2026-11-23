@@ -48,7 +48,7 @@ from druks.durable.exceptions import AgentCallNotFound, ArtifactContentMissing
 from druks.events.models import Event
 from druks.harnesses.artifacts import normalize_token_usage
 from druks.models import Base
-from druks.notifications.constants import CLOSE_WORKFLOW
+from druks.notifications.constants import CLOSE_WORKFLOW, REFRESH_STATUS_WORKFLOW
 from druks.registry import get_workflow
 from druks.secrets.models import VaultSecret
 from druks.settings import get_settings
@@ -131,7 +131,7 @@ class Run(Base):
 
     @property
     def is_active(self) -> bool:
-        return self.state in {s.value for s in ACTIVE_STATES}
+        return self.state in {state.value for state in ACTIVE_STATES}
 
     @property
     def is_parked(self) -> bool:
@@ -447,6 +447,11 @@ class Run(Base):
             )
         )
 
+    def get_link(self) -> str | None:
+        """The run's page in the dashboard. An installation with no endpoint has none."""
+        endpoint = get_settings().urls.endpoint.rstrip("/")
+        return f"{endpoint}/runs/{self.id}" if endpoint else None
+
     async def get_ask(self) -> dict[str, Any]:
         # The parked ask with its label and its artifact. An in-app review's ask names
         # neither — a parked run can't produce new artifacts, so the latest resolves
@@ -523,7 +528,7 @@ class Run(Base):
         await self.session.flush()
         await DBOS.cancel_workflow_async(self.id)
         if gate:
-            record_gate_wait(self.id, gate, requested_at, is_answered=False)
+            record_gate_wait(self.id, gate=gate, parked_at=requested_at, is_answered=False)
         # A cancelled run runs no more steps, so a workflow of its own reports it. A
         # cancel from the run's own chat gets no report: that turn tells the person.
         if self.conversation_id and self.conversation_id != from_conversation_id:
@@ -533,6 +538,13 @@ class Run(Base):
                 "workflow_id": f"{POST_CANCEL_WORKFLOW}:{self.id}",
             }
             await enqueue_in_transaction(self.session, options, self.id)
+        # The run's status shows the cancel wherever the cancel came from.
+        options: EnqueueOptions = {
+            "workflow_name": REFRESH_STATUS_WORKFLOW,
+            "queue_name": NOTIFICATIONS_QUEUE,
+            "workflow_id": f"{REFRESH_STATUS_WORKFLOW}:{self.id}",
+        }
+        await enqueue_in_transaction(self.session, options, self.id)
         # The body raises DBOSWorkflowCancelledError and re-raises without
         # emitting, so the canceller announces the terminal state itself.
         subject = await self.get_subject()
@@ -546,11 +558,11 @@ class Run(Base):
 
     async def retry(self) -> str:
         steps = await DBOS.list_workflow_steps_async(self.id)
-        failed = [step for step in steps if step["error"]]
+        failed_steps = [step for step in steps if step["error"]]
         # The body can refuse a step's result, and then no step failed. The fork goes
         # to the workflow's last own step. A lifecycle step replays the old run's record.
-        own = [step for step in steps if step["function_name"].startswith(f"{self.kind}.")]
-        start_step = max((step["function_id"] for step in failed or own), default=1)
+        own_steps = [step for step in steps if step["function_name"].startswith(f"{self.kind}.")]
+        start_step = max((step["function_id"] for step in failed_steps or own_steps), default=1)
         handle = await DBOS.fork_workflow_async(
             self.id,
             start_step,
@@ -565,6 +577,13 @@ class Run(Base):
                 account_id=self.account_id,
                 conversation_id=self.conversation_id,
             )
+            # The fork reuses the steps that reported, so it takes their status message.
+            options: EnqueueOptions = {
+                "workflow_name": REFRESH_STATUS_WORKFLOW,
+                "queue_name": NOTIFICATIONS_QUEUE,
+                "workflow_id": f"{REFRESH_STATUS_WORKFLOW}:{self.id}:{workflow_id}",
+            }
+            await enqueue_in_transaction(session, options, workflow_id)
             await session.commit()
         if self.input_requested_at:
             # The fork reuses the steps that parked, so its row takes their fact from here.
@@ -673,14 +692,14 @@ class AgentCall(Base, Uuid7Pk):
     def artifact_layout(self) -> RunArtifactLayout:
         # The sandbox runner streams every run's stdout to stdout.jsonl no matter
         # which harness runs it, so the layout never needs the model.
-        sub = self.call_dir
+        call_dir = self.call_dir
         return RunArtifactLayout(
-            transcript=sub / "stdout.jsonl",
-            stderr=sub / "stderr.log",
-            output=sub / "output.json",
-            prompt=sub / "prompt.md",
-            metadata=sub / "metadata.json",
-            manifest=sub / "manifest.json",
+            transcript=call_dir / "stdout.jsonl",
+            stderr=call_dir / "stderr.log",
+            output=call_dir / "output.json",
+            prompt=call_dir / "prompt.md",
+            metadata=call_dir / "metadata.json",
+            manifest=call_dir / "manifest.json",
         )
 
     def get_file_path(self, name: str) -> Path | None:

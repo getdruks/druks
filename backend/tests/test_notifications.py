@@ -109,8 +109,8 @@ async def test_a_person_marks_only_their_own_notifications_read(tmp_path, druks_
     assert response.status_code == 204
     await druks_db.refresh(mine)
     await druks_db.refresh(theirs)
-    assert mine.read_at is not None
-    assert theirs.read_at is None
+    assert mine.read_at
+    assert not theirs.read_at
 
 
 async def test_endpoints_list_and_get_omit_the_token(tmp_path, druks_db):
@@ -174,6 +174,24 @@ async def test_a_member_outside_the_apps_team_reads_none_of_its_notifications(tm
     assert [item["id"] for item in listed] == [runless.id, notifications[Build.kind].id]
     assert hidden.status_code == 403
     assert shown.status_code == 200
+
+
+async def test_the_bell_leaves_out_the_status_of_a_run(tmp_path, druks_db):
+    owner = await Account.get_or_create(druks_db, "owner@example.com")
+    run = await seed_run(druks_db, kind=Summarize.kind, account_id=owner.id)
+    await Notification.create(
+        druks_db, account_id=owner.id, reason="run.status", body="Writing.", run_id=run.id
+    )
+    failed = await Notification.create(
+        druks_db, account_id=owner.id, reason="run.failed", body="b", run_id=run.id
+    )
+    await druks_db.commit()
+    settings = make_settings(tmp_path, identity={"mode": "header", "header": "X-ExeDev-Email"})
+    app = configure_app_for_test(settings=settings, authenticated=False)
+
+    with TestClient(app) as client:
+        response = client.get("/api/notifications", headers={"X-ExeDev-Email": "owner@example.com"})
+    assert [notification["id"] for notification in response.json()] == [failed.id]
 
 
 _IN_APP_ASK = {

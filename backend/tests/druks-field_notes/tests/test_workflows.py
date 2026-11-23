@@ -4,10 +4,12 @@ from unittest import mock
 from conftest import connect_service
 from dbos import DBOS
 from druks import ui
+from druks.notifications.models import Notification
 from druks.notifications.services import get_rendered_ask
 from druks.sandbox import SandboxSecret
 from druks.sandbox.layout import get_repo_root
 from druks.testing import run_workflow, seed_run
+from druks.workflows import current_workflow
 from druks_field_notes.app import FieldNotes
 from druks_field_notes.contracts import GistOutput
 from druks_field_notes.models import Note, Repository
@@ -62,6 +64,36 @@ async def test_a_review_shows_its_facts_and_table_on_the_dashboard_and_in_the_ap
     assert shown["approval"]["body"] == (
         "# Review\n\n- **Body**: Fan noise on rack 3.\n\n| Rack |\n| --- |\n| 3 |"
     )
+
+
+async def test_summarize_keeps_one_status_that_each_report_replaces(druks_db, monkeypatch):
+    note = await Note.create(body="Fan noise on rack 3.")
+    run = await seed_run(druks_db, kind=Summarize.kind, subject=note)
+    workflow = Summarize()
+    workflow._workflow_id = run.id
+    workflow._subject = note.identity
+    workflow.subject = note
+    summarize = mock.AsyncMock(return_value=GistOutput(gist="Fan 3 is loud."))
+
+    async def call_through(options, function, *args, **kwargs):
+        return await function(*args, **kwargs)
+
+    monkeypatch.setattr(DBOS, "run_step_async", call_through)
+    # The approval goes out from a queue of its own.
+    monkeypatch.setattr(DBOS, "enqueue_workflow_async", mock.AsyncMock())
+    monkeypatch.setattr(DBOS, "recv_async", mock.AsyncMock(return_value={"action": "approve"}))
+    monkeypatch.setattr(FieldNotes, "summarize", staticmethod(summarize))
+    token = current_workflow.set(workflow)
+    try:
+        await workflow.run_multistep()
+    finally:
+        current_workflow.reset(token)
+
+    druks_db.expunge_all()
+    status = await Notification.get_status(druks_db, run.id)
+    # The gist took the place of the first report, and the review's answer let the run go on.
+    assert status.body == "- **Gist**: Fan 3 is loud."
+    assert ui.Stack(status.blocks).blocks[0] == ui.Facts([ui.Fact("Gist", "Fan 3 is loud.")])
 
 
 async def test_survey_writes_the_repository_gist(druks_db, monkeypatch):

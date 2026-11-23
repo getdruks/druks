@@ -1,21 +1,28 @@
 import secrets
 from collections.abc import Sequence
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import CheckConstraint, ForeignKey, Index, String, case, or_, select, text, update
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
+from druks import ui
 from druks.core.models import Uuid7Pk
 from druks.models import Base
+from druks.notifications import constants
 from druks.notifications.datastructures import NotificationState
 from druks.notifications.exceptions import InvalidChoiceError
+from druks.ui.blocks import iter_parts
+
+if TYPE_CHECKING:
+    from druks.durable.models import Run
 
 
 def mint_correlation_token() -> str:
-    # 256 bits, URL-safe. The Notification.correlation_token column default —
-    # every row gets one at flush, the way Uuid7Pk mints the id.
+    # 256 bits, URL-safe. The default of Notification.correlation_token, so every row gets
+    # one at flush.
     return secrets.token_urlsafe(32)
 
 
@@ -32,13 +39,19 @@ class Notification(Base, Uuid7Pk):
             "conversation_id",
             postgresql_where=text("conversation_id IS NOT NULL"),
         ),
+        # A run has one status, which each of its reports replaces.
+        Index(
+            "notifications_run_status_idx",
+            "run_id",
+            unique=True,
+            postgresql_where=text(f"reason = '{constants.STATUS_REASON}'"),
+        ),
     )
 
     # The subject ({type, id}) of the run the notification is about. None when that run
     # has no subject, or when the notification is about no run.
     subject: Mapped[dict | None] = mapped_column(JSONB, default=None)
-    # Why it fired — a machine category (e.g. "gate.parked"); the discriminator
-    # for per-reason routing later.
+    # Why it fired: a machine category, such as "gate.parked".
     reason: Mapped[str]
     # Markdown written by the caller — never a template.
     body: Mapped[str]
@@ -58,6 +71,9 @@ class Notification(Base, Uuid7Pk):
         ForeignKey("durable_runs.id", ondelete="SET NULL"), default=None
     )
     run_parked_at: Mapped[datetime | None] = mapped_column(default=None)
+    # The end that the run of a status announced in its last step. DBOS records that end
+    # only after the step, so a send that comes first reads it here.
+    run_end: Mapped[str | None] = mapped_column(default=None)
     # A human view-link; the buttons carry the respond capability, this never does.
     deep_link: Mapped[str | None] = mapped_column(default=None)
     # The chat that shows the buttons: a question of its agent, or a run that it started.
@@ -68,7 +84,7 @@ class Notification(Base, Uuid7Pk):
     account_id: Mapped[str | None] = mapped_column(
         ForeignKey("accounts.id", ondelete="RESTRICT"), default=None
     )
-    # Minted at flush like the id above — the respond capability handle.
+    # The handle that lets a click answer the notification. Minted at flush.
     correlation_token: Mapped[str] = mapped_column(
         String, unique=True, default=mint_correlation_token
     )
@@ -137,8 +153,11 @@ class Notification(Base, Uuid7Pk):
     ) -> list["Notification"]:
         """The notifications sent to ``account_id``, newest first: all of them, or those
         with ``reason`` that were made at or after ``since``. With ``kinds``, a
-        notification about a run counts only when the run is of those workflows."""
-        stmt = select(cls).where(cls.account_id == account_id)
+        notification about a run counts only when the run is of those workflows. The list
+        leaves out the status of a run, because the run edits it in place."""
+        stmt = select(cls).where(
+            cls.account_id == account_id, cls.reason != constants.STATUS_REASON
+        )
         if reason:
             stmt = stmt.where(cls.reason == reason)
         if since:
@@ -162,6 +181,20 @@ class Notification(Base, Uuid7Pk):
             update(cls)
             .where(cls.account_id == account_id, cls.read_at.is_(None))
             .values(read_at=Base.utc_now(), updated_at=Base.utc_now())
+        )
+
+    @classmethod
+    async def get_status(cls, session: AsyncSession, run_id: str) -> "Notification | None":
+        """The status that the run reported, or that a run which it retries reported. None
+        when neither reported one."""
+        # druks.durable loads the chat models, and the chat models import this module. Thus
+        # this import cannot be at the top.
+        from druks.durable.dbos_state import retry_chain  # noqa: PLC0415
+
+        return await session.scalar(
+            select(cls).where(
+                cls.run_id.in_(retry_chain(run_id)), cls.reason == constants.STATUS_REASON
+            )
         )
 
     @classmethod
@@ -211,6 +244,45 @@ class Notification(Base, Uuid7Pk):
                 return action
         raise InvalidChoiceError(f"unknown control {action_id!r}")
 
+    async def replace(self, stack: ui.Stack, *, run: "Run") -> None:
+        """Make ``stack`` the report of the status. ``run`` is the run that reports: the run
+        of the status, or a run that retries it and takes the status."""
+        self.blocks = [block.model_dump(mode="json", by_alias=True) for block in stack.blocks]
+        self.body = stack.to_markdown()
+        self.run_id = run.id
+        self.deep_link = run.get_link()
+        # A run that reports has not ended.
+        self.run_end = None
+        self.updated_at = Base.utc_now()
+        await self.session.flush()
+
+    async def follow(self, run: "Run", *, state: str) -> None:
+        """Follow ``run``: the run of the status, or a run that retries it and takes the
+        status. ``state`` is the state that the run announced, and the status keeps it when
+        it is an end."""
+        self.run_id = run.id
+        self.deep_link = run.get_link()
+        self.run_end = state if state in constants.RUN_ENDS else None
+        self.updated_at = Base.utc_now()
+        await self.session.flush()
+
+    async def draw(self, run: "Run") -> ui.Stack:
+        """The status as its message shows it: the report and, while ``run`` waits or after
+        it ends, where the run stands. Then each step that the report shows in progress
+        takes that state, and a callout at the end says it."""
+        stack = ui.Stack(self.blocks)
+        state = self.run_end or run.state
+        if state in constants.RUN_STATE_CALLOUTS:
+            message, tone = constants.RUN_STATE_CALLOUTS[state]
+            if run.input_request:
+                message = constants.ASK_CALLOUT.format(label=(await run.get_ask())["label"])
+            label, step_tone = constants.RUN_STATE_STEPS[state]
+            for step in iter_parts(stack.blocks, ui.ProgressStep):
+                if step.status.tone == "active":
+                    step.status = step.status.model_copy(update={"label": label, "tone": step_tone})
+            stack.blocks.append(ui.Callout(message, tone=tone))
+        return stack
+
     async def mark_delivered(self, message_id: str | None = None) -> None:
         """Record the posted message. A notification that a claim took while its message
         posted stays acknowledged."""
@@ -226,6 +298,8 @@ class Notification(Base, Uuid7Pk):
                     ),
                     else_=NotificationState.DELIVERED.value,
                 ),
+                # A status sends again after a send that failed, and then that error is over.
+                last_error=None,
                 delivered_at=Base.utc_now(),
                 updated_at=Base.utc_now(),
             )

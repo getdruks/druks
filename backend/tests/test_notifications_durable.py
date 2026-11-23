@@ -6,7 +6,7 @@ import psycopg
 import pytest
 from conftest import FORM_TEXT, install_service
 from dbos import DBOS
-from druks import registry
+from druks import registry, ui
 from druks.accounts.context import current_conversation_id
 from druks.accounts.models import Account
 from druks.apps import App
@@ -19,10 +19,16 @@ from druks.core.webhooks import slack as slack_webhooks
 from druks.database import configure_session, get_session
 from druks.db import db_session
 from druks.durable.constants import NOTIFICATIONS_QUEUE
-from druks.durable.engine import configure_engine, init_dbos, launch, shutdown
+from druks.durable.engine import (
+    configure_engine,
+    get_dbos_client,
+    init_dbos,
+    launch,
+    shutdown,
+)
 from druks.durable.enums import RunState
 from druks.models import StoredSubject
-from druks.notifications import outbox
+from druks.notifications import constants, outbox
 from druks.notifications.constants import CLOSE_QUESTION_WORKFLOW, CLOSED_MESSAGE
 from druks.notifications.exceptions import (
     ChannelUnavailableError,
@@ -153,6 +159,42 @@ def _build_park_flows():
     return InAppFlow, ExternalFlow, SubjectlessFlow, ExternalUrlFlow, DoubleParkFlow, FailingFlow
 
 
+# The topic that a status flow waits on after each round of its reports, until the test sends.
+_NEXT = "status.next"
+
+
+def _build_status_flows():
+    class StatusFlow(Workflow):
+        subject = NotificationProbe
+
+        async def run_multistep(self, rounds: list[list[str]]) -> None:
+            # Each body is a report of its own, and the test lets the next round start.
+            for bodies in rounds:
+                for body in bodies:
+                    await self.report([ui.Markdown(body)])
+                await self.wait(_NEXT, label="Waiting for the test", ttl_seconds=120)
+
+    class EndingFlow(Workflow):
+        subject = NotificationProbe
+
+        async def run_multistep(self) -> None:
+            steps = [
+                ui.ProgressStep(label="Read", status=ui.StatusValue("read", tone="success")),
+                ui.ProgressStep(label="Gist", status=ui.StatusValue("writing", tone="active")),
+            ]
+            await self.report([ui.Progress("Summary", steps=steps)])
+            await self.wait(_NEXT, label="Waiting for the test", ttl_seconds=120)
+
+    class ReviewedFlow(Workflow):
+        subject = NotificationProbe
+
+        async def run_multistep(self) -> None:
+            await self.report([ui.Markdown("The gist is written.")])
+            await self.review()
+
+    return StatusFlow, EndingFlow, ReviewedFlow
+
+
 @pytest.fixture(scope="module", autouse=True)
 async def rt():
     original_settings = get_settings()
@@ -200,9 +242,12 @@ async def rt():
         double_park_flow,
         failing_flow,
     ) = _build_park_flows()
+    status_flow, ending_flow, reviewed_flow = _build_status_flows()
     configure_settings(Settings(database_url=URL))  # pyright: ignore[reportCallIssue]
     # The outbox module was imported above — its queue + workflow register
     # before launch(), which is the wiring this whole module runs through.
+    # An earlier module may have built the client on its own database.
+    get_dbos_client.cache_clear()
     init_dbos()
     await launch()
     # A run starts as an account that can use the workflow's app, so the app
@@ -220,6 +265,9 @@ async def rt():
             ExternalUrlFlow=external_url_flow,
             DoubleParkFlow=double_park_flow,
             FailingFlow=failing_flow,
+            StatusFlow=status_flow,
+            EndingFlow=ending_flow,
+            ReviewedFlow=reviewed_flow,
         )
     finally:
         shutdown()
@@ -383,9 +431,9 @@ async def test_outbox_delivers_with_the_bot_token_actions_and_token(rt, deliver_
         rt, to="happy", reason="ops.alert", body="hello", actions=[{"id": "ok", "label": "OK"}]
     )
 
-    done = await _wait_for(rt, notification_id, lambda s: s["state"] == "delivered")
+    done = await _wait_for(rt, notification_id, lambda snapshot: snapshot["state"] == "delivered")
     assert done["attempts"] == 1
-    assert done["delivered_at"] is not None
+    assert done["delivered_at"]
     assert done["message_id"] == "C1:1700000000.000001"
     (call,) = deliver_spy.calls
     assert call["bot_token"] == _BOT_TOKEN
@@ -398,7 +446,7 @@ async def test_outbox_delivers_with_the_bot_token_actions_and_token(rt, deliver_
 async def test_what_a_click_starts_reaches_slack_with_the_bot_token(rt, deliver_spy):
     await _seed_person(rt, "clicked")
     notification_id = await _deliver(rt, to="clicked", body="review the plan")
-    await _wait_for(rt, notification_id, lambda s: s["state"] == "delivered")
+    await _wait_for(rt, notification_id, lambda snapshot: snapshot["state"] == "delivered")
 
     await slack_webhooks.replace_buttons(
         notification_id,
@@ -432,7 +480,7 @@ async def test_transient_failure_retries_to_delivered_and_touches_no_run(rt, del
 
     notification_id = await _deliver(rt, to="flaky")
 
-    done = await _wait_for(rt, notification_id, lambda s: s["state"] == "delivered")
+    done = await _wait_for(rt, notification_id, lambda snapshot: snapshot["state"] == "delivered")
     assert done["attempts"] == 3
     assert len(deliver_spy.calls) == 3
     # Delivery is decoupled from the run lifecycle: no Run row exists or was touched.
@@ -451,7 +499,7 @@ async def test_terminal_failure_marks_failed_sanitized_and_reads_back(
 
     notification_id = await _deliver(rt, to="doomed")
 
-    done = await _wait_for(rt, notification_id, lambda s: s["state"] == "failed")
+    done = await _wait_for(rt, notification_id, lambda snapshot: snapshot["state"] == "failed")
     assert done["attempts"] == 2
     assert len(deliver_spy.calls) == 2
     assert done["last_error"] == "Delivery failed: is_archived."
@@ -477,7 +525,7 @@ async def test_unexpected_error_reduces_to_class_name(rt, deliver_spy, monkeypat
 
     notification_id = await _deliver(rt, to="leaky")
 
-    done = await _wait_for(rt, notification_id, lambda s: s["state"] == "failed")
+    done = await _wait_for(rt, notification_id, lambda snapshot: snapshot["state"] == "failed")
     assert done["last_error"] == "RuntimeError"
 
 
@@ -495,7 +543,7 @@ async def test_a_send_without_slack_records_that_slack_is_not_connected(
 
     notification_id = await _deliver(rt, to="unplugged")
 
-    done = await _wait_for(rt, notification_id, lambda s: s["state"] == "failed")
+    done = await _wait_for(rt, notification_id, lambda snapshot: snapshot["state"] == "failed")
     assert "slack is not connected" in done["last_error"]
     assert deliver_spy.calls == []
 
@@ -533,7 +581,7 @@ async def _notify_person(rt, email, *, slack_user="", notification_channel=""):
 async def test_a_person_s_notification_goes_to_their_slack_user(rt, deliver_spy):
     notification_id = await _notify_person(rt, "dm@example.com", slack_user="U42")
 
-    done = await _wait_for(rt, notification_id, lambda s: s["state"] == "delivered")
+    done = await _wait_for(rt, notification_id, lambda snapshot: snapshot["state"] == "delivered")
     (call,) = deliver_spy.calls
     assert call["channel"] == "U42"
     assert call["deep_link"] == "https://druks.test/settings/providers"
@@ -545,7 +593,7 @@ async def test_a_person_s_notification_goes_to_the_channel_they_chose(rt, delive
         rt, "channel@example.com", slack_user="U43", notification_channel="C7"
     )
 
-    await _wait_for(rt, notification_id, lambda s: s["state"] == "delivered")
+    await _wait_for(rt, notification_id, lambda snapshot: snapshot["state"] == "delivered")
     (call,) = deliver_spy.calls
     assert call["channel"] == "C7"
 
@@ -557,7 +605,7 @@ async def test_a_channel_that_refuses_the_bot_sends_the_notification_by_dm(rt, d
         rt, "removed@example.com", slack_user="U44", notification_channel="C8"
     )
 
-    done = await _wait_for(rt, notification_id, lambda s: s["state"] == "delivered")
+    done = await _wait_for(rt, notification_id, lambda snapshot: snapshot["state"] == "delivered")
     assert [call["channel"] for call in deliver_spy.calls] == ["C8", "U44"]
     assert done["message_id"].startswith("U44:")
 
@@ -565,7 +613,7 @@ async def test_a_channel_that_refuses_the_bot_sends_the_notification_by_dm(rt, d
 async def test_a_notification_with_no_channel_is_delivered_with_no_message(rt, deliver_spy):
     notification_id = await _notify_person(rt, "no-slack@example.com")
 
-    done = await _wait_for(rt, notification_id, lambda s: s["state"] == "delivered")
+    done = await _wait_for(rt, notification_id, lambda snapshot: snapshot["state"] == "delivered")
     assert done["attempts"] == 1
     assert deliver_spy.calls == []
 
@@ -573,7 +621,7 @@ async def test_a_notification_with_no_channel_is_delivered_with_no_message(rt, d
 async def test_rerun_on_delivered_notification_skips_the_send(rt, deliver_spy):
     await _seed_person(rt, "once")
     notification_id = await _deliver(rt, to="once")
-    await _wait_for(rt, notification_id, lambda s: s["state"] == "delivered")
+    await _wait_for(rt, notification_id, lambda snapshot: snapshot["state"] == "delivered")
     assert len(deliver_spy.calls) == 1
 
     handle = await DBOS.enqueue_workflow_async(
@@ -700,7 +748,7 @@ async def test_external_park_notifies_without_actions(rt, deliver_spy):
     notification = await _wait_notification(rt, workflow_id, "delivered")
     assert notification.body == "Answer on the ticket"
     assert (notification.actions, notification.fields) == (None, None)
-    assert notification.deep_link is None
+    assert not notification.deep_link
     (call,) = deliver_spy.calls
     assert (call["actions"], call["fields"]) == (None, None)
 
@@ -716,7 +764,7 @@ async def test_external_park_with_declared_url_sets_deep_link(rt, deliver_spy):
 
     notification = await _wait_notification(rt, workflow_id, "delivered")
     assert notification.deep_link == "https://github.com/acme/app/pull/7"
-    assert notification.actions is None
+    assert not notification.actions
     (call,) = deliver_spy.calls
     assert call["deep_link"] == notification.deep_link
 
@@ -767,29 +815,9 @@ async def test_replayed_park_notifies_once(rt, deliver_spy):
     await _wait_notification(rt, workflow_id, "delivered")
     assert len(deliver_spy.calls) == 1
 
-    def _execution_claim():
-        with rt.schema_engine.connect() as connection:
-            return connection.execute(
-                text(
-                    "SELECT started_at_epoch_ms FROM dbos.workflow_status WHERE workflow_uuid = :id"
-                ),
-                {"id": workflow_id},
-            ).scalar_one()
-
-    # Re-execute the parked workflow from its checkpoints: the notify step
-    # is memoized (same row) and the enqueue is a recorded child-start (no
-    # second outbox run). Resume clears the executor claim; a fresh stamp
-    # proves the replay really re-executed rather than no-opping.
-    first_claim = _execution_claim()
-    await DBOS.resume_workflow_async(workflow_id)
-    deadline = asyncio.get_event_loop().time() + 15
-    while asyncio.get_event_loop().time() < deadline:
-        claim = _execution_claim()
-        if claim and claim != first_claim:
-            break
-        await asyncio.sleep(0.1)
-    else:
-        raise AssertionError("workflow was never re-executed after resume")
+    # Re-execute the parked workflow from its checkpoints: the notify step is memoized
+    # (same row) and the enqueue is a recorded child start (no second outbox run).
+    await _replay(rt, workflow_id)
     await _wait_run(rt, workflow_id, lambda run: run.state == RunState.PARKED)
     await asyncio.sleep(1.0)  # room for a wrong duplicate enqueue to land
 
@@ -798,15 +826,7 @@ async def test_replayed_park_notifies_once(rt, deliver_spy):
 
     # Two recv waiters now share the topic (the pre-resume one and the
     # replayed one); cancel ends the run and both.
-    session = get_session(rt.engine)
-    db_session.registry.set(session)
-    try:
-        run = await session.get(Run, workflow_id)
-        await run.cancel()
-        await session.commit()
-    finally:
-        await db_session.remove()
-        await session.close()
+    await _cancel(rt, workflow_id)
 
 
 async def test_each_park_round_gets_its_own_notification(rt, deliver_spy):
@@ -857,7 +877,7 @@ async def test_a_failed_run_with_no_chat_tells_its_owner(rt, deliver_spy):
     assert "the disk is full" in notification.body
     assert notification.deep_link == f"https://druks.example/runs/{workflow_id}"
     # The unattended account has no Slack sign-in, so the bell is where it reads this.
-    await _wait_for(rt, notification.id, lambda s: s["state"] == "delivered")
+    await _wait_for(rt, notification.id, lambda snapshot: snapshot["state"] == "delivered")
 
 
 async def test_a_failed_run_a_chat_started_sends_no_notification(rt, deliver_spy):
@@ -983,7 +1003,7 @@ async def test_respond_round_trip_finishes_the_run(rt, deliver_spy):
     await _wait_run(rt, workflow_id, lambda run: run.state == RunState.PARKED)
     notification = await _wait_notification(rt, workflow_id, "delivered")
     token = notification.correlation_token
-    assert notification.deep_link is None
+    assert not notification.deep_link
 
     first = await _respond_in_own_session(
         rt, token, {"control": "approve", "answers": {"q1": "postgres"}, "note": ""}
@@ -1251,7 +1271,7 @@ async def test_an_answer_while_a_question_posts_takes_its_buttons_off_after_the_
 
 async def test_a_refused_edit_leaves_the_question_closed_and_retries_nothing(rt, deliver_spy):
     question = await _ask(rt, "U24", CHOICES)
-    await _wait_for(rt, question.id, lambda s: s["state"] == "delivered")
+    await _wait_for(rt, question.id, lambda snapshot: snapshot["state"] == "delivered")
     deliver_spy.always_fail = True
 
     await _answer_in_words(rt, question.conversation_id)
@@ -1260,3 +1280,183 @@ async def test_a_refused_edit_leaves_the_question_closed_and_retries_nothing(rt,
     _, refused = deliver_spy.calls
     assert refused["outcome"] == CLOSED_MESSAGE
     assert (await _snapshot(rt, question.id))["state"] == "acknowledged"
+
+
+@pytest.fixture
+def status_delay(monkeypatch):
+    # A short delay, so a status goes out soon after it changes.
+    monkeypatch.setattr(constants, "STATUS_DELAY_SECONDS", 0.2)
+
+
+async def _get_status(rt, workflow_id) -> Notification | None:
+    session = get_session(rt.engine)
+    try:
+        return await Notification.get_status(session, workflow_id)
+    finally:
+        await session.close()
+
+
+async def _wait_status(rt, workflow_id, predicate, timeout=30.0) -> Notification:
+    deadline = asyncio.get_event_loop().time() + timeout
+    while asyncio.get_event_loop().time() < deadline:
+        status = await _get_status(rt, workflow_id)
+        if status and predicate(status):
+            return status
+        await asyncio.sleep(0.1)
+    raise AssertionError(f"timed out; last={await _get_status(rt, workflow_id)}")
+
+
+async def _wait_deliveries(deliver_spy, predicate, timeout=30.0) -> None:
+    """Wait until the messages that went to Slack satisfy ``predicate``."""
+    deadline = asyncio.get_event_loop().time() + timeout
+    while asyncio.get_event_loop().time() < deadline:
+        if predicate(deliver_spy.calls):
+            return
+        await asyncio.sleep(0.1)
+    raise AssertionError(f"timed out; sent {[call['body'] for call in deliver_spy.calls]}")
+
+
+async def _replay(rt, workflow_id) -> None:
+    """Re-execute the workflow from its checkpoints, and wait until a new execution starts."""
+
+    def _execution_claim():
+        with rt.schema_engine.connect() as connection:
+            return connection.execute(
+                text(
+                    "SELECT started_at_epoch_ms FROM dbos.workflow_status WHERE workflow_uuid = :id"
+                ),
+                {"id": workflow_id},
+            ).scalar_one()
+
+    first_claim = _execution_claim()
+    await DBOS.resume_workflow_async(workflow_id)
+    deadline = asyncio.get_event_loop().time() + 15
+    while asyncio.get_event_loop().time() < deadline:
+        claim = _execution_claim()
+        if claim and claim != first_claim:
+            return
+        await asyncio.sleep(0.1)
+    raise AssertionError("workflow was never re-executed after resume")
+
+
+async def _cancel(rt, workflow_id, **kwargs) -> None:
+    session = get_session(rt.engine)
+    db_session.registry.set(session)
+    try:
+        run = await session.get(Run, workflow_id)
+        await run.cancel(**kwargs)
+        await session.commit()
+    finally:
+        await db_session.remove()
+        await session.close()
+
+
+async def test_three_reports_post_one_message_that_changes_twice(rt, deliver_spy, status_delay):
+    await _set_notification_channel(rt, "C-status")
+
+    workflow_id = await rt.StatusFlow.start(
+        subject=NotificationProbe(id=9101), rounds=[["Report 1."], ["Report 2."], ["Report 3."]]
+    )
+    for count in (1, 2, 3):
+        await _wait_deliveries(deliver_spy, lambda calls, count=count: len(calls) == count)
+        await DBOS.send_async(workflow_id, {}, topic=_NEXT)
+
+    # The end of the run edits the message once more.
+    await _wait_deliveries(deliver_spy, lambda calls: len(calls) == 4)
+    posted, *edits = deliver_spy.calls
+    assert (posted["channel"], posted["message_ts"], posted["body"]) == (
+        "C-status",
+        "",
+        "Report 1.",
+    )
+    assert [(edit["channel"], edit["message_ts"], edit["body"]) for edit in edits] == [
+        ("C-status", "1700000000.000001", "Report 2."),
+        ("C-status", "1700000000.000001", "Report 3."),
+        ("C-status", "1700000000.000001", "Report 3.\n\n> Finished."),
+    ]
+    assert all(not call["actions"] and not call["outcome"] for call in deliver_spy.calls)
+    status = await _wait_status(rt, workflow_id, lambda status: status.state == "delivered")
+    assert status.message_id == "C-status:1700000000.000001"
+
+
+async def test_reports_that_come_close_together_go_out_in_one_message(rt, deliver_spy):
+    await _set_notification_channel(rt, "C-status-burst")
+    await rt.StatusFlow.start(subject=NotificationProbe(id=9107), rounds=[["R1.", "R2.", "R3."]])
+
+    await _wait_deliveries(deliver_spy, bool)
+    await asyncio.sleep(4.0)  # room for a send of R1 or R2 that did not join
+
+    (posted,) = deliver_spy.calls
+    assert (posted["body"], posted["message_ts"]) == ("R3.", "")
+
+
+async def test_a_status_post_that_fails_once_is_tried_again(rt, deliver_spy, status_delay):
+    await _set_notification_channel(rt, "C-status-down")
+    deliver_spy.failures_remaining = 1
+    workflow_id = await rt.StatusFlow.start(subject=NotificationProbe(id=9111), rounds=[["R1."]])
+
+    status = await _wait_status(rt, workflow_id, lambda status: status.state == "delivered")
+
+    refused, posted = deliver_spy.calls
+    assert (refused["body"], posted["body"]) == ("R1.", "R1.")
+    assert status.message_id == "C-status-down:1700000000.000002"
+    # The post that failed never touched the run.
+    assert (await _run_snapshot(rt, workflow_id)).state == RunState.RUNNING
+
+
+async def test_a_cancel_edits_the_status_once_more(rt, deliver_spy, status_delay):
+    await _set_notification_channel(rt, "C-status-cancel")
+    workflow_id = await rt.EndingFlow.start(subject=NotificationProbe(id=9114))
+    await _wait_deliveries(deliver_spy, lambda calls: len(calls) == 1)
+
+    await _cancel(rt, workflow_id, failure="Wrong note")
+
+    await _wait_deliveries(deliver_spy, lambda calls: len(calls) == 2)
+    posted, ended = deliver_spy.calls
+    assert (ended["channel"], ended["message_ts"], ended["body"]) == (
+        "C-status-cancel",
+        "1700000000.000001",
+        "Summary\n\n- Read: read\n- Gist: cancelled\n\n> Cancelled.",
+    )
+
+
+async def test_an_approval_is_a_message_of_its_own_and_its_answer_leaves_the_status_alone(
+    rt, deliver_spy, status_delay
+):
+    await _set_notification_channel(rt, "C-status-review")
+    workflow_id = await rt.ReviewedFlow.start(subject=NotificationProbe(id=9116))
+    await _wait_deliveries(deliver_spy, lambda calls: any(call["actions"] for call in calls))
+    (approval,) = [
+        notification
+        for notification in await _notifications_for_run(rt, workflow_id)
+        if notification.reason == "gate.parked"
+    ]
+    await _wait_for(rt, approval.id, lambda snapshot: snapshot["state"] == "delivered")
+
+    answered = await _respond_in_own_session(rt, approval.correlation_token, {"control": "approve"})
+    assert answered == "ok"
+    await _wait_deliveries(deliver_spy, lambda calls: calls[-1]["body"].endswith("> Finished."))
+
+    status = await _wait_status(rt, workflow_id, lambda status: status.state == "delivered")
+    assert (await _snapshot(rt, approval.id))["message_id"] != status.message_id
+    # The post of a status carries its token, which draws no button, and its edits carry none.
+    posted, *edits = [
+        call for call in deliver_spy.calls if call["token"] in (status.correlation_token, None)
+    ]
+    assert {f"{edit['channel']}:{edit['message_ts']}" for edit in edits} == {status.message_id}
+    assert all(not call["actions"] and not call["outcome"] for call in [posted, *edits])
+
+
+async def test_a_replayed_run_reports_nothing_again(rt, deliver_spy, status_delay):
+    await _set_notification_channel(rt, "C-status-replay")
+    workflow_id = await rt.StatusFlow.start(subject=NotificationProbe(id=9117), rounds=[["R1."]])
+    await _wait_deliveries(deliver_spy, lambda calls: len(calls) == 1)
+
+    await _replay(rt, workflow_id)
+    await asyncio.sleep(3.0)  # room for a wrong report or send to land
+
+    assert (await _get_status(rt, workflow_id)).body == "R1."
+    assert len(deliver_spy.calls) == 1
+    # Two waiters now share the topic; the cancel ends the run and both.
+    await _cancel(rt, workflow_id)
+    await _wait_deliveries(deliver_spy, lambda calls: len(calls) == 2)

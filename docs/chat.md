@@ -357,6 +357,9 @@ When the run ends, Druks adds an internal message with its result, whether or
 not the run waited for an answer. A run that returns nothing, such as a review
 that posts itself, adds a message that says it ended. The agent then tells you
 in its own words.
+In a Slack conversation, a workflow that reports its status keeps that status in
+one message of the thread or direct message, and Druks edits it as the work goes
+on. See [Report status](writing-an-app.md#report-status).
 
 The sandbox receives credential placeholders. The Drukbox proxy exchanges
 them for real credentials. See [public URLs and access control](configuration.md#public-urls-and-access-control)

@@ -493,6 +493,8 @@ acts through them. Their `to_markdown()` raises `NoTextFormError`, which names
 the block. A table that selects rows, a `Cards` list with a `drop` action, and a
 block with an action in its controls have no text form either. `review` refuses
 a context that holds one of the three blocks anywhere, before the run parks.
+`report` refuses a [status](#status-in-slack) that holds one, before it saves the
+status.
 
 ## Approvals in Slack
 
@@ -554,6 +556,16 @@ When Slack refuses the blocks, Druks sends the text of the approval in the same
 place, with the same buttons. A table or a chart then shows as a markdown table.
 Druks edits the message when the approval gets an answer or closes. The edit
 draws the blocks again, with the outcome in place of the buttons.
+
+## Status in Slack
+
+A workflow shows where it stands with blocks: see
+[Report status](writing-an-app.md#report-status). Slack draws the blocks of a
+status as it draws the blocks of an approval, with no buttons. The link to the
+run page follows them when `urls.endpoint` is set. Each edit draws them again.
+
+While the workflow waits, and after it ends, Druks adds a `Callout` at the end of
+the status. It says what the workflow waits for, or how it ended.
 
 ## Actions and links
 

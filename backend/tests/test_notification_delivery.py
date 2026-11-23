@@ -53,15 +53,16 @@ _BOT_TOKEN = "xoxb-delivery"
 @pytest.fixture
 def slack(monkeypatch):
     """Slack's Web API, answered locally. Records each post. ``error`` makes Slack refuse
-    every post. Each of ``refusals`` refuses one next post."""
-    fake = SimpleNamespace(posts=[], error="", refusals=[])
+    every post. Each of ``refusals`` refuses one next post. Slack answers that the message
+    is in ``channel``."""
+    fake = SimpleNamespace(posts=[], error="", refusals=[], channel="C1")
 
     async def api_call(client, api_method, *, params=None, json=None, **request):
         fake.posts.append({"bot_token": client.token, "method": api_method, **(json or {})})
         if error := fake.refusals.pop(0) if fake.refusals else fake.error:
             raise SlackApiError("refused", {"ok": False, "error": error})
         # The SDK answers with a response object whose data is the parsed body.
-        return SimpleNamespace(data={"ok": True, "channel": "C1", "ts": "1.0"})
+        return SimpleNamespace(data={"ok": True, "channel": fake.channel, "ts": "1.0"})
 
     monkeypatch.setattr(SlackClient, "api_call", api_call)
     return fake
@@ -1632,3 +1633,33 @@ def test_a_pie_that_slack_cannot_draw_shows_its_table_and_leaves_the_room_for_tw
         ("data_visualization", "Line"),
         ("markdown", last_pie.to_markdown()),
     ]
+
+
+async def test_a_status_in_a_dm_edits_the_dm_channel_that_slack_gave(druks_db, slack):
+    conversation = await _slack_chat(druks_db)
+    conversation.thread_id = ""
+    status = await Notification.create(
+        druks_db, conversation_id=conversation.id, reason="run.status", body="Writing the gist."
+    )
+    # A post to a person goes to their DM, which Slack names as a channel of its own.
+    slack.channel = "D9"
+
+    status.message_id = await SlackChannel.show_status(
+        druks_db, conversation, status, body="Writing the gist.", blocks=[]
+    )
+    await SlackChannel.show_status(
+        druks_db, conversation, status, body="The gist is written.", blocks=[]
+    )
+
+    posted, edited = slack.posts
+    assert (posted["channel"], posted["text"], status.message_id) == (
+        "U1",
+        "Writing the gist.",
+        "D9:1.0",
+    )
+    assert (edited["method"], edited["channel"], edited["ts"], edited["text"]) == (
+        "chat.update",
+        "D9",
+        "1.0",
+        "The gist is written.",
+    )

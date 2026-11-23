@@ -302,10 +302,10 @@ async def druks_redis() -> AsyncIterator[None]:
 
 @pytest.fixture
 def druks_without_dispatch() -> Iterator[None]:
-    """Workflow starts and run-phase writes become no-ops and a run-phase read finds no
-    phase, so a test that stands up no durable engine still exercises the paths that
-    reach for one. A cancel writes the terminal status DBOS would, since a Run's state
-    derives from it."""
+    """Workflow starts, sends of a status, and run-phase writes become no-ops and a
+    run-phase read finds no phase, so a test that stands up no durable engine still
+    exercises the paths that reach for one. A cancel writes the terminal status DBOS
+    would, since a Run's state derives from it."""
 
     async def _noop(*args, **kwargs):
         return ""
@@ -325,6 +325,7 @@ def druks_without_dispatch() -> Iterator[None]:
         mock.patch("druks.workflows.set_run_phase", _phase_noop),
         mock.patch("druks.durable.reads.get_run_phase", _phase_noop),
         mock.patch("dbos.DBOS.cancel_workflow_async", _cancel),
+        mock.patch("dbos.DebouncerClient.debounce_async", _noop),
     ):
         yield
 

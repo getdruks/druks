@@ -1156,6 +1156,9 @@ Druks sends these notifications:
   on a gate. For a gate that you answer in Druks, the notification has buttons
   and a link to the run. A run that a chat started asks in that chat. Failure to
   deliver the notification does not unpark or fail the run.
+- **Status.** A workflow that no chat started, and that reports its status, keeps
+  it in one message that Druks edits as the work goes on. See
+  [Report status](writing-an-app.md#report-status).
 
 **Settings → Preferences → Notifications** chooses where the bot sends your notifications:
 
@@ -1167,8 +1170,8 @@ Druks sends these notifications:
 
 A run without an account, such as a scheduled run, belongs to the default
 account, and that account gets its notifications. The bell in the dashboard
-header shows your newest notifications, with or without Slack. A notification
-links to the dashboard only when `urls.endpoint` is set.
+header shows your newest notifications, with or without Slack, except a status.
+A notification links to the dashboard only when `urls.endpoint` is set.
 
 ## MCP servers
 

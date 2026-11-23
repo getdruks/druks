@@ -188,7 +188,7 @@ from druks.workflows import Workflow, step
 class Sweep(Workflow):
     async def run_multistep(self, repo: str) -> None:
         findings = await self.scan(repo)
-        await NightWatch.report(repo=repo, findings=findings)
+        await NightWatch.write_report(repo=repo, findings=findings)
 
     @step
     async def scan(self, repo: str) -> list[str]:
@@ -433,10 +433,11 @@ class Engage(Workflow):
         ...
 ```
 
-A scheduled `dispatch()` fires with no arguments. It must take no parameters.
-Druks evaluates cron expressions in the installation timezone. An operator can change
-the cadence or pause a declared schedule on the Schedules page or in the app
-settings. Druks cannot add a schedule to a workflow that declares none.
+A scheduled `dispatch()` fires with no arguments, so each of its parameters needs
+a default. Druks evaluates cron expressions in the installation timezone. An
+operator can change the cadence or pause a declared schedule on the Schedules
+page or in the app settings. Druks cannot add a schedule to a workflow that
+declares none.
 
 ### Background tasks
 
@@ -459,10 +460,12 @@ async def sync_labels(pull_request_id: int) -> None:
     ...
 ```
 
-Call `await sync_labels.enqueue(pull_request_id=7)` from a route, subscriber, or
-workflow body. Never call it inside a `@step`. As with a workflow, the task's
-signature is the wire contract. Each parameter carries a type annotation.
-`enqueue()` validates the parameters and stores JSON. A task keeps no run row
+Call `await sync_labels.enqueue(pull_request_id=7)` from a route, a webhook's
+subscriber, or a workflow body. Never call it inside a `@step`, or in a subscriber of
+a `WorkflowEvent` or of an announced event: Druks notifies those subscribers inside a
+step of the run. As with a workflow, the task's signature is the wire contract. Each
+parameter carries a type annotation. `enqueue()` validates the parameters and stores
+JSON. A task keeps no run row
 and never reaches the timeline. Outside a workflow, `enqueue()` puts the task in
 the queue when the caller's transaction commits. If the transaction rolls back,
 the task does not run.
@@ -510,14 +513,14 @@ class ReportOutput(InstructionOutput):
 class NightWatch(App):
     name = "night_watch"
 
-    report = Instruction(
-        prompt="night_watch/report.md",
+    write_report = Instruction(
+        prompt="night_watch/write_report.md",
         contract=ReportOutput,
         description="Turns findings into an operator report.",
     )
 ```
 
-The app name and the attribute name form the instruction's id: `night_watch.report`.
+The app name and the attribute name form the instruction's id: `night_watch.write_report`.
 Settings overrides, the timeline, and the step name use that id.
 
 An instruction that reads untrusted content, such as email or a web page, gets no
@@ -539,7 +542,7 @@ Give such a workflow instructions that all include MCP servers, or none that do.
 Call an instruction only inside a workflow:
 
 ```python
-result = await NightWatch.report(repo=repo, findings=findings)
+result = await NightWatch.write_report(repo=repo, findings=findings)
 ```
 
 Druks renders the prompt with the current workflow, workspace, and supplied
@@ -624,8 +627,8 @@ class Acme(Service):
 class NightWatch(App):
     name = "night_watch"
 
-    report = Instruction(
-        prompt="night_watch/report.md",
+    write_report = Instruction(
+        prompt="night_watch/write_report.md",
         contract=ReportOutput,
         secrets=(Acme.fields.api_key,),
     )
@@ -633,7 +636,7 @@ class NightWatch(App):
 
 `Acme.fields` holds every field of the service's card by name. The card holds
 the fields of `Settings` and the credential fields of each way, such as
-`api_key`. The sandbox of each `report` call holds a placeholder in
+`api_key`. The sandbox of each `write_report` call holds a placeholder in
 `ACME_API_KEY`: the service slug and the field name, in upper case. The secrets
 proxy puts the key in an `Authorization: Bearer` header only on requests to
 `host`. The sandbox never holds the key. Nor does it hold `webhook_secret`,
@@ -670,7 +673,7 @@ from druks.workspaces import RepoWorkspace
 from .app import NightWatch
 
 
-@NightWatch.report.after_agent
+@NightWatch.write_report.after_agent
 async def review(*, prompt: str, workspace: RepoWorkspace) -> str | None:
     finding = await NightWatch.critic(diff=await workspace.get_diff(), task=prompt)
     return finding.instruction
@@ -1300,6 +1303,93 @@ The run stays running and shows the label. The sleep releases the warm sandbox,
 as a gate park does. The next agent call boots a new one. The sleep ends after
 the given seconds, or earlier when `answer()` arrives on `until`. It returns
 whether an answer ended it. It never fails.
+
+## Report status
+
+A workflow can show where it stands while it works. Call `report` with a list of
+`druks.ui` blocks each time the status changes:
+
+```python
+from druks import ui
+
+await self.report(
+    [
+        ui.Progress(
+            "Build",
+            steps=[
+                ui.ProgressStep(label="Plan", status=ui.StatusValue("done", tone="success")),
+                ui.ProgressStep(label="Code", status=ui.StatusValue("writing", tone="active")),
+            ],
+        )
+    ]
+)
+```
+
+Each call replaces the status. The status is one notification with the reason
+`run.status`, which keeps the blocks and their
+[text form](druks-ui.md#text-forms). Every block must have a text form, so
+`report` raises `NoTextFormError` for a `Form`, an `Action`, or a
+`GateControls` anywhere in the blocks, before it saves anything.
+
+`report` is a checkpoint. A replay reports nothing again and sends nothing
+again. Druks does not send a message exactly once: when a worker stops after
+Slack took a post and before Druks recorded it, the send runs again and can post
+the message a second time.
+
+### Where the status goes
+
+- A workflow that a Slack chat started shows its status in the thread or the
+  direct message of that chat.
+- A workflow that no chat started shows its status where its approvals go: the
+  Slack channel that its account chose, else the account's direct message. See
+  [Notifications](configuration.md#notifications).
+- A web chat, a chat on a channel that cannot edit a message, such as WhatsApp,
+  and an account with no Slack channel and no linked Slack account keep the
+  status in Druks. No message goes out. Druks does not send the status of a chat
+  to the account instead.
+
+The first report posts the message, and each later report edits it. The bell in
+the dashboard does not show a status, because the workflow changes it in place.
+
+### How the edits go out
+
+Druks sends the status a few seconds after its last change. Thus changes that
+come close together go out in one edit, and the last change always goes out. A
+status that keeps changing goes out every few seconds.
+
+A post or an edit that fails is tried again, and its failure never fails the
+workflow. When the tries run out, the status records the failure. The next
+report sends the newest status: it posts the message when no post reached Slack,
+and it edits the message when one did.
+
+### Waits and the end
+
+The status keeps your report as you wrote it. While the workflow works, the
+message shows that report and nothing more. When the workflow waits or ends,
+Druks draws the message again and adds where the workflow stands:
+
+- When the workflow parks on a gate, a callout at the end of the message says
+  what it waits for, for example "Waiting for an answer: Review". A gate that
+  waits with no ask gives "Waiting for an answer.". Each `ProgressStep` whose
+  status has the tone `active`, at any depth, shows "waiting" and keeps its tone.
+- When the workflow continues, the message shows your report again, with your
+  own words for each step and no callout.
+- When the workflow finishes, fails, or is cancelled, Druks edits the message
+  one last time. The callout says "Finished.", "Failed.", or "Cancelled.". Each
+  step that is still in progress shows that end, with a tone that is not
+  `active`. A step that settled keeps its status.
+
+When a person retries a workflow that failed, it keeps the message. The message
+shows the last report again, as you wrote it, until the workflow reports, waits,
+or ends.
+
+An approval stays a message of its own, with its buttons. An answer to the
+approval, or its close, edits only the message of the approval.
+
+The final status is in addition to what Druks already sends when a workflow
+ends. Druks still tells the chat that started the workflow its result, its
+failure, or its cancel, and still tells the account when a workflow that no chat
+started fails.
 
 ## Give runs a subject read-side
 
@@ -2440,7 +2530,7 @@ run = await seed_run(
 call = await seed_call(
     druks_db,
     run,
-    NightWatch.report.id,
+    NightWatch.write_report.id,
     status="running",
 )
 ```

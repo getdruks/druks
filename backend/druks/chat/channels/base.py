@@ -29,6 +29,8 @@ class Channel:
     has_blocks: ClassVar[bool] = False
     # Whether the channel posts the notifications of an account that have no conversation.
     has_account_notifications: ClassVar[bool] = False
+    # Whether the channel shows a run's status in one message, which it edits as the run moves.
+    has_editable_status: ClassVar[bool] = False
     # The reaction that acknowledges a person's message, as the channel names it.
     reaction_ack: ClassVar[str]
 
@@ -77,6 +79,22 @@ class Channel:
     ) -> None:
         """Take the buttons off the notification's posted message, and say that its
         question is closed."""
+        raise NotImplementedError
+
+    @classmethod
+    async def show_status(
+        cls,
+        session: AsyncSession,
+        conversation: Conversation | None,
+        notification: Notification,
+        body: str,
+        blocks: list[dict],
+    ) -> str | None:
+        """Show ``body`` and ``blocks``, a run's status as its message draws it, where the
+        conversation lives: post the message, or edit the message that the status's
+        ``message_id`` names. Without a conversation, post it where the status's account
+        reads the channel. Returns the message's id, as the channel names it, or None when
+        the account reads the channel nowhere."""
         raise NotImplementedError
 
     @classmethod
