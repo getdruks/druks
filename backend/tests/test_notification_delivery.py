@@ -53,7 +53,7 @@ _BOT_TOKEN = "xoxb-delivery"
 @pytest.fixture
 def slack(monkeypatch):
     """Slack's Web API, answered locally. Records each post. ``error`` makes Slack refuse
-    every post, and each of ``refusals`` refuses one next post."""
+    every post. Each of ``refusals`` refuses one next post."""
     fake = SimpleNamespace(posts=[], error="", refusals=[])
 
     async def api_call(client, api_method, *, params=None, json=None, **request):
@@ -111,16 +111,16 @@ async def test_a_long_reply_before_a_question_loses_its_end_and_the_question_sta
     question.message_id = "C1:1.0"
     await SlackChannel.remove_buttons(druks_db, conversation, question)
 
-    posted, clicked, closed = slack.posts
+    first_post, answer_edit, close_edit = slack.posts
     for post in slack.posts:
         assert len(post["text"]) <= MARKDOWN_TEXT_LIMIT
         assert post["text"].endswith("I compared both.\n\n…\n\nWhich database?")
         assert post["blocks"][0] == {"type": "markdown", "text": post["text"]}
-    assert [button["text"]["text"] for button in posted["blocks"][1]["elements"]] == [
+    assert [button["text"]["text"] for button in first_post["blocks"][1]["elements"]] == [
         "Postgres",
         "MySQL",
     ]
-    for edit, outcome in ((clicked, "<@U1> chose MySQL."), (closed, CLOSED_MESSAGE)):
+    for edit, outcome in ((answer_edit, "<@U1> chose MySQL."), (close_edit, CLOSED_MESSAGE)):
         assert edit["blocks"][1:] == [
             {"type": "section", "text": {"type": "mrkdwn", "text": outcome}}
         ]
@@ -264,7 +264,8 @@ async def test_a_closed_or_answered_form_shows_its_question_without_inputs_or_bu
     conversation, question = await _form_question(druks_db)
     await question.mark_acknowledged()
 
-    # An answer closed the form before its post, then after it, and the person answered it.
+    # An answer closed the form before its post. The same answer closes it after the post.
+    # Then the person answers it.
     await SlackChannel.post_buttons(druks_db, conversation, question)
     question.message_id = "C1:1.0"
     await SlackChannel.remove_buttons(druks_db, conversation, question)
@@ -408,7 +409,7 @@ async def test_delivery_to_a_channel_the_bot_is_not_in_says_to_invite_it(slack):
         await deliver(SlackClient(token=_BOT_TOKEN), "C1", "hello")
 
     assert "Invite the bot to the channel" in str(excinfo.value)
-    # The Slack error keeps the request headers, and they carry the bot token.
+    # The Slack error keeps the request headers. They carry the bot token.
     assert not excinfo.value.__cause__
     assert excinfo.value.__suppress_context__
 
@@ -457,18 +458,18 @@ def test_button_encoding_round_trips():
 
 
 def test_button_decode_rejects_malformed_input():
-    for malformed in ("no-separator", "bad!chars.x", "a.b!!", "tok.choice.extra"):
+    for action_id in ("no-separator", "bad!chars.x", "a.b!!", "tok.choice.extra"):
         with pytest.raises(MalformedButtonError) as excinfo:
-            decode_button(malformed)
-        assert malformed not in str(excinfo.value)
+            decode_button(action_id)
+        assert action_id not in str(excinfo.value)
 
 
 def test_button_decode_rejects_non_string_input():
-    # A tampered webhook payload can put any JSON value where the action_id
-    # belongs; the typed error must cover those too.
-    for malformed in (None, 123, ["a.b"], {"action_id": "a.b"}):
+    # A tampered webhook payload can put any JSON value where the action_id belongs. The
+    # typed error must cover those too.
+    for value in (None, 123, ["a.b"], {"action_id": "a.b"}):
         with pytest.raises(MalformedButtonError):
-            decode_button(malformed)
+            decode_button(value)
 
 
 async def test_delivery_with_a_message_ts_edits_that_message_and_shows_the_outcome(slack):
@@ -567,9 +568,9 @@ async def test_an_approval_writes_its_label_context_questions_and_document_in_or
         ],
     )
 
-    rendered = await get_rendered_ask(druks_db, run)
+    ask = await get_rendered_ask(druks_db, run)
 
-    assert rendered["body"] == (
+    assert ask["body"] == (
         "# Review: Plan\n\n"
         "The plan changes the schema.\n\n"
         "Which database?\n- Postgres (recommended)\n- MySQL\n\n"
@@ -577,7 +578,7 @@ async def test_an_approval_writes_its_label_context_questions_and_document_in_or
         "## Steps\nShip it."
     )
     # A context of text is one block of its own.
-    assert rendered["blocks"] == [
+    assert ask["blocks"] == [
         {"block": "markdown", "text": "# Review: Plan"},
         {"block": "markdown", "text": "The plan changes the schema."},
         {"block": "markdown", "text": "Which database?\n- Postgres (recommended)\n- MySQL"},
@@ -593,9 +594,9 @@ async def test_an_approval_whose_document_is_gone_goes_out_without_it(druks_db):
     call = await AgentCall.get(druks_db, artifact.agent_call_id)
     (call.call_dir / artifact.path).unlink()
 
-    rendered = await get_rendered_ask(druks_db, run)
+    ask = await get_rendered_ask(druks_db, run)
 
-    assert rendered["body"] == "# Review: Plan\n\nCheck the schema."
+    assert ask["body"] == "# Review: Plan\n\nCheck the schema."
 
 
 def _set_endpoint(endpoint: str) -> None:
@@ -619,15 +620,16 @@ async def test_an_approval_writes_a_block_context_as_a_list_and_a_table(druks_db
             rows=[ui.TableRow(["front", ui.NumberValue(1200, unit="rpm")])],
         ),
     ]
-    # The ask stores the blocks as review writes them, and reads the status when it is read.
+    # The ask stores the blocks as review writes them. Druks reads the status each time it
+    # reads the ask.
     run = await _parked_review(
         druks_db,
         subject=note,
         context=_stored(*context),
     )
 
-    rendered = await get_rendered_ask(druks_db, run)
-    await deliver(SlackClient(token=_BOT_TOKEN), "C1", rendered["body"])
+    ask = await get_rendered_ask(druks_db, run)
+    await deliver(SlackClient(token=_BOT_TOKEN), "C1", ask["body"])
 
     body = (
         "# Review\n\n"
@@ -635,7 +637,7 @@ async def test_an_approval_writes_a_block_context_as_a_list_and_a_table(druks_db
         "- **Work**: needs you\n\n"
         "| Fan | Speed |\n| --- | ---: |\n| front | 1,200 rpm |"
     )
-    assert rendered["body"] == body
+    assert ask["body"] == body
     (post,) = slack.posts
     assert post["blocks"] == [{"type": "markdown", "text": body}]
 
@@ -700,17 +702,17 @@ async def test_an_approval_keeps_its_blocks_beside_their_text_form(druks_db):
         "## Steps\nShip it."
     )
     assert ui.Stack(notification.blocks).to_markdown() == notification.body
-    label, facts, notes, nowhere, question, document = notification.blocks
+    label, facts, notes, nowhere_link, question, document = notification.blocks
     assert (label["text"], question["text"], document["text"]) == (
         "# Review: Plan",
         "Which rack?\n- Rack 3",
         "## Steps\nShip it.",
     )
-    # A link keeps only the address it resolved to, and a link with none keeps its page.
+    # A link keeps only the address it resolved to. A link with no address keeps its page.
     rack, _ = facts["facts"]
     destinations = [
         (link["url"], link["page"], link["subject"])
-        for link in (rack["value"]["link"], notes, nowhere)
+        for link in (rack["value"]["link"], notes, nowhere_link)
     ]
     assert destinations == [
         (f"/field_notes/notes/{note.id}", "", None),
@@ -772,21 +774,50 @@ async def test_facts_metrics_a_divider_and_a_link_go_out_as_slack_s_own_blocks(s
             ),
             20,
         ),
+        (
+            lambda size: ui.Chart(
+                title="Speeds",
+                categories=[f"Day {day}" for day in range(20)],
+                series=[ui.ChartSeries(label=str(fan), points=[fan] * 20) for fan in range(size)],
+            ),
+            12,
+        ),
+        (
+            lambda size: ui.Chart(
+                title="Speeds",
+                categories=[f"Day {day}" for day in range(size)],
+                series=[ui.ChartSeries(label=str(fan), points=[fan] * size) for fan in range(12)],
+            ),
+            20,
+        ),
     ],
-    ids=["field", "section-text", "button-text", "button-address", "table-columns"],
+    ids=[
+        "field",
+        "section-text",
+        "button-text",
+        "button-address",
+        "table-columns",
+        "chart-series",
+        "chart-points",
+    ],
 )
 async def test_a_block_takes_slack_s_blocks_up_to_a_limit_and_its_text_form_past_it(
     slack, make, limit
 ):
     client = SlackClient(token=_BOT_TOKEN)
-    past = make(limit + 1)
+    block_past_limit = make(limit + 1)
 
     await deliver(client, "C1", "text", blocks=_stored(make(limit)))
-    await deliver(client, "C1", "text", blocks=_stored(past))
+    await deliver(client, "C1", "text", blocks=_stored(block_past_limit))
 
-    drawn, written = slack.posts
-    assert drawn["blocks"][0]["type"] in ("section", "actions", "data_table")
-    assert written["blocks"] == [{"type": "markdown", "text": past.to_markdown()}]
+    native_post, text_post = slack.posts
+    assert native_post["blocks"][0]["type"] in (
+        "section",
+        "actions",
+        "data_table",
+        "data_visualization",
+    )
+    assert text_post["blocks"] == [{"type": "markdown", "text": block_past_limit.to_markdown()}]
 
 
 async def test_blocks_past_the_room_of_a_message_go_out_as_text_in_its_last_block(slack):
@@ -806,8 +837,8 @@ async def test_blocks_past_the_room_of_a_message_go_out_as_text_in_its_last_bloc
     )
 
     (post,) = slack.posts
-    *buttons, rest, approve = post["blocks"]
-    # The Approve button takes a block of the room, and one more block stays for the link.
+    *buttons, rest, actions = post["blocks"]
+    # The Approve button takes a block of the room. One more block stays for the link.
     assert len(post["blocks"]) == MESSAGE_BLOCKS_LIMIT
     assert buttons == [
         _link_button(f"Link {number}", f"https://docs.example/{number}") for number in range(48)
@@ -816,7 +847,7 @@ async def test_blocks_past_the_room_of_a_message_go_out_as_text_in_its_last_bloc
         "type": "markdown",
         "text": "\n\n".join(link.to_markdown() for link in links[48:]) + f"\n{page}",
     }
-    assert approve["elements"][0]["text"] == _label("Approve")
+    assert actions["elements"][0]["text"] == _label("Approve")
 
 
 @pytest.mark.parametrize(
@@ -853,11 +884,11 @@ async def test_markdown_past_slack_s_limit_loses_its_end_to_a_line_that_says_so(
 
     (post,) = slack.posts
     # The cut takes the end of the document and the link after it.
-    label, divider, cut, approve = post["blocks"]
+    label, divider, cut, actions = post["blocks"]
     assert (label, divider) == ({"type": "markdown", "text": "# Review"}, {"type": "divider"})
     assert cut["text"].endswith(f"make test\n```\n\n…\n{line}")
     assert len(label["text"]) + len(cut["text"]) <= MARKDOWN_TEXT_LIMIT
-    assert approve["type"] == "actions"
+    assert actions["type"] == "actions"
 
 
 async def test_markdown_at_slack_s_limit_with_no_link_goes_out_whole(slack):
@@ -870,7 +901,7 @@ async def test_markdown_at_slack_s_limit_with_no_link_goes_out_whole(slack):
 
 
 @pytest.mark.parametrize(
-    ("where", "place"),
+    ("arguments", "place"),
     [
         (
             {"thread_ts": "1700000000.000100", "actions": [{"id": "approve", "label": "Approve"}]},
@@ -883,7 +914,9 @@ async def test_markdown_at_slack_s_limit_with_no_link_goes_out_whole(slack):
     ],
     ids=["post", "edit"],
 )
-async def test_a_refusal_of_the_blocks_sends_their_text_form_in_the_same_place(slack, where, place):
+async def test_a_refusal_of_the_blocks_sends_their_text_form_in_the_same_place(
+    slack, arguments, place
+):
     slack.refusals = ["invalid_blocks"]
     blocks = _stored(
         ui.Facts([ui.Fact("Fan", "front")]), ui.Link("Docs", url="https://docs.example/a")
@@ -896,20 +929,20 @@ async def test_a_refusal_of_the_blocks_sends_their_text_form_in_the_same_place(s
         blocks=blocks,
         token="t",
         deep_link="https://druks.example/runs/run-1",
-        **where,
+        **arguments,
     )
 
-    refused, sent = slack.posts
-    assert refused["blocks"][:2] == [
+    refused_post, text_post = slack.posts
+    assert refused_post["blocks"][:2] == [
         {"type": "section", "fields": [_mrkdwn("*Fan*\nfront")]},
         _link_button("Docs", "https://docs.example/a"),
     ]
     # The text form keeps the buttons, or the outcome in their place.
-    assert sent["blocks"] == [
+    assert text_post["blocks"] == [
         {"type": "markdown", "text": "the text form\nhttps://druks.example/runs/run-1"},
-        refused["blocks"][-1],
+        refused_post["blocks"][-1],
     ]
-    for post in (refused, sent):
+    for post in (refused_post, text_post):
         assert (post["method"], post["channel"], post.get("thread_ts"), post.get("ts")) == place
     assert answer == {"ok": True, "channel": "C1", "ts": "1.0"}
 
@@ -955,16 +988,16 @@ async def test_an_answer_or_a_close_keeps_the_facts_and_the_links_of_an_approval
     approval.message_id = "C1:1.0"
     await SlackChannel.remove_buttons(druks_db, conversation, approval)
 
-    posted, clicked, closed = slack.posts
-    drawn = [
+    first_post, answer_edit, close_edit = slack.posts
+    native_blocks = [
         {"type": "markdown", "text": "# Review"},
         {"type": "section", "fields": [_mrkdwn("*Fan*\nfront")]},
         _link_button("Docs", "https://docs.example/a"),
     ]
-    assert posted["blocks"][:-1] == drawn
-    assert posted["blocks"][-1]["elements"][0]["text"] == _label("Approve")
-    for edit, outcome in ((clicked, "<@U1> chose Approve."), (closed, CLOSED_MESSAGE)):
-        assert edit["blocks"] == [*drawn, {"type": "section", "text": _mrkdwn(outcome)}]
+    assert first_post["blocks"][:-1] == native_blocks
+    assert first_post["blocks"][-1]["elements"][0]["text"] == _label("Approve")
+    for edit, outcome in ((answer_edit, "<@U1> chose Approve."), (close_edit, CLOSED_MESSAGE)):
+        assert edit["blocks"] == [*native_blocks, {"type": "section", "text": _mrkdwn(outcome)}]
 
 
 async def test_a_link_button_opens_its_page_and_a_link_with_no_address_reads_as_words(
@@ -986,8 +1019,8 @@ async def test_a_link_button_opens_its_page_and_a_link_with_no_address_reads_as_
     _set_endpoint("")
     await deliver(client, "C1", "text", blocks=blocks)
 
-    with_endpoint, without_endpoint = slack.posts
-    assert with_endpoint["blocks"] == [
+    post_with_endpoint, post_without_endpoint = slack.posts
+    assert post_with_endpoint["blocks"] == [
         {"type": "markdown", "text": "# Review"},
         _link_button("All notes", "https://druks.example/field_notes"),
         _link_button("The note", f"https://druks.example/field_notes/notes/{note.id}"),
@@ -995,7 +1028,7 @@ async def test_a_link_button_opens_its_page_and_a_link_with_no_address_reads_as_
         {"type": "markdown", "text": "Nowhere"},
     ]
     # An installation with no endpoint has no address for a page of the dashboard.
-    assert without_endpoint["blocks"] == [
+    assert post_without_endpoint["blocks"] == [
         {"type": "markdown", "text": "# Review\n\nAll notes\n\nThe note"},
         _link_button("Docs", "https://docs.example/a"),
         {"type": "markdown", "text": "Nowhere"},
@@ -1059,16 +1092,16 @@ async def test_a_question_after_blocks_too_long_for_slack_stays_whole_with_its_b
 
     (post,) = slack.posts
     # The cut takes the end of the reply and the facts after it.
-    cut, asked, buttons = post["blocks"]
+    cut, question_block, buttons = post["blocks"]
     assert cut["text"].endswith(f"I compared both.\n\n…\n{OMISSION_MESSAGE}")
-    assert len(cut["text"]) + len(asked["text"]) <= MARKDOWN_TEXT_LIMIT
-    assert asked == {"type": "markdown", "text": "Which database?"}
+    assert len(cut["text"]) + len(question_block["text"]) <= MARKDOWN_TEXT_LIMIT
+    assert question_block == {"type": "markdown", "text": "Which database?"}
     assert buttons["type"] == "actions"
 
 
 async def _approval(druks_db, *, is_in_a_chat: bool = False, **ask) -> Notification:
-    """The notification that a run's park on a review made: for the run's account, or in
-    the thread of a Slack chat with U1."""
+    """The notification that a run's park on a review made. It goes to the run's account, or
+    to the thread of a Slack chat with U1."""
     bind_ambient_session(druks_db)
     await install_service(
         "slack",
@@ -1112,8 +1145,8 @@ async def test_an_approval_shows_its_inputs_above_every_control_until_its_answer
     approval.message_id = "C1:1.0"
     await remove_buttons(druks_db, approval)
 
-    posted, answered, closed = slack.posts
-    assert posted["blocks"][1:] == [
+    first_post, answer_edit, close_edit = slack.posts
+    assert first_post["blocks"][1:] == [
         {
             "type": "input",
             "block_id": "question:database",
@@ -1147,12 +1180,12 @@ async def test_an_approval_shows_its_inputs_above_every_control_until_its_answer
             ],
         },
     ]
-    (markdown, section) = answered["blocks"]
+    (markdown, section) = answer_edit["blocks"]
     assert markdown == {"type": "markdown", "text": approval.body}
     assert len(section["text"]["text"]) <= SECTION_TEXT_LIMIT
     assert section["text"]["text"].startswith(outcome[:80])
     assert section["text"]["text"].endswith("Then retry it.\n\n…")
-    assert closed["blocks"] == [
+    assert close_edit["blocks"] == [
         {"type": "markdown", "text": approval.body},
         {"type": "section", "text": {"type": "mrkdwn", "text": CLOSED_MESSAGE}},
     ]
@@ -1171,19 +1204,19 @@ async def test_a_thread_approval_shows_its_inputs_with_every_control_until_it_cl
     await approval.mark_acknowledged()
     await SlackChannel.post_buttons(druks_db, conversation, approval)
 
-    posted, *closed = slack.posts
-    assert (posted["channel"], posted["thread_ts"]) == ("C1", "1700000000.000100")
-    assert [block.get("block_id") for block in posted["blocks"]] == [
+    first_post, *close_edits = slack.posts
+    assert (first_post["channel"], first_post["thread_ts"]) == ("C1", "1700000000.000100")
+    assert [block.get("block_id") for block in first_post["blocks"]] == [
         None,
         "question:database",
         "note",
         None,
     ]
-    assert [button["text"]["text"] for button in posted["blocks"][-1]["elements"]] == [
+    assert [button["text"]["text"] for button in first_post["blocks"][-1]["elements"]] == [
         "Approve",
         "Request changes",
     ]
-    for post in closed:
+    for post in close_edits:
         assert post["blocks"] == [
             {"type": "markdown", "text": approval.body},
             {"type": "section", "text": {"type": "mrkdwn", "text": CLOSED_MESSAGE}},
@@ -1194,7 +1227,7 @@ async def test_an_approval_input_shows_the_start_of_a_long_label_and_keeps_each_
     druks_db, slack, monkeypatch
 ):
     # The longest question and options that a plan takes. The labels differ past the cut.
-    question, first, second = "q" * 64, "a" * 64, "b" * 64
+    question, first_id, second_id = "q" * 64, "a" * 64, "b" * 64
     prompt, first_label, second_label = "P" * 2048, "O" * 255 + "1", "O" * 255 + "2"
     approval = await _approval(
         druks_db,
@@ -1203,8 +1236,8 @@ async def test_an_approval_input_shows_the_start_of_a_long_label_and_keeps_each_
                 "id": question,
                 "prompt": prompt,
                 "options": [
-                    {"id": first, "label": first_label, "recommended": True},
-                    {"id": second, "label": second_label, "recommended": False},
+                    {"id": first_id, "label": first_label, "recommended": True},
+                    {"id": second_id, "label": second_label, "recommended": False},
                 ],
             }
         ],
@@ -1240,8 +1273,8 @@ async def test_an_approval_input_shows_the_start_of_a_long_label_and_keeps_each_
     assert f"{prompt}\n- {first_label} (recommended)\n- {second_label}" in markdown["text"]
     assert select["label"] == _label("P" * 1999 + "…")
     cut = "O" * 74 + "…"
-    assert select["element"]["options"] == [_option(cut, first), _option(cut, second)]
-    assert replies == [{"action": "approve", "answers": {question: second}, "note": ""}]
+    assert select["element"]["options"] == [_option(cut, first_id), _option(cut, second_id)]
+    assert replies == [{"action": "approve", "answers": {question: second_id}, "note": ""}]
 
 
 def _question(name: str, *, label: str = "Which?", options: int = 1) -> dict:
@@ -1283,10 +1316,7 @@ def test_an_approval_with_more_inputs_than_a_message_holds_keeps_its_note():
 
 def _data_table(caption: str, *rows: list[str]) -> dict:
     """The data table of ``rows`` of text cells, the header first."""
-    cell_rows = []
-
-    for row in rows:
-        cell_rows.append([{"type": "raw_text", "text": text} for text in row])
+    cell_rows = [[{"type": "raw_text", "text": text} for text in row] for row in rows]
     return {"type": "data_table", "caption": caption, "rows": cell_rows}
 
 
@@ -1311,11 +1341,11 @@ def test_a_table_goes_out_under_its_title_with_a_number_a_link_text_or_a_dash_in
         ],
     )
 
-    (drawn,) = get_blocks("text", blocks=[table])
+    (block,) = get_blocks("text", blocks=[table])
 
     rack = {"type": "link", "url": "https://racks.example/3", "text": "Rack [3]"}
-    # Each cell of Speed is a number, so Slack sorts the column as numbers.
-    assert drawn == {
+    # Each cell of Speed is a number. Slack then sorts the column as numbers.
+    assert block == {
         "type": "data_table",
         "caption": "Fans",
         "rows": [
@@ -1345,27 +1375,177 @@ def test_a_table_of_300_rows_shows_200_and_a_line_that_says_how_many_it_left_out
         rows=[ui.TableRow([f"Fan {number}"]) for number in range(300)],
     )
 
-    line, drawn, link = get_blocks("text", blocks=[table], deep_link=page)
+    line, data_table, link = get_blocks("text", blocks=[table], deep_link=page)
 
-    left_out = TABLE_OMISSION_MESSAGE.format(left=100, total=300) + OMISSION_LINK.format(link=page)
-    assert line == {"type": "markdown", "text": left_out}
-    assert drawn == _data_table("Fan", ["Fan"], *([f"Fan {number}"] for number in range(200)))
+    notice = TABLE_OMISSION_MESSAGE.format(left=100, total=300) + OMISSION_LINK.format(link=page)
+    assert line == {"type": "markdown", "text": notice}
+    assert data_table == _data_table("Fan", ["Fan"], *([f"Fan {number}"] for number in range(200)))
     assert link == {"type": "markdown", "text": page}
 
 
 def test_the_tables_of_a_message_share_slack_s_limit_for_the_text_of_their_cells():
     # With their headers, the first table and two rows of the second take all 20,000.
-    first = ui.Table(columns=[ui.TableColumn("Log")], rows=[ui.TableRow(["x" * 15_997])])
-    second = ui.Table(
+    first_table = ui.Table(columns=[ui.TableColumn("Log")], rows=[ui.TableRow(["x" * 15_997])])
+    second_table = ui.Table(
         columns=[ui.TableColumn("Log")],
         rows=[ui.TableRow(["y" * 1_998]), ui.TableRow(["y" * 1_999]), ui.TableRow(["z"])],
     )
-    third = ui.Table(columns=[ui.TableColumn("Log")], rows=[ui.TableRow(["z"])])
+    third_table = ui.Table(columns=[ui.TableColumn("Log")], rows=[ui.TableRow(["z"])])
 
-    # No room is left for a row of the third table, so it goes out as its text form.
-    assert get_blocks("text", blocks=[first, second, third]) == [
+    # No room is left for a row of the third table. It goes out as its text form.
+    assert get_blocks("text", blocks=[first_table, second_table, third_table]) == [
         _data_table("Log", ["Log"], ["x" * 15_997]),
         {"type": "markdown", "text": TABLE_OMISSION_MESSAGE.format(left=1, total=3)},
         _data_table("Log", ["Log"], ["y" * 1_998], ["y" * 1_999]),
-        {"type": "markdown", "text": third.to_markdown()},
+        {"type": "markdown", "text": third_table.to_markdown()},
+    ]
+
+
+@pytest.mark.parametrize("kind", ["line", "bar", "area"])
+def test_a_chart_goes_out_as_slack_s_chart_of_its_kind_with_a_point_for_each_category(kind):
+    # Neither the categories nor the series are in the order of their names.
+    chart = ui.Chart(
+        kind=kind,
+        title="Answers per day",
+        categories=["Wed", "Thu", "Fri"],
+        series=[
+            ui.ChartSeries(label="web", points=[3, 5, 4]),
+            ui.ChartSeries(label="api", points=[0.5, 0, -2]),
+        ],
+        category_label="Day",
+        value_label="Answers",
+    )
+
+    (block,) = get_blocks("text", blocks=[chart])
+
+    assert block == {
+        "type": "data_visualization",
+        "title": "Answers per day",
+        "chart": {
+            "type": kind,
+            "series": [
+                {
+                    "name": "web",
+                    "data": [
+                        {"label": "Wed", "value": 3},
+                        {"label": "Thu", "value": 5},
+                        {"label": "Fri", "value": 4},
+                    ],
+                },
+                {
+                    "name": "api",
+                    "data": [
+                        {"label": "Wed", "value": 0.5},
+                        {"label": "Thu", "value": 0},
+                        {"label": "Fri", "value": -2},
+                    ],
+                },
+            ],
+            "axis_config": {
+                "categories": ["Wed", "Thu", "Fri"],
+                "x_label": "Day",
+                "y_label": "Answers",
+            },
+        },
+    }
+
+
+def test_a_chart_cuts_a_label_past_20_characters_and_a_title_past_50():
+    chart = ui.Chart(
+        title="T" * 51,
+        categories=["C" * 20, "D" * 21],
+        series=[
+            ui.ChartSeries(label="S" * 20, points=[3, 5]),
+            ui.ChartSeries(label="R" * 21, points=[4, 2]),
+        ],
+        category_label="X" * 50,
+        value_label="Y" * 51,
+    )
+
+    (block,) = get_blocks("text", blocks=[chart])
+
+    labels = ["C" * 20, "D" * 19 + "…"]
+    assert block == {
+        "type": "data_visualization",
+        "title": "T" * 49 + "…",
+        "chart": {
+            "type": "line",
+            "series": [
+                {
+                    "name": "S" * 20,
+                    "data": [{"label": labels[0], "value": 3}, {"label": labels[1], "value": 5}],
+                },
+                {
+                    "name": "R" * 19 + "…",
+                    "data": [{"label": labels[0], "value": 4}, {"label": labels[1], "value": 2}],
+                },
+            ],
+            "axis_config": {"categories": labels, "x_label": "X" * 50, "y_label": "Y" * 49 + "…"},
+        },
+    }
+
+
+def test_a_chart_with_no_title_takes_its_value_label_and_an_empty_axis_title_stays_out():
+    series = [ui.ChartSeries(label="web", points=[3])]
+    untitled_chart = ui.Chart(categories=["Mon"], series=series, value_label="V" * 51)
+    titled_chart = ui.Chart(
+        title="Answers", categories=["Mon"], series=series, category_label="Day"
+    )
+
+    first_block, second_block = get_blocks("text", blocks=[untitled_chart, titled_chart])
+
+    assert first_block["title"] == "V" * 49 + "…"
+    assert first_block["chart"]["axis_config"] == {"categories": ["Mon"], "y_label": "V" * 49 + "…"}
+    assert second_block["title"] == "Answers"
+    assert second_block["chart"]["axis_config"] == {"categories": ["Mon"], "x_label": "Day"}
+
+
+def test_a_chart_shows_a_dash_for_an_empty_category_or_series_label():
+    chart = ui.Chart(
+        title="Answers",
+        categories=["Mon", ""],
+        series=[ui.ChartSeries(label="", points=[3, 5])],
+    )
+
+    (block,) = get_blocks("text", blocks=[chart])
+
+    assert block["chart"]["axis_config"] == {"categories": ["Mon", "—"]}
+    assert block["chart"]["series"] == [
+        {"name": "—", "data": [{"label": "Mon", "value": 3}, {"label": "—", "value": 5}]}
+    ]
+
+
+def test_a_message_draws_its_first_two_charts_that_slack_takes_and_the_others_as_tables():
+    series = [ui.ChartSeries(label="web", points=[3])]
+    # Slack draws no chart of 30 points, with no title, or with two labels that match. These
+    # take no room for a chart.
+    month = ui.Chart(
+        title="Month",
+        categories=[f"Day {day}" for day in range(30)],
+        series=[ui.ChartSeries(label="web", points=list(range(30)))],
+    )
+    untitled_chart = ui.Chart(categories=["Mon"], series=series)
+    twin_days = ui.Chart(
+        title="Twin days",
+        categories=["Mon", "Mon"],
+        series=[ui.ChartSeries(label="web", points=[3, 5])],
+    )
+    twin_series = ui.Chart(title="Twin series", categories=["Mon"], series=series * 2)
+    first_chart, second_chart, third_chart = (
+        ui.Chart(title=title, categories=["Mon"], series=series)
+        for title in ("First", "Second", "Third")
+    )
+    charts = [month, first_chart, untitled_chart, twin_days, twin_series, second_chart, third_chart]
+
+    parts = get_blocks("text", blocks=charts)
+
+    text_forms = "\n\n".join(
+        chart.to_markdown() for chart in (untitled_chart, twin_days, twin_series)
+    )
+    assert [(part["type"], part.get("title") or part["text"]) for part in parts] == [
+        ("markdown", month.to_markdown()),
+        ("data_visualization", "First"),
+        ("markdown", text_forms),
+        ("data_visualization", "Second"),
+        ("markdown", third_chart.to_markdown()),
     ]

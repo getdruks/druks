@@ -98,7 +98,7 @@ async def peer_history(peer_id: int): ...
 rule counts `child` declarations, not path segments.
 
 A page function needs no return annotation. The route names `Page` as its
-response model, so writing it again on every function says nothing.
+response model. Writing it again on every function says nothing.
 
 Each page has a name. The name is the function name. `Link` and
 `App.navigation` reference a page by that name.
@@ -117,7 +117,7 @@ for that run. A changed or missing decision shows an unavailable message.
 When the operator answers on the page, the page removes the run and round from
 the URL. Ordinary subject links still open the platform subject page.
 
-Each page has a label. Druks derives the label from the name: underscores
+Each page has a label. Druks derives the label from the name. Underscores
 become spaces. `peer_history` becomes "peer history". Pass `label=` to
 override it:
 
@@ -132,21 +132,21 @@ Druks checks these at boot. A break raises with the app name and the exact
 cause.
 
 - At most one page declares `/`. That page is the landing page. An app that
-  declares none gets the platform home: one live table for each subject type,
-  with the summary's own fields as columns and where the work on each subject
-  stands. An app whose home is a React route declares none.
+  declares none gets the platform home. The home shows one live table for each
+  subject type. Its columns are the summary's own fields and where the work on
+  each subject stands. An app whose home is a React route declares none.
 - `@page` declares a top-level page.
 - `@parent.child` declares a child page.
-- One child level is allowed. A child of a child is a boot error.
+- Druks allows one child level. A child of a child is a boot error.
 - A child declaration can live in another module.
 - A child inherits every parameter of its parent route.
 - An extra child parameter must come from the relative child path.
 - A page function takes one required parameter for each parameter of its route.
   Extra parameters must have defaults. FastAPI binds them from the query string
-  as filters. Each parameter must be callable by name, so a positional-only or
+  as filters. Each parameter must be callable by name. A positional-only or
   variadic parameter is a boot error.
 - A catch-all is the last segment of its route. A catch-all anywhere else would
-  swallow every route under it, so it is a boot error.
+  swallow every route under it. It is a boot error.
 - A static child is a tab. The parent is the first tab.
 - A parameterized child is not a tab. A `Link` reaches it.
 - A parameterized detail page shows a link back to its parent.
@@ -169,19 +169,19 @@ The app roster at `GET /api/apps` carries the page table. The shell resolves a
 }
 ```
 
-The table arrives in route-match order, so a renderer that mounts a route for
-each entry in turn gives a literal segment its win over a parameter. `order` is
+The table arrives in route-match order. A renderer that mounts a route for each
+entry in turn then gives a literal segment its win over a parameter. `order` is
 the page's place in the app's declarations, which is the order its tabs show
-in. Route matching sorts the table, so that order survives only here.
+in. Route matching sorts the table. That order survives only here.
 
 `path` is the shell path, not the API path. The shell fills each `{name}`
 placeholder from the `Link` `arguments` and percent-encodes the value.
-`arguments` values are strings; FastAPI coerces each one to the type the page
+`arguments` values are strings. FastAPI coerces each one to the type the page
 declares. A `Link` missing an argument reads as broken.
 
 A page function can take extra parameters with defaults. Those are query
 filters. The shell keeps their values in the URL and sends them on every page
-read. `run` and `parkedAt` stay the shell's: they name a parked decision, not a
+read. `run` and `parkedAt` stay the shell's. They name a parked decision, not a
 filter.
 
 ```python
@@ -205,8 +205,8 @@ async def peers(status: str = ""):
 ```
 
 The parent of a page is its `parent` entry when it has one. Otherwise it is the
-declared page whose `path` is the longest proper prefix of this page's `path`,
-and the landing page when no other page is a prefix. A parameterized detail
+declared page whose `path` is the longest proper prefix of this page's `path`.
+When no other page is a prefix, it is the landing page. A parameterized detail
 page links back to that parent.
 
 ### Navigation
@@ -228,8 +228,8 @@ These are boot errors:
 - A parameterized page.
 - A child page.
 
-The app roster at `GET /api/apps` carries the resolved pairs, so the shell
-needs no second read:
+The app roster at `GET /api/apps` carries the resolved pairs. The shell needs
+no second read:
 
 ```json
 {"navigation": [["/night_watch", "overview"], ["/night_watch/peers", "peers"]]}
@@ -281,7 +281,8 @@ GET /api/night_watch/pages/peers/7/history
 ```
 
 The endpoint is the page function. FastAPI validates each path parameter
-against the declared signature. A value the declared type rejects answers 422. The route sits behind the dashboard identity gate, like every other
+against the declared signature. A value the declared type rejects answers 422.
+The route sits behind the dashboard identity gate, like every other
 `/api/<app>` route.
 
 The shell reads a page at `/<app><page path>`. It calls the matching page API
@@ -313,8 +314,8 @@ A page function cannot:
 - depend on mutable process state.
 
 Druks reruns a page function on initial load, on an event, on reconnect, on a
-manual refresh, and on a retry. The call count and the call order are not
-guaranteed. Write the function so that a repeat call is free.
+manual refresh, and on a retry. Druks guarantees neither the call count nor the
+call order. Write the function so that a repeat call is free.
 
 ## Liveness
 
@@ -347,12 +348,12 @@ page.
 {"subjectType": "peers", "subjectId": "7"}
 ```
 
-A run is always about a subject, and the subject is what the stream carries, so
-a region that watches a run follows that run's subject. The page function has
-already read that subject to render the page.
+A run is always about a subject. The stream carries the subject. A region that
+watches a run follows that run's subject. The page function has already read
+that subject to render the page.
 
 A `Section` that follows a subject must have a `name`. The shell replaces the
-region by name, so an unnamed one could never be replaced.
+region by name. It could never replace an unnamed one.
 
 Druks reuses the per-subject event stream that every app already gets:
 
@@ -363,7 +364,7 @@ GET /api/<app>/<subject type>/<subject id>/stream
 There is no second streaming system.
 
 `follows=` also takes the subject class. The page or the region then watches
-every subject of that type, `subject_id` is empty, and the shell reads the board
+every subject of that type. `subject_id` is empty. The shell reads the board
 stream:
 
 ```text
@@ -384,8 +385,8 @@ stale-response protection. A response from an older read never replaces a
 newer one.
 
 A `follows=` on the `Page` itself replaces the whole page body. When the page
-follows one subject, the shell also links it to that subject's own page, where
-the timeline of every run lives.
+follows one subject, the shell also links it to that subject's own page. The
+timeline of every run lives there.
 
 ## Gates
 
@@ -402,7 +403,7 @@ the note, and the artifact. The note box shows only when the gate declares
 
 - The shell reads `GET /api/gates/{run}`.
 - The shell submits `POST /api/gates/{run}/answer`.
-- The answer echoes `parkedAt` unchanged. A stale `parkedAt` is rejected.
+- The answer echoes `parkedAt` unchanged. Druks rejects a stale `parkedAt`.
 - Both routes use the signed-in dashboard session through `current_account`.
 
 `GateControls` is not an `Action`. It never calls `/api/runs/{run}/resume`.
@@ -412,8 +413,7 @@ that follows a subject. Druks rejects a `GateControls` block with no such
 ancestor when it builds the page. Without the follow, an answered gate would
 stay on screen.
 
-When the operator answers, the followed region refreshes and the controls go
-away.
+When the operator answers, the followed region refreshes. The controls go away.
 
 ## Where the work stands
 
@@ -442,16 +442,16 @@ Druks reads a `SubjectStatus` in a review's
 runs of the app that asks. It reads the status each time it reads the ask: for
 the dashboard, for `get_gate`, and for a chat agent. It reads the status once for
 the approval, when the run parks. The ask that Druks stores, and the event that
-records the ask, hold no status, so a recorded request on the Activity page shows
-none.
+records the ask, hold no status. A recorded request on the Activity page then
+shows none.
 
 ## Text forms
 
-Every block and value but three has a text form. `to_markdown()` writes it as
-markdown that names no channel, and takes no arguments. An approval keeps the
-blocks of a review's context beside their text form. A channel that draws no
-blocks sends the text. Slack draws some of the blocks with its own blocks: see
-[Approvals in Slack](#approvals-in-slack).
+Every block and value but three has a text form. `to_markdown()` takes no
+arguments. It writes the text form as markdown that names no channel. An
+approval keeps the blocks of a review's context beside their text form. A
+channel that draws no blocks sends the text. Slack draws some of the blocks with
+its own blocks. See [Approvals in Slack](#approvals-in-slack).
 
 | Block or value | Text form |
 | --- | --- |
@@ -475,24 +475,24 @@ blocks sends the text. Slack draws some of the blocks with its own blocks: see
 | `ControlsValue` | Its links. |
 
 A link is a link in text when its `url` holds its address. A link to a page or
-to a subject names it inside one app, so on its own it shows only its words.
-For a review's context, Druks gives each of these links its address from the
-pages of the app that asks, before it writes the text. A link to a page opens
-on the dashboard at `urls.endpoint`, with its arguments in the route. A link to
-a subject opens on the page that the app declares for the subject's decisions,
-else on the subject's own page. A path such as the `/api/files/…` address of an
-image also takes the endpoint. An installation with
-no endpoint has no address for the dashboard, so such a link shows only its
-words. A link to an outside `http(s)` address stays a link. Any other address,
-such as a `data:` image, shows only its words. Druks escapes a bracket in the
-words of a link, and encodes a space or a parenthesis in its address, so the
-link stays a link.
+to a subject names it inside one app. On its own, such a link shows only its
+words. For a review's context, Druks gives each of these links its address from
+the pages of the app that asks, before it writes the text. A link to a page
+opens on the dashboard at `urls.endpoint`, with its arguments in the route. A
+link to a subject opens on the page that the app declares for the subject's
+decisions, else on the subject's own page. A path such as the `/api/files/…`
+address of an image also takes the endpoint. An installation with no endpoint
+has no address for the dashboard. Such a link then shows only its words. A link
+to an outside `http(s)` address stays a link. Any other address, such as a
+`data:` image, shows only its words. Druks escapes a bracket in the words of a
+link. It encodes a space or a parenthesis in the address. The link then stays a
+link.
 
 `Form`, `Action`, and `GateControls` have no text form, because the operator
 acts through them. Their `to_markdown()` raises `NoTextFormError`, which names
-the block. A table that selects rows, a board that takes drops, and a block with
-an action in its controls have no text form either. `review` refuses a context
-that holds one of the three blocks anywhere, before the run parks.
+the block. A table that selects rows, a `Cards` list with a `drop` action, and a
+block with an action in its controls have no text form either. `review` refuses
+a context that holds one of the three blocks anywhere, before the run parks.
 
 ## Approvals in Slack
 
@@ -500,37 +500,52 @@ Slack draws these blocks of an approval with its own blocks:
 
 | Block | In Slack |
 | --- | --- |
-| `Facts`, `Metrics` | A grid of two columns: each label in bold above its value, under the title in bold. A section of Slack holds 10 of them, so more start a new section. |
+| `Facts`, `Metrics` | A grid of two columns: each label in bold above its value, under the title in bold. A section of Slack holds 10 of them. More start a new section. |
 | `Divider` | A divider. |
 | `Link` | A button that opens the address of the link. |
-| `Table` | A data table that the person can sort and page through. The title is its caption, or the first column label when the table has no title. A `NumberValue` is a number cell, and Slack sorts a column of number cells as numbers. A value with a link is a link, and any other value shows its text form. An empty value or column label shows a dash. The row detail stays on the dashboard. |
+| `Table` | A data table that the person can sort and page through. The title is its caption, or the first column label when the table has no title. A `NumberValue` is a number cell. Slack sorts a column of number cells as numbers. A value with a link is a link. Any other value shows its text form. An empty value or column label shows a dash. The row detail stays on the dashboard. |
+| `Chart` | A chart of the same kind: line, bar, or area. The categories are along the axis, in their order. Each series has a point for each category. The category label and the value label are the titles of the axes. A chart with no title takes its value label as its title. An empty category or series label shows a dash. |
 
 Every other block shows its text form. A value in a fact or a metric shows its
-text form, and a value with a link stays a link. Slack has no coloured label,
-so a `StatusValue` shows its words without its tone. A click on a link button
-opens the address and answers nothing.
+text form. A value with a link stays a link. Slack has no coloured label. A
+`StatusValue` shows its words without its tone. A click on a link button opens
+the address. The click does not answer the approval.
 
-A block that breaks a limit of Slack shows its text form: a fact or a metric
-whose label and value pass 2,000 characters, a link label of more than 75
-characters, or a link address of more than 3,000 characters. A link with no
-address shows its words, as in text. A message holds 50 blocks with its
-buttons. When the blocks run out, the blocks that are left show their text forms
-in the last block. The markdown of a message holds 12,000 characters. When there
-is more, Druks cuts its end. The last line then says that Druks left out the
-end, and links to the run's page when the installation has an endpoint.
+A block that breaks a limit of Slack shows its text form:
+
+- a fact or a metric of more than 2,000 characters, with its label in bold on a
+  line of its own;
+- the title of a `Facts` or a `Metrics` of more than 3,000 characters, in bold;
+- a link label of more than 75 characters;
+- a link address of more than 3,000 characters.
+
+A link with no address shows its words, as in text. A message holds 50 blocks,
+its buttons included. When the message has no room for more blocks, the blocks
+that are left show their text forms in the last block. The markdown of a message
+holds 12,000 characters. When there is more, Druks cuts its end. The last line
+then says that Druks left out the end. It links to the run's page when the
+installation has an endpoint.
 
 A data table holds 200 rows under its header, and 20 columns. The cells of all
-the data tables of a message hold 20,000 characters, with the column labels.
+the data tables of a message hold 20,000 characters, the column labels included.
 Druks counts each cell by its text form, and an empty cell by its dash. Druks
 keeps the first rows of a table that fit. A line above the table then says how
-many rows Druks left out, and links to the run's page when the installation has
+many rows Druks left out. It links to the run's page when the installation has
 an endpoint. A table shows its text form when it has no columns, more than 20
 columns, or no rows, or when no row fits.
 
+A message holds 2 charts. A chart holds 12 series of 20 points. Druks cuts a
+category or a series label to 20 characters, and a title or an axis title to 50.
+Slack requires a title. A chart with no title and no value label shows its text
+form. A chart also shows its text form when it has no series or no categories,
+more than 12 series, or more than 20 categories. It shows its text form too when
+two categories or two series would show the same label. The first 2 charts that
+Slack can draw show as charts. Each chart after them shows its text form.
+
 When Slack refuses the blocks, Druks sends the text of the approval in the same
-place, with the same buttons, so a table shows as a markdown table. An answer or
-a close edits the message. The edit draws the blocks again, with the outcome in
-place of the buttons.
+place, with the same buttons. A table or a chart then shows as a markdown table.
+Druks edits the message when the approval gets an answer or closes. The edit
+draws the blocks again, with the outcome in place of the buttons.
 
 ## Actions and links
 
@@ -568,28 +583,21 @@ The shell resolves the operation to its method and URL. The author writes no
 URL.
 
 Druks indexes every route the app mounts by its `operation_id` at boot. Two
-routes in one app with the same `operation_id` are a boot error, and so is one
-route answering two methods under it.
+routes in one app with the same `operation_id` are a boot error. So is one
+route that answers two methods under it. An action then names one operation and
+calls one method.
 
-An `Action` exists only once a page function has run, so the reference is
-checked when Druks builds the page — the earliest moment it exists. Two
-failures answer
-with the page-read error, and each one names the operation:
+An `Action` exists only once a page function has run. Druks checks the
+reference when it builds the page, the earliest moment the action exists. Two
+failures answer with the page-read error. Each one names the operation:
 
 - No route carries that `operation_id`.
 - The route is a GET. A GET route is a read. It can never be an action.
 
-The route takes its values the way the shell sends them: path parameters and a
-flat JSON body, each value under its own name — `Body(embed=True)` or a model,
-no aliases, no query parameters. A route shaped otherwise answers 422 when the
-action runs.
-
-Two routes of one app cannot share an `operation_id`, and one route cannot
-answer two methods under it. Both are boot errors: an action names one
-operation and calls one method.
-
-`refresh: "region"` needs a region. An action that asks for one and sits in no
-named `Section` is an error when Druks builds the page.
+The route takes its values the way the shell sends them. They are path
+parameters and a flat JSON body, each value under its own name. Use
+`Body(embed=True)` or a model, with no aliases and no query parameters. A route
+shaped otherwise answers 422 when the action runs.
 
 So an action target declares path parameters and a flat JSON body only:
 
@@ -653,9 +661,9 @@ ui.Link("Provider status", url="https://status.example.com")
 
 A `Link` sets `page` or `url`, never both and never neither. Druks rejects a
 `Link` that sets neither or both when it builds the page. An argument can be a
-number, and the link carries it as text.
+number. The link carries it as text.
 
-A link on a value shows the value's words, so it needs no label:
+A link on a value shows the value's words. It needs no label:
 
 ```python
 ui.TextValue(peer.name, link=ui.Link(page="peer", arguments={"peer_id": peer.id}))
@@ -664,16 +672,16 @@ ui.TextValue(peer.name, link=ui.Link(page="peer", arguments={"peer_id": peer.id}
 A link that stands on its own needs a label. Druks rejects one without a label
 when it builds the page.
 
-A `page` names a declared page of the same app, and `arguments` fills that
-page's route parameters. The shell resolves both against the page table. It
-shows a `Link` it cannot resolve as broken and names the page it wanted, and
-the rest of the page still renders.
+A `page` names a declared page of the same app. `arguments` fills that page's
+route parameters. The shell resolves both against the page table. It shows a
+`Link` it cannot resolve as broken and names the page it wanted. The rest of
+the page still renders.
 
-An absolute `url` opens in a new tab. A relative `url` stays in this tab: a
-path under `/api/`, such as `/api/oauth/acme/connect`, loads from the server,
-and any other path opens in the shell.
+An absolute `url` opens in a new tab. A relative `url` stays in this tab. A
+path under `/api/`, such as `/api/oauth/acme/connect`, loads from the server.
+Any other path opens in the shell.
 
-`Link` and `Action` are different public types. Both are blocks, so a page can
+`Link` and `Action` are different public types. Both are blocks. A page can
 hold one directly. Every container's `controls` holds either one.
 
 ## How to read the model listings
@@ -681,8 +689,8 @@ hold one directly. Every container's `controls` holds either one.
 Each listing below gives every field a model carries and the JSON it sends.
 Four rules hold for every one of them.
 
-**A listing is the whole shape, not the class body.** Some models share a base:
-every field carries a name and a label, and a section, a card and a column all
+**A listing is the whole shape, not the class body.** Some models share a base.
+Every field carries a name and a label. A section, a card and a column all
 carry blocks. A listing shows what the model carries, whichever class declares
 it. A sample fixes the keys and their values, never their order.
 
@@ -705,9 +713,9 @@ input than they store:
 | `Metric.value`, `Fact.value`, `TableRow.cells`, `List.items` | any `Value` | the same value |
 
 A `str`, an `int`, or a `float` is the short form of a value. The short form
-gets the defaults of its `Value`: a `TextValue` with no description and no
-link, or a `NumberValue` with no unit and a neutral tone. Give the `Value`
-itself for anything more. A number must be finite. Druks refuses a `bool`,
+gets the defaults of its `Value`. A `TextValue` then has no description and no
+link. A `NumberValue` has no unit and a neutral tone. Give the `Value` itself
+for anything more. A number must be finite. Druks refuses a `bool`,
 because Python counts it as a number and a reader does not.
 
 ## The three unions
@@ -741,16 +749,16 @@ shows an app-scoped error and names the block.
 
 Every block carries a `block` discriminator.
 
-A page fills the screen it is given, and each block decides what to do with the
-room. A table, an image gallery, `Columns`, a timeline and a metric row take the
-width. A fact list is as wide as its facts. A chart and a progress bar grow with
-the page and stop where more width stops helping them. Prose keeps a line
-length, measured against the type size rather than the screen, so it stays
+A page fills the screen that the shell gives it. Each block decides what to do
+with the room. A table, an image gallery, `Columns`, a timeline and a metric row
+take the width. A fact list is as wide as its facts. A chart and a progress bar
+grow with the page and stop where more width stops helping them. Prose keeps a
+line length, measured against the type size rather than the screen. It stays
 readable however wide the display is.
 
-A block whose one required value is the thing it shows — its words, its
-content, its identity — takes that value positionally, and every other value
-by keyword:
+Some blocks have one required value that is the thing they show: their words,
+their content, or their identity. Such a block takes that value positionally.
+It takes every other value by keyword:
 
 ```python
 ui.Text("Three peers answered in the last hour.")
@@ -770,8 +778,8 @@ ui.Stack([ui.Text("one"), ui.Divider()], gap="large")
 or `Fact`, takes both positionally. A block that holds more than one
 thing names every argument: `Card`, `Section`, `Table`, `Chart`, and `Cards`.
 `Cards` is on that list because its `empty` is content, not decoration. So is
-`Form`: its required value is the action that sends it, not something it shows,
-so `action=` is spelled out.
+`Form`. Its required value is the action that sends it, not something it shows.
+The author spells out `action=`.
 
 ### Text
 
@@ -811,9 +819,9 @@ class Quote:
 {"block": "quote", "text": "No access to that repository.\nFalling back."}
 ```
 
-Someone else's words, kept as they arrived — a message, a reply, an answer.
-Line breaks survive, and nothing is read as markup. `Text` closes the breaks
-up into a paragraph, and `Markdown` would rewrite the text.
+A quote holds someone else's words as they arrived: a message, a reply, an
+answer. Line breaks survive. The shell reads nothing as markup. `Text` closes the
+breaks up into a paragraph. `Markdown` would rewrite the text.
 
 ### Section
 
@@ -841,8 +849,8 @@ class Section:
 A section's controls belong to that section. The shell chooses where to show
 them. An action in `blocks` stays with the body content.
 
-They sit inside the section region, so a region refresh replaces the heading,
-the controls, and the body together.
+The controls sit inside the section region. A region refresh then replaces the
+heading, the controls, and the body together.
 
 ### Card
 
@@ -870,8 +878,8 @@ class Card:
 ```
 
 `link` is the card's destination. With no `controls`, the shell makes the whole
-panel the control. With `controls`, the title carries the link so a button is
-not nested inside an anchor. A linked card should not hold other links in
+panel the control. With `controls`, the title carries the link. A button then
+never sits inside an anchor. A linked card should not hold other links in
 `blocks`.
 
 `drag` is what a [`Cards.drop`](#cards) action receives. Empty means the card
@@ -900,7 +908,7 @@ class Cards:
 }
 ```
 
-One card for each of a set of things.
+A `Cards` block shows one card for each of a set of things.
 
 ```python
 ui.Cards(
@@ -918,19 +926,20 @@ ui.Cards(
 ```
 
 `wrap` (the default) fits as many cards across as the screen takes. `stack`
-is one column, for a board of statuses. `tiles` is a wrap of squares: an
-image fills each card and is cropped to cover it, rather than shown in full.
+is one column, for a board of statuses. `tiles` is a wrap of squares. An image
+fills each card. The shell crops the image to cover the card rather than show
+it in full.
 
 `drop` is the action a dragged card submits onto this list. The shell merges
 the card's `drag` into the action arguments and runs the operation. The drop
-is the submit: `drop` cannot set `fields` or `confirm`. A drop onto the same
-list does nothing. Clicking a linked card still opens it. While a card is
-dragged, the shell dims it and shows a placeholder in the list under the
+is the submit. `drop` cannot set `fields` or `confirm`. A drop onto the same
+list does nothing. Clicking a linked card still opens it. While the operator
+drags a card, the shell dims it and shows a placeholder in the list under the
 pointer. The action runs only on drop.
 
 With no cards, the shell shows the title and `empty` in their place. With no
-cards and no `empty`, it shows nothing unless `drop` is set, so an empty
-column can still receive a card. `Table` reads the same way for `empty`.
+cards and no `empty`, it shows nothing unless the list sets `drop`. An empty
+column can then still receive a card. `Table` reads the same way for `empty`.
 
 `empty` takes an `EmptyState`, not a line of text, because an empty page
 usually has to say what to do next.
@@ -950,7 +959,8 @@ class Callout:
 {"block": "callout", "tone": "warning", "title": "Stale", "text": "No answer for 2 days.", "controls": []}
 ```
 
-`controls` are the next step the message points at. The shell shows them under the text.
+`controls` are the next step the message points at. The shell shows them under
+the text.
 
 ### Divider
 
@@ -998,9 +1008,10 @@ class Link:
 {"block": "link", "label": "History", "page": "peer_history", "arguments": {"peer_id": "7"}, "url": "", "subject": null}
 ```
 
-A link sets exactly one destination: `page` for another page of this app,
-`url` for outside, or `subject` for the app's page for that subject — the
-full story of what druks did about it, which no app page recomposes:
+A link sets exactly one destination. `page` is another page of this app. `url`
+is an outside address. `subject` is the app's page for that subject. That page
+tells the full story of what Druks did about the subject. No app page
+recomposes that story:
 
 ```python
 ui.Link("Everything druks did", subject=found)
@@ -1009,7 +1020,7 @@ ui.Link("Everything druks did", subject=found)
 The shell adds that link to every page that follows one subject.
 
 A service an app declares with `with_scopes()` knows where an operator
-connects it, and the provider sends the operator back to the app:
+connects it. The provider then sends the operator back to the app:
 
 ```python
 ui.Link("Add an account", url=FieldNotes.calendar.connect_url)
@@ -1157,10 +1168,10 @@ class Timeline:
 }
 ```
 
-`at` must name an offset, so items from different sources order against each
-other. Druks orders the items oldest first, where the stamps keep their full
-precision, and items that share a moment keep their declared order. A snapshot
-arrives in the order it is shown.
+`when` must name an offset. Items from different sources then order against
+each other. Druks orders the items oldest first. It compares the stamps at their
+full precision. Items that share a moment keep their declared order. A snapshot
+arrives in the order the shell shows it.
 
 ### Progress
 
@@ -1173,12 +1184,13 @@ class ProgressStep:
 class Progress:
     block: Literal["progress"] = "progress"
     label: str
-    completed: float | None = None   # 0 <= completed <= total
-    total: float = 1.0               # > 0
+    completed: float | None = None
+    total: float = 1.0
     steps: list[ProgressStep] = []
 ```
 
-`completed` is a meaningful optional value. It carries three shapes:
+`completed` is a meaningful optional value. It runs from 0 to `total`. `total`
+is above zero. `completed` carries three shapes:
 
 | Shape | Declaration |
 | --- | --- |
@@ -1186,8 +1198,8 @@ class Progress:
 | indeterminate | `completed` unset, `steps` empty |
 | staged | `steps` set |
 
-Giving both `completed` and `steps` is a validation error, and so is a
-`completed` above `total` or a value that is not a number.
+Giving both `completed` and `steps` is a validation error. So is a value outside
+those ranges, or a value that is not a number.
 
 ```json
 {
@@ -1199,9 +1211,9 @@ Giving both `completed` and `steps` is a validation error, and so is a
 }
 ```
 
-A determinate or indeterminate shape reads as text and as an ARIA progress bar,
-so a screen reader gets the same state as the eye. Staged work has no
-measurable value, so it reads as a named group in which each step announces its
+A determinate or indeterminate shape reads as text and as an ARIA progress bar.
+A screen reader then gets the same state as the eye. Staged work has no
+measurable value. It reads as a named group in which each step announces its
 own state.
 
 ### Image
@@ -1223,9 +1235,9 @@ class Image:
 }
 ```
 
-`alternative_text` is required, and text that is only whitespace is a
-validation error. When the image does not load, the shell shows the
-alternative text in its place.
+An image needs `alternative_text`. Text that is only whitespace is a validation
+error. When the image does not load, the shell shows the alternative text in
+its place.
 
 ### Files
 
@@ -1235,7 +1247,6 @@ class FileSummary:
     name: str
     content_type: str
     size: int
-    # Derived from the id, so a file always travels through the platform route.
     url: str
 
 
@@ -1246,7 +1257,8 @@ class Files:
 ```
 
 `files` accepts `druks.files.File` objects. Druks reads the name, media type,
-and size from the file record.
+and size from the file record. It derives `url` from the id. A file then always
+travels through the platform route.
 
 ```json
 {
@@ -1315,7 +1327,7 @@ class Chart:
 }
 ```
 
-Every series must have one point for each category, and every point must be a
+Every series must have one point for each category. Every point must be a
 number JSON can carry. The shell renders a table of the same numbers, titled
 with the chart's own title and value label, for a screen reader.
 
@@ -1438,17 +1450,17 @@ class Table:
 
 Every row must have one cell for each column. With no rows the shell shows
 `empty`, and nothing of its own. A wide table scrolls inside its own
-container, on a narrow screen as well: a stacked row would lose the header each
+container, on a narrow screen as well. A stacked row would lose the header each
 cell belongs to.
 
-A row's `detail` is the sentence it has no room for — the failure behind a
-status, the reason behind a verdict. The shell keeps it folded and the reader
-opens it, so twenty rows that stopped for one reason do not cost twenty page
-loads to find that out. It is text, not blocks.
+A row's `detail` is the sentence it has no room for, such as the failure behind
+a status or the reason behind a verdict. The shell keeps it folded until the
+reader opens it. Twenty rows that stopped for one reason then do not cost twenty
+page loads. It is text, not blocks.
 
 `select` names the argument that takes the selected row keys, as a list of
-strings. `actions` run on that list, and they cannot collect fields. Set both
-or neither. On a table with `select`, each row needs its own `key`.
+strings. `actions` run on that list. They cannot collect fields. Set both or
+neither. On a table with `select`, each row needs its own `key`.
 
 ### List
 
@@ -1480,7 +1492,7 @@ class Stack:
 {"block": "stack", "gap": "medium", "blocks": []}
 ```
 
-A `Stack` that holds no block is false, so `if stack:` asks whether it shows
+A `Stack` that holds no block is false. `if stack:` then asks whether it shows
 anything. Every other block is always true.
 
 ### Columns
@@ -1497,15 +1509,15 @@ class Columns:
 ```
 
 Each child block is one column. `even` shares the width. `sidebar` keeps the
-last column a rail. `split` is the page: it is the only block, exactly two
-panes that scroll on their own — the first a list, the second what that list
-opened. On a narrow screen they stack.
+last column a rail. `split` is the page. It is the only block: exactly two
+panes that scroll on their own. The first pane is a list. The second is what
+that list opened. On a narrow screen they stack.
 
 `Stack` and `Columns` hold every V1 block, including each other. `split` is
-the exception: it is the page, not a region inside one.
+the exception. It is the page, not a region inside one.
 
 `Columns` is geometry. Each child is one column, however many there are. For a
-collection of cards, use `Cards`: the shell chooses how many fit across.
+collection of cards, use `Cards`. The shell chooses how many fit across.
 
 ## Values
 
@@ -1527,8 +1539,8 @@ class TextValue:
 ```
 
 `link` is how a table cell, a fact, or a list item reaches another page.
-`description` says what the thing is, on a quieter second line under what it
-is called, so a name needs no column of its own to explain it.
+`description` says what the thing is, on a quieter second line under its name.
+A name then needs no column of its own to explain it.
 
 ### NumberValue
 
@@ -1544,8 +1556,8 @@ class NumberValue:
 {"value": "number", "number": 40.0, "unit": "ms", "tone": "neutral"}
 ```
 
-A `tone` colours a count that is itself the warning — how many need attention.
-A figure that is only a figure stays `neutral`.
+A `tone` colours a count that is itself the warning, such as how many need
+attention. A figure that is only a figure stays `neutral`.
 
 ### StatusValue
 
@@ -1562,8 +1574,8 @@ class StatusValue:
 ```
 
 The app writes the word. The tone selects the presentation. The contract has
-no type named `Status`. `active` reads as work in flight, so a settled fact
-takes another tone. `link` reaches the thing it names.
+no type named `Status`. `active` reads as work in flight. A settled fact takes
+another tone. `link` reaches the thing it names.
 
 ### SubjectStatus
 
@@ -1630,8 +1642,8 @@ class ControlsValue:
 }
 ```
 
-Actions and links in a cell, a fact, or a list item. Druks checks them like
-any other control: `refresh="region"` needs a named Section, and an unknown
+A `ControlsValue` puts actions and links in a cell, a fact, or a list item.
+Druks checks them like any other control. `refresh="region"` needs a named Section. An unknown
 operation fails the page.
 
 ## Fields
@@ -1787,8 +1799,8 @@ class MultiSelectField:
 
 `is_searchable` puts a search box above a long list of options. The shell
 filters the options in the browser by their label, ignoring case, and does not
-reread the page. A hidden option keeps its check, and the form sends every
-checked option, shown or not.
+reread the page. A hidden option keeps its check. The form sends every checked
+option, shown or not.
 
 ### RadioField
 
@@ -1847,17 +1859,17 @@ class UploadField:
 {"field": "upload", "name": "photo", "label": "Add a photo", "accept": "image/*", "helpText": "", "isRequired": false}
 ```
 
-One file, and no starting value: nothing the server sends could put a file back
-into a file input.
+The field takes one file and has no starting value. Nothing the server sends
+could put a file back into a file input.
 
-`accept` goes straight into the file picker's own filter, in its own syntax —
-`"image/*"`, `".csv,.tsv"`. It narrows what the operator can pick. It is not a
-promise about the bytes, and the platform does not check it. An operation that
-needs certainty opens the file and looks.
+`accept` goes straight into the file picker's own filter, in its own syntax,
+such as `"image/*"` or `".csv,.tsv"`. It narrows what the operator can pick. It
+is not a promise about the bytes. The platform does not check it. An operation
+that needs certainty opens the file and looks.
 
 On submit the shell sends the bytes to `POST /api/<app>/uploads`, which stores
 them and answers with a `FileSummary`. The shell then submits `id` as the
-field's value, so the operation takes a plain string:
+field's value. The operation takes a plain string:
 
 ```python
 @router.post("/photos", operation_id="add_photo")
@@ -1865,14 +1877,14 @@ async def add_photo(photo: Annotated[str, Body(embed=True)]) -> None:
     shop.image = File(id=photo)
 ```
 
-A `FileField` column takes the id and keeps a real foreign key, so an id naming
-no file is refused by the database rather than stored.
+A `FileField` column takes the id and keeps a real foreign key. The database
+refuses an id that names no file rather than store it.
 
-The upload is filed under the app whose page holds the form and under the
-operator who sent it, both taken from the request rather than from the client.
-A file over the platform's upload cap is refused, and the shell puts the refusal
-on that field. A file whose form is never submitted stays stored with nothing
-pointing at it.
+Druks files the upload under the app whose page holds the form and under the
+operator who sent it. It takes both from the request, not from the client.
+Druks refuses a file over the platform's upload cap. The shell puts the refusal
+on that field. A file whose form the operator never submits stays stored with
+nothing pointing at it.
 
 ### MultiUploadField
 
@@ -1892,8 +1904,8 @@ class MultiUploadField:
 
 `MultiUploadField` lets the operator select several files in one native file
 dialog. The shell shows their names and a Remove button for each file before
-submit. Another selection replaces the list. The field has no `value`, so a
-page cannot put stored files into the picker.
+submit. Another selection replaces the list. The field has no `value`. A page
+cannot put stored files into the picker.
 
 `accept` has the same file-dialog filter syntax as
 [`UploadField`](#uploadfield). It does not validate the bytes. `is_required=True`
@@ -1939,9 +1951,9 @@ ui.SecretField(name="token", label="Access token", help_text="From your account 
 {"field": "secret", "name": "token", "label": "Access token", "helpText": "From your account settings.", "isRequired": false}
 ```
 
-One secret the operator hands over: a token, a key.
+A `SecretField` takes one secret that the operator hands over: a token, a key.
 
-It has no `value`. A file input cannot be seeded, and a secret must not be. A
+It has no `value`. No page can fill a file input. No page may fill a secret. A
 field with nowhere to put one cannot send a stored secret back to the browser.
 
 The shell masks it and keeps it from the browser's password managers. A
@@ -1987,13 +1999,13 @@ action in `blocks` stays with the body content.
 
 `filters` are fields the shell renders in the page chrome. Changing one updates
 the URL query and rereads the page. Empty `value` means any. They are not
-actions: they do not call an operation.
+actions. They do not call an operation.
 
-`Page`, `Section`, `Card` and `EmptyState` all take `controls` the same way: a
-list of `Action` and `Link`, in the order the app wants them read. An `Action`
-calls one of the app's operations; a `Link` navigates. Both are things an
-operator presses, so they share the row. A `Card` can also take `link`. That is
-the card's destination, not a control on the row.
+`Page`, `Section`, `Card` and `EmptyState` all take `controls` the same way.
+`controls` is a list of `Action` and `Link`, in the order the app wants them
+read. An `Action` calls one of the app's operations. A `Link` navigates. Both
+are things an operator presses. They share the row. A `Card` can also take
+`link`. That is the card's destination, not a control on the row.
 
 ```python
 return ui.Page(
@@ -2017,7 +2029,7 @@ dashboard.
 
 | Failure | Answer |
 | --- | --- |
-| A page function raises | The page API answers 500 and `PAGE_FAILED`, naming the app and the page. What the app's own code said stays in the process log: it can carry a query, a URL, or a credential. The shell shows an app-scoped error and a retry control. |
+| A page function raises | The page API answers 500 and `PAGE_FAILED`, naming the app and the page. What the app's own code said stays in the process log. It can carry a query, a URL, or a credential. The shell shows an app-scoped error and a retry control. |
 | A page answers with something that is not a `Page` | The same answer, saying what it answered with. |
 | A payload fails validation | The shell shows an app-scoped error. It renders the rest of the dashboard. |
 | An unknown discriminator | The shell shows an app-scoped error and names the block. |
@@ -2025,8 +2037,8 @@ dashboard.
 
 ## Demand-pulled
 
-These are agreed, named, and not built for V1. Druks adds each one when an app
-needs it:
+These have agreed names. V1 does not have them. Druks adds each one when an
+app needs it:
 
 - `MoneyValue`
 - `PercentValue`
@@ -2039,5 +2051,5 @@ V1 has no `Tabs` block, no accordion, no inline reveal form, and no general
 client-state API. A table row folds its `detail` away. An action can collect
 fields before it runs. In both cases, the shell owns the interface.
 
-Static child pages already give tabs, and the URL holds the current one. An
-app that needs a control the contract does not have ships an ESM frontend.
+Static child pages already give tabs. The URL holds the current one. An app
+that needs a control the contract does not have ships an ESM frontend.

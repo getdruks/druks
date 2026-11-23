@@ -43,7 +43,7 @@ _MARKDOWN_LINK = re.compile(r"\[((?:\\.|[^\\\]])*)\]\(([^)\s]+)\)")
 
 SUBMIT_ACTION = {"id": "submit", "label": "Submit"}
 
-# A number field takes text: Slack's number input works only in a modal.
+# A number field takes text. Slack's number input works only in a modal.
 FIELD_ELEMENTS = {
     "text": "plain_text_input",
     "text_area": "plain_text_input",
@@ -54,8 +54,8 @@ FIELD_ELEMENTS = {
     "checkbox": "checkboxes",
 }
 
-# The line that ends a message that Druks cut to fit Slack: what Druks left out, then the
-# link to all of it when the installation has an address.
+# The last line of a message that Druks cut to fit Slack. It says what Druks left out. When the
+# installation has an address, a link to all of it follows.
 OMISSION_MESSAGE = "Druks left out the end of this message because Slack limits its length."
 OMISSION_LINK = " Read all of it in Druks: {link}"
 TABLE_OMISSION_MESSAGE = (
@@ -66,7 +66,7 @@ TABLE_OMISSION_MESSAGE = (
 def cut_markdown(text: str, limit: int) -> str:
     """``text`` when it fits in ``limit`` characters. Otherwise, the most whole lines of
     ``text`` that fit with the marker after them. A code fence that those lines leave open
-    closes before the marker, so the marker and what follows it stay outside the fence.
+    closes before the marker. The marker and what follows it then stay outside the fence.
     When not even the first line fits, its start takes the place of the lines. A first
     line that opens a fence keeps no start, because a part of a fence closes nothing."""
     if len(text) <= limit:
@@ -85,27 +85,27 @@ def cut_markdown(text: str, limit: int) -> str:
                     fence_after = ""
             # Backticks with another backtick after them on the line are inline code.
             elif fence[0] == "~" or "`" not in rest:
-                # The closer takes the opener's indent, so a fence in a list item closes in it.
+                # The closer takes the opener's indent. A fence in a list item then closes in it.
                 fence_after = indent + fence
-        closing = f"\n{fence_after}" if fence_after else ""
-        if size + 1 + len(line) + len(closing) > room:
+        closer = f"\n{fence_after}" if fence_after else ""
+        if size + 1 + len(line) + len(closer) > room:
             break
         lines.append(line)
         size += 1 + len(line)
         open_fence = fence_after
     if lines:
-        kept = "\n".join(lines).rstrip("\n")
-        return kept + (f"\n{open_fence}" if open_fence else "") + slack.TRUNCATION_MARKER
-    # The loop stopped at the first line, so ``closing`` says whether that line opens a fence.
-    if closing:
+        kept_text = "\n".join(lines).rstrip("\n")
+        return kept_text + (f"\n{open_fence}" if open_fence else "") + slack.TRUNCATION_MARKER
+    # The loop stopped at the first line. ``closer`` then says whether that line opens a fence.
+    if closer:
         return slack.TRUNCATION_MARKER
     return text[:room] + slack.TRUNCATION_MARKER
 
 
 def get_input(field: dict) -> dict:
-    """The input block that shows a form's ``field``: its label, its help text as the hint,
-    whether it is optional, and an element that holds its default. The block's id is the
-    field's name, so the answer in the element comes back under that name."""
+    """The input block that shows a form's ``field``. It holds the label, the help text as
+    the hint, whether the field is optional, and an element with its default. The block's
+    id is the field's name. The answer in the element comes back under that name."""
     element: dict = {"type": FIELD_ELEMENTS[field["field"]]}
     options = [
         {"text": {"type": "plain_text", "text": option["label"]}, "value": option["value"]}
@@ -122,12 +122,12 @@ def get_input(field: dict) -> dict:
             element["initial_value"] = str(value).removesuffix(".0")
         case {"field": "multi_select", "value": value}:
             element["options"] = options
-            if chosen := [option for option in options if option["value"] in value]:
-                element["initial_options"] = chosen
+            if chosen_options := [option for option in options if option["value"] in value]:
+                element["initial_options"] = chosen_options
         case {"field": "select" | "radio", "value": value}:
             element["options"] = options
-            if chosen := [option for option in options if option["value"] == value]:
-                element["initial_option"] = chosen[0]
+            if chosen_options := [option for option in options if option["value"] == value]:
+                element["initial_option"] = chosen_options[0]
         case {"field": "checkbox", "value": value}:
             box = {"text": {"type": "plain_text", "text": "Yes"}, "value": "yes"}
             element["options"] = [box]
@@ -150,10 +150,11 @@ def check_input(block: dict) -> None:
     limits. A field's name is the id of its block."""
     name, element = block["block_id"], block["element"]
     options = element.get("options", [])
-    if len(options) > slack.OPTIONS_LIMITS[element["type"]]:
+    options_limit = slack.OPTIONS_LIMITS[element["type"]]
+    if len(options) > options_limit:
         raise FormError(
-            f"Field {name!r} has {len(options)} options. Slack shows "
-            f"{slack.OPTIONS_LIMITS[element['type']]} at most in this field."
+            f"Field {name!r} has {len(options)} options. Slack shows {options_limit} at most "
+            f"in this field. Give it {options_limit} options or fewer."
         )
     texts = [
         ("name", name, slack.BLOCK_ID_LIMIT),
@@ -172,7 +173,7 @@ def check_input(block: dict) -> None:
         if not 0 < len(text) <= limit:
             raise FormError(
                 f"Slack takes 1 to {limit} characters for the {part} of a field. The "
-                f"{part} of field {name!r} has {len(text)}."
+                f"{part} of field {name!r} has {len(text)}. Give it 1 to {limit} characters."
             )
 
 
@@ -194,24 +195,27 @@ def get_blocks(
     token: str | None = None,
     outcome: str = "",
 ) -> list[dict]:
-    """The blocks of a notification's message: ``text`` as markdown, or ``blocks`` as Slack
-    draws them with ``deep_link`` on the line after them and a chat agent's ``question``
-    after that, then an input for each of ``fields``, a button that carries ``token`` for
-    each action, then ``outcome``. Fields without actions are a form, and its one button is
-    its Submit button. Fields with actions are a run's questions and note: an input shows
-    the start of a label that is too long for it, and the content holds the whole label. An
-    input that Slack refuses stays out, so the message still goes out with its question in
-    the content.
+    """The blocks of a notification's message, in order. First come ``text`` as markdown, or
+    ``blocks`` as Slack draws them, with ``deep_link`` on the line after them. A chat agent's
+    ``question`` comes after that. Then come an input for each of ``fields``, a button that
+    carries ``token`` for each action, and ``outcome``. Fields without actions are a form.
+    Its one button is its Submit button. Fields with actions are a run's questions and note.
+    An input shows the start of a label that is too long for it. The content holds the whole
+    label. An input that Slack refuses stays out. The message still goes out, with its
+    question in the content.
 
     Each Druks block takes a branch of its own. Facts and metrics take a section of fields
-    for each ten, with the title on the first. A divider takes a divider, and a link takes a
-    button that opens it. A table takes a data table of its first rows that fit, and when
-    rows do not fit, a line above it says how many Druks left out, with the link. Any other
-    block, and a block past a limit of Slack, takes its text form, and text that follows
-    text joins it in one markdown block. ``blocks`` take the room that the rest leaves, the
-    question included, and when it runs out, its last block holds the text forms of the
-    blocks left. When the markdown is longer than Slack takes, Druks cuts the end of the
-    blocks, and a line in place of the link says so, with the link."""
+    for each ten, with the title on the first. A divider takes a divider. A link takes a
+    button that opens it. A table takes a data table of its first rows that fit. When rows
+    do not fit, a line above it says how many Druks left out, with the link. A chart takes
+    a chart of its kind under its title, or under its value label when it has no title.
+    Druks cuts each long label and title of a chart. A message draws the first two charts
+    that Slack can draw. Any other block, and a block past a limit of Slack, takes its text
+    form. Text that follows text joins it in one markdown block. ``blocks`` take the room
+    that the rest leaves, the question included. When the room runs out, the last block
+    holds the text forms of the blocks left. When the markdown is longer than Slack takes,
+    Druks cuts the end of the blocks. A line in place of the link then says so, with the
+    link."""
     controls: list[dict] = []
     if fields and actions:
         inputs_by_id = {}
@@ -234,8 +238,8 @@ def get_blocks(
                 # Slack refuses a message with two blocks of one id.
                 inputs_by_id.setdefault(block["block_id"], block)
         inputs = list(inputs_by_id.values())
-        # The content and the buttons take a block each. The note is the last input, and it
-        # stays when the message has no room for every input.
+        # The content and the buttons take a block each. The note is the last input. It stays
+        # when the message has no room for every input.
         room = slack.MESSAGE_BLOCKS_LIMIT - 2
         controls += inputs if len(inputs) <= room else [*inputs[: room - 1], inputs[-1]]
     elif fields:
@@ -265,6 +269,7 @@ def get_blocks(
         controls.insert(0, {"type": "markdown", "text": question})
     content: list[dict] = []
     table_room = slack.MESSAGE_CELL_TEXT_LIMIT
+    chart_room = slack.MESSAGE_CHARTS_LIMIT
 
     for index, block in enumerate(blocks):
         parts: list[dict] = []
@@ -272,7 +277,7 @@ def get_blocks(
             case ui.Facts(title=title, facts=items) | ui.Metrics(title=title, metrics=items):
                 texts = [f"*{title}*"]
                 texts += [f"*{item.label}*\n{item.value.to_markdown()}" for item in items]
-                # Slack reads &, < and > as markup, and writes a link as <address|words>.
+                # Slack reads &, < and > as markup. It writes a link as <address|words>.
                 texts = [
                     text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
                     for text in texts
@@ -372,40 +377,87 @@ def get_blocks(
 
                     if deep_link:
                         notice += OMISSION_LINK.format(link=deep_link)
-                    # The line goes above the table, so its link never comes right before
+                    # The line goes above the table. Its link then never comes right before
                     # the link that ends the message.
                     parts.insert(0, {"type": "markdown", "text": notice})
-        written = "" if parts else block.to_markdown()
+            case ui.Chart(
+                kind=kind,
+                title=title,
+                categories=categories,
+                series=series,
+                category_label=category_label,
+                value_label=value_label,
+            ) if (
+                chart_room
+                and 0 < len(series) <= slack.CHART_SERIES_LIMIT
+                and 0 < len(categories) <= slack.CHART_POINTS_LIMIT
+            ):
+                heading = cut_text(title or value_label, slack.CHART_TITLE_LIMIT)
+                labels = [
+                    cut_text(category or slack.EMPTY_CELL_TEXT, slack.CHART_LABEL_LIMIT)
+                    for category in categories
+                ]
+                names = [
+                    cut_text(one.label or slack.EMPTY_CELL_TEXT, slack.CHART_LABEL_LIMIT)
+                    for one in series
+                ]
+
+                if heading and len(set(labels)) == len(labels) and len(set(names)) == len(names):
+                    chart_room -= 1
+                    axes: dict = {"categories": labels}
+
+                    if category_label:
+                        axes["x_label"] = cut_text(category_label, slack.CHART_AXIS_TITLE_LIMIT)
+                    if value_label:
+                        axes["y_label"] = cut_text(value_label, slack.CHART_AXIS_TITLE_LIMIT)
+                    chart = {
+                        "type": kind,
+                        "series": [
+                            {
+                                "name": name,
+                                "data": [
+                                    {"label": label, "value": point}
+                                    for label, point in zip(labels, one.points, strict=True)
+                                ],
+                            }
+                            for name, one in zip(names, series, strict=True)
+                        ],
+                        "axis_config": axes,
+                    }
+                    parts = [{"type": "data_visualization", "title": heading, "chart": chart}]
+        text_form = "" if parts else block.to_markdown()
         # One block of the room stays free for the link. When the room runs out, its last
         # block takes the blocks left as their text forms.
-        count = len(content) + len(parts) + bool(written)
+        count = len(content) + len(parts) + bool(text_form)
         is_full = count >= slack.MESSAGE_BLOCKS_LIMIT - len(controls)
         if is_full:
-            parts, written = [], ui.Stack(blocks[index:]).to_markdown()
-        if written and content and content[-1]["type"] == "markdown":
-            content[-1] = {"type": "markdown", "text": f"{content[-1]['text']}\n\n{written}"}
-        elif written:
-            content.append({"type": "markdown", "text": written})
+            parts, text_form = [], ui.Stack(blocks[index:]).to_markdown()
+        if text_form and content and content[-1]["type"] == "markdown":
+            content[-1] = {"type": "markdown", "text": f"{content[-1]['text']}\n\n{text_form}"}
+        elif text_form:
+            content.append({"type": "markdown", "text": text_form})
         content += parts
         if is_full:
             break
     line = deep_link or ""
-    markdown = sum(len(part["text"]) for part in content if part["type"] == "markdown")
+    markdown_size = sum(len(part["text"]) for part in content if part["type"] == "markdown")
     # A line takes a newline before it.
-    if markdown + bool(line) + len(line) + len(question) > slack.MARKDOWN_TEXT_LIMIT:
+    if markdown_size + bool(line) + len(line) + len(question) > slack.MARKDOWN_TEXT_LIMIT:
         line = OMISSION_MESSAGE + (OMISSION_LINK.format(link=deep_link) if deep_link else "")
         room = slack.MARKDOWN_TEXT_LIMIT - len(line) - 1 - len(question)
-        kept = []
-        # The content keeps its start, as a cut body does, and what follows the cut goes.
+        kept_parts = []
+        # The content keeps its start, as a cut body does. What follows the cut goes.
         for part in content:
             if part["type"] == "markdown" and len(part["text"]) > room:
                 if room > len(slack.TRUNCATION_MARKER):
-                    kept.append({"type": "markdown", "text": cut_markdown(part["text"], room)})
+                    kept_parts.append(
+                        {"type": "markdown", "text": cut_markdown(part["text"], room)}
+                    )
                 break
             if part["type"] == "markdown":
                 room -= len(part["text"])
-            kept.append(part)
-        content = kept
+            kept_parts.append(part)
+        content = kept_parts
     if line and content and content[-1]["type"] == "markdown":
         content[-1] = {"type": "markdown", "text": f"{content[-1]['text']}\n{line}"}
     elif line:
@@ -432,23 +484,23 @@ async def deliver(
     icon_url: str | None = None,
 ) -> dict:
     """Post ``body`` as markdown, with ``deep_link`` on the line after it. ``blocks`` are
-    the Druks blocks whose text form is ``body`` up to its question: Slack draws them in
-    its place, and when Slack refuses them, the body goes out in their place once. Each
-    action becomes a button that carries ``token``, so a click answers this notification.
-    Each of ``fields`` becomes an input above the buttons. Without actions, the button
-    below the inputs is a Submit button that carries ``token``. With
-    ``message_ts``, Druks edits that posted message, and ``outcome`` takes the place of its
-    buttons and inputs. With ``user``, only that person sees the message.
-    ``question_offset`` is where a chat agent's question starts in ``body``. The question
-    keeps its room when Druks cuts the rest to fit, with blocks and without.
-    ``username`` and ``icon_url`` replace the app's name and picture on a new message.
-    Returns Slack's answer, which names the message's channel and ts."""
+    the Druks blocks whose text form is ``body`` up to its question. Slack draws them in its
+    place. When Slack refuses them, the body goes out in their place once. Each action
+    becomes a button that carries ``token``. A click then answers this notification. Each
+    of ``fields`` becomes an input above the buttons. Without actions, the button below the
+    inputs is a Submit button that carries ``token``. With ``message_ts``, Druks edits that
+    posted message. ``outcome`` then takes the place of its buttons and inputs. With
+    ``user``, only that person sees the message. ``question_offset`` is where a chat agent's
+    question starts in ``body``. The question keeps its room when Druks cuts the rest to
+    fit, with blocks and without. ``username`` and ``icon_url`` replace the app's name and
+    picture on a new message. Returns Slack's answer, which names the message's channel
+    and ts."""
     link = f"\n{deep_link}" if deep_link else ""
     reply, question = body, ""
     if question_offset:
         reply, question = body[:question_offset], body[question_offset:]
-    # Slack refuses markdown longer than this, so a long body loses its end and
-    # keeps the link, which opens the full text.
+    # Slack refuses markdown longer than this. A long body loses its end and keeps the link.
+    # The link opens the full text.
     text = (
         cut_markdown(reply, slack.MARKDOWN_TEXT_LIMIT - len(question) - len(link)) + question + link
     )
@@ -456,22 +508,22 @@ async def deliver(
         get_blocks, text, actions=actions, fields=fields, token=token, outcome=outcome
     )
 
-    async def post(drawn: list[dict]) -> dict:
-        # from None: these errors can keep the request, and its headers carry the bot token.
+    async def post(parts: list[dict]) -> dict:
+        # from None: these errors can keep the request. Its headers carry the bot token.
         try:
             if message_ts:
                 response = await client.chat_update(
-                    channel=channel, ts=message_ts, text=text, blocks=drawn
+                    channel=channel, ts=message_ts, text=text, blocks=parts
                 )
             elif user:
                 response = await client.chat_postEphemeral(
-                    channel=channel, user=user, text=text, blocks=drawn, thread_ts=thread_ts or None
+                    channel=channel, user=user, text=text, blocks=parts, thread_ts=thread_ts or None
                 )
             else:
                 response = await client.chat_postMessage(
                     channel=channel,
                     text=text,
-                    blocks=drawn,
+                    blocks=parts,
                     thread_ts=thread_ts or None,
                     username=username,
                     icon_url=icon_url,
@@ -501,5 +553,5 @@ async def deliver(
             )
         except BlocksRefusedError as error:
             # Slack can refuse a block that Druks draws. The text form then goes in its place.
-            logger.warning("Slack refused the blocks of a message, so it goes as text. %s", error)
+            logger.warning("Slack refused the blocks of a message. It goes as text. %s", error)
     return await post(message())
