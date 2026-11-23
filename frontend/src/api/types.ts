@@ -77,7 +77,7 @@ export interface SubjectSummary {
 }
 
 export interface SubjectStatus {
-  // Null when no run drives the subject. Druks has not run it.
+  // Null when no run drives the subject. Druks never ran it.
   state: RunState | null
   // The driving run's id.
   run: string | null
@@ -92,8 +92,8 @@ export interface SubjectStatus {
   // the stop for code. "gate_timeout" is an unanswered gate, not a crash.
   failure: string | null
   reason: string | null
-  // When Druks last took up this subject, and whose work it is. A subject with a row
-  // of its own would keep these facts in its columns.
+  // When Druks last took up this subject, and whose work it is. A subject that has a row
+  // of its own keeps these facts in its columns.
   triggeredAt: string | null
   accountUsername: string | null
 }
@@ -129,8 +129,8 @@ export interface AskQuestion {
   options: { id: string; label: string; recommended: boolean }[]
 }
 
-// A choice the ask offers. An answer with a control that requires a note must carry a
-// note or an answer to a question.
+// A choice that the ask offers. An answer with a control that requires a note must carry
+// a note or an answer to a question.
 export interface AskControl {
   id: string
   note_required: boolean
@@ -148,7 +148,7 @@ export interface InputRequest {
   artifact_id?: string | null
   /** The prose or blocks of the workflow. The shell shows them beside the document. */
   context?: string | Block[]
-  /** The reply fields the gate declares. */
+  /** The reply fields that the gate declares. */
   reply_fields?: string[]
 }
 
@@ -212,8 +212,8 @@ export interface ArtifactFile {
 }
 
 // The output of a call that the shell shows by its kind, apart from the raw files.
-// ``name`` is its file in the call folder. The transcript files route downloads it
-// like any other file.
+// ``name`` is its file in the call folder. The transcript files route downloads it as
+// it downloads the other files.
 export interface ArtifactDescriptor {
   kind: string
   title: string
@@ -421,7 +421,7 @@ export type Field =
       value: string
       placeholder: string
       rows: number
-      markdown?: boolean
+      isMarkdown?: boolean
     })
   | (FieldBase & {
       field: 'number'
@@ -689,7 +689,8 @@ export interface Agent extends Omit<AgentInput, 'picture'> {
   picture: FileSummary | null
 }
 
-// A schedule set in a conversation of the agent. ``lastRun`` is the run of its newest due time.
+// A schedule that the agent set in one of its conversations. ``lastRun`` is the run of its
+// newest due time.
 export interface AgentSchedule {
   id: string
   accountId: string
@@ -1032,7 +1033,7 @@ export interface FeedItem {
 
 export interface FeedResponse {
   items: FeedItem[]
-  // The snapshot the live stream continues from.
+  // The snapshot that the live stream continues from.
   cursor: string
   nextCursor: string | null
 }

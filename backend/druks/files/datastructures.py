@@ -7,7 +7,7 @@ from pydantic_core import CoreSchema, core_schema
 
 from druks.core.models import uuid7_str
 from druks.db import db_session
-from druks.files.constants import MAX_FILE_BYTES
+from druks.files.constants import FILE_URL_PREFIX, MAX_FILE_BYTES
 from druks.files.exceptions import FileTooLargeError, FileUnavailableError
 from druks.files.models import FileRecord
 from druks.files.storage import get_file_storage
@@ -17,11 +17,13 @@ from druks.sandbox.layout import get_work_root
 if TYPE_CHECKING:
     from druks.sandbox.host import Host
 
-_FILE_URL_PREFIX = "/api/files/"
 _FILE_PATH_DESCRIPTION = "Write the file in your workspace and report its path."
 
 
 class File:
+    """A file that Druks stores under its ``id``. An agent's output names a file by its
+    ``path`` in the workspace. Druks then pulls the file off the box and stores it."""
+
     def __init__(
         self,
         *,
@@ -109,9 +111,9 @@ class File:
 
     @property
     def url(self) -> str:
-        return f"{_FILE_URL_PREFIX}{self.id}"
+        return f"{FILE_URL_PREFIX}{self.id}"
 
-    async def open(self) -> bytes:
+    async def read_bytes(self) -> bytes:
         record = await db_session().get(FileRecord, self.id)
         if not record or record.deleted_at:
             raise FileUnavailableError(

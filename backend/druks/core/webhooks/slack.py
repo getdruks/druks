@@ -191,7 +191,7 @@ class SlackInteractivity(SlackWebhook):
             # Slack opened the link of the button. It still sends the click to Druks. A link
             # answers nothing.
             return JSONResponse({"accepted": True})
-        # The clicker's account, found in the workspace that Druks answers in, as in chat.
+        # Druks finds the clicker's account in the workspace that it answers in, as chat does.
         account_id = await VaultSecret.get_owner_id(
             db_session(),
             Slack.Authentication.get_authority((await Slack.get()).identity["team_id"]),
@@ -407,17 +407,19 @@ async def replace_buttons(
     message stored."""
     async with step_session() as session:
         notification = await session.get(Notification, notification_id)
-    async with lock(
-        NOTIFICATION_LOCK.format(run=notification.run_id, notification=notification.id)
+    async with (
+        lock(NOTIFICATION_LOCK.format(run=notification.run_id, notification=notification.id)),
+        step_session() as session,
     ):
-        async with step_session() as session:
-            notification = await session.get(Notification, notification_id)
-            client = await Slack.get_client()
+        notification = await session.get(Notification, notification_id)
+        client = await Slack.get_client()
         edit = partial(
             deliver,
             client,
             channel,
             notification.body,
+            session=session,
+            account=await notification.get_account(session),
             blocks=notification.blocks,
             message_ts=message_ts,
             deep_link=notification.deep_link,
@@ -436,9 +438,11 @@ async def replace_buttons(
 @DBOS.step(name="slack.explain_reason", retries_allowed=True, max_attempts=5)
 async def explain_reason(channel: str, *, user: str, reason: str, thread_ts: str) -> None:
     """Show ``reason`` to the person who clicked, and to nobody else."""
-    async with step_session():
+    async with step_session() as session:
         client = await Slack.get_client()
-    await deliver(client, channel, reason, user=user, thread_ts=thread_ts)
+        await deliver(
+            client, channel, reason, session=session, account=None, user=user, thread_ts=thread_ts
+        )
 
 
 class SlackEvents(SlackWebhook):

@@ -1,3 +1,4 @@
+import asyncio
 import contextlib
 import logging
 import re
@@ -5,18 +6,25 @@ from collections.abc import Sequence
 from functools import partial
 
 import aiohttp
-from slack_sdk.errors import SlackApiError
+from slack_sdk.errors import SlackApiError, SlackRequestError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from druks import ui
+from druks.accounts.models import Account
 from druks.chat.channels.slack import constants as slack
 from druks.chat.exceptions import FormError
 from druks.core.apis.slack import SlackClient
+from druks.files.constants import FILE_URL_PREFIX
+from druks.files.models import FileRecord
+from druks.files.storage import get_file_storage
 from druks.notifications.buttons import encode_action, encode_button
 from druks.notifications.exceptions import (
     BlocksRefusedError,
     ChannelUnavailableError,
     DeliveryError,
 )
+from druks.registry import app_registry
+from druks.settings import get_settings
 from druks.ui.blocks import get_absolute_url
 
 logger = logging.getLogger(__name__)
@@ -198,19 +206,27 @@ def cut_text(text: str, limit: int) -> str:
     return text[: limit - 1] + "…"
 
 
-def get_image_block(image: ui.Image) -> dict:
-    """The image block that draws ``image``. Empty when its address is not an outside png,
-    jpg, or gif, or when a field is too long for Slack."""
+def get_image_block(image: ui.Image, slack_file_ids: dict[str, str] | None) -> dict:
+    """The image block that draws ``image``: the Slack file in ``slack_file_ids`` for its
+    address, or else its outside address of a png, jpg, or gif. Empty when it has neither,
+    or when its alternative text or its caption is too long for Slack."""
     outside_address = _OUTSIDE_ADDRESS.match(image.url)
     address = get_absolute_url(image.url)
-    if (
+    source = {}
+    if slack_file_ids and image.url in slack_file_ids:
+        source = {"slack_file": {"id": slack_file_ids[image.url]}}
+    elif (
         outside_address
         and outside_address["path"].lower().endswith(slack.IMAGE_EXTENSIONS)
         and len(address) <= slack.IMAGE_URL_LIMIT
+    ):
+        source = {"image_url": address}
+    if (
+        source
         and len(image.alternative_text) <= slack.IMAGE_ALT_TEXT_LIMIT
         and len(image.caption) <= slack.IMAGE_TITLE_LIMIT
     ):
-        block = {"type": "image", "image_url": address, "alt_text": image.alternative_text}
+        block = {"type": "image", **source, "alt_text": image.alternative_text}
         if image.caption:
             block["title"] = {"type": "plain_text", "text": image.caption}
         return block
@@ -272,6 +288,7 @@ def get_blocks(
     text: str,
     *,
     blocks: Sequence[ui.Block] = (),
+    slack_file_ids: dict[str, str] | None = None,
     question: str = "",
     deep_link: str | None = None,
     actions: list[dict] | None = None,
@@ -310,11 +327,11 @@ def get_blocks(
     input for each of its fields and a button for each of its actions. A button asks with
     Slack's dialog when its action asks to confirm.
 
-    An image at an outside address of a png, a jpg, or a gif becomes an image block. A
-    gallery becomes one image block for each such image, under its title. Each other image
-    of a gallery keeps its line of the text form, in its place. Any other block, and a block
-    past a limit of Slack, becomes its text form. Text that follows text joins it in one
-    markdown block.
+    An image at an outside address of a png, a jpg, or a gif becomes an image block. So does
+    an image whose address has a Slack file in ``slack_file_ids``. A gallery becomes one image
+    block for each such image, under its title. Each other image of a gallery keeps its line
+    of the text form, in its place. Any other block, and a block past a limit of Slack,
+    becomes its text form. Text that follows text joins it in one markdown block.
 
     ``blocks`` use the room that the rest leaves, the question included. When no room is
     left, the last block holds the text forms of the other blocks. A gallery or a form
@@ -577,12 +594,14 @@ def get_blocks(
                     },
                 )
             case ui.Image():
-                if image_block := get_image_block(block):
+                if image_block := get_image_block(block, slack_file_ids):
                     parts = [image_block]
-            case ui.ImageGallery(title=title, images=images) if any(map(get_image_block, images)):
+            case ui.ImageGallery(title=title, images=images) if any(
+                get_image_block(image, slack_file_ids) for image in images
+            ):
                 parts = [{"type": "markdown", "text": f"### {title}"}] if title else []
                 for image in images:
-                    if image_block := get_image_block(image):
+                    if image_block := get_image_block(image, slack_file_ids):
                         parts.append(image_block)
                         continue
                     line = f"- {image.to_markdown()}"
@@ -635,6 +654,8 @@ async def deliver(
     channel: str,
     body: str,
     *,
+    session: AsyncSession,
+    account: Account | None,
     blocks: list[dict] | None = None,
     thread_ts: str = "",
     message_ts: str = "",
@@ -660,6 +681,16 @@ async def deliver(
     buttons and inputs. With ``user``, only that person sees the message.
     ``question_offset`` is where a chat agent's question starts in ``body``. The question
     keeps its room when Druks cuts the rest to fit, with blocks and without.
+
+    Before the post, Druks uploads to Slack the Druks file of each image that keeps its
+    block. The file is a png, a jpg, or a gif of at most 10 MiB, of an app that ``account``
+    can use. ``account`` is the account that the message is for. Only a message with no
+    blocks has none. Druks reads the record of the file in ``session``. Slack keeps each
+    file private.
+
+    The uploads stop at Slack's answer missing_scope, because each upload after it fails
+    too. An image whose upload fails keeps its link. Druks uploads nothing again when it
+    sends the body in place of the blocks.
 
     ``username`` and ``icon_url`` replace the app's name and picture on a new message.
     Returns Slack's answer, which names the message's channel and ts."""
@@ -711,15 +742,73 @@ async def deliver(
         return response.data
 
     if blocks:
-        try:
-            # In a block of its own, the question needs no blank line before it.
-            return await post(
-                message(
-                    blocks=ui.Stack(blocks).blocks,
-                    question=question.lstrip("\n"),
-                    deep_link=deep_link,
+        druks_blocks = ui.Stack(blocks).blocks
+        # In a block of its own, the question needs no blank line before it.
+        draw = partial(
+            message, blocks=druks_blocks, question=question.lstrip("\n"), deep_link=deep_link
+        )
+        images = []
+        for block in druks_blocks:
+            match block:
+                case ui.Image():
+                    images.append(block)
+                case ui.ImageGallery(images=gallery):
+                    images += gallery
+        # An image names a Druks file by the address of the file, alone or after the endpoint.
+        endpoint = get_settings().urls.endpoint.rstrip("/")
+        files = {}
+        for image in images:
+            path = image.url.removeprefix(endpoint)
+            if path.startswith(FILE_URL_PREFIX):
+                record = await session.get(FileRecord, path.removeprefix(FILE_URL_PREFIX))
+                if (
+                    record
+                    and not record.deleted_at
+                    and record.content_type in slack.IMAGE_CONTENT_TYPES
+                    and record.size <= slack.IMAGE_BYTES_LIMIT
+                    and (app := app_registry.get(record.app))
+                    and await account.can_use_app(app)
+                ):
+                    files[image.url] = record
+        # This layout uses the address of each file in place of a Slack file id. An image
+        # that keeps its block then names its address.
+        drawn = draw(slack_file_ids={url: url for url in files})
+        shown_urls = dict.fromkeys(
+            part["slack_file"]["id"] for part in drawn if "slack_file" in part
+        )
+        slack_file_ids = {}
+        for url in shown_urls:
+            record = files[url]
+            try:
+                upload = await client.files_upload_v2(
+                    filename=record.name,
+                    content=await asyncio.to_thread(get_file_storage().open, record.id),
                 )
-            )
+            except SlackApiError as error:
+                reason = error.response.get("error")
+                logger.warning(
+                    "Slack refused the upload of file %s. Its image goes as a link. %s",
+                    record.id,
+                    reason,
+                )
+                if reason == "missing_scope":
+                    break
+            except (
+                FileNotFoundError,
+                SlackRequestError,
+                aiohttp.ClientError,
+                TimeoutError,
+            ) as error:
+                logger.warning(
+                    "The upload of file %s to Slack failed. Its image goes as a link. %s",
+                    record.id,
+                    type(error).__name__,
+                )
+            else:
+                slack_file_ids[url] = upload["file"]["id"]
+        parts = draw(slack_file_ids=slack_file_ids)
+        try:
+            return await post(parts)
         except BlocksRefusedError as error:
             # Slack can refuse a block that Druks draws. Druks then sends the text form in its
             # place.

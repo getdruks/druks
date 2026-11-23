@@ -47,8 +47,8 @@ and a model. Make it private or public. Its owner or an admin edits and
 deletes it. A delete also deletes every conversation with the agent and stops
 their schedules.
 
-In a new web conversation, choose the agent in **Talk to**. The list shows only the agents
-you can talk to. The conversation list and the conversation header show the
+In a new web conversation, choose the agent in **Talk to**. The list shows only the
+agents that you can talk to. The conversation list and the conversation header show the
 agent's name.
 
 Everyone talks to a public agent. Only the owner of a private agent talks to
@@ -63,11 +63,12 @@ reaches the next turn.
 
 A private agent runs on its owner's subscription. With
 [Include apps](configuration.md#personal-and-installation-settings) on, it
-loads the apps of that subscription. A public agent runs on the installation's
-API key for the model's provider or, without one, on the unattended account's
-subscription. It never runs on the subscription of the person who asks. A
-public agent with neither fails its turn and says what to connect. A public
-agent never loads the apps of the subscription it runs on. Each person who
+loads the apps of that subscription.
+
+A public agent runs on the installation's API key for the model's provider or, without
+one, on the default account's subscription. It never runs on the subscription of the
+person who asks. A public agent with neither fails its turn and says what to connect. A
+public agent never loads the apps of the subscription that it runs on. Each person who
 talks to an agent gets a sandbox of their own for it.
 
 A workflow that an agent starts runs as the person who asks. That person must be
@@ -79,11 +80,11 @@ Search filters conversation titles. It ignores letter case and does not search
 message text. Search does not close the current conversation or clear its draft.
 
 Select the pin beside a conversation or in its header to keep it in **Pinned**.
-Pins are saved for your account and stay after a page reload. Select the pin
+Druks saves pins for your account. They stay after a page reload. Select the pin
 again to remove it. A pin does not change a conversation's message times.
 
 The remaining conversations appear under **Today**, **Yesterday**, or **Earlier**,
-using the timezone in your preferences. Each group shows the most recent message
+in the timezone of your preferences. Each group shows the most recent message
 first. The header shows the last saved agent reply time. Times include a date
 for messages from previous days.
 
@@ -120,8 +121,8 @@ A cancelled turn shows **Cancelled**. Druks keeps the text that the agent
 already sent. **Send again** saves a new message with the same text and file.
 
 If a turn dies, Druks shows **Interrupted**. Druks never sends that turn again
-by itself. **Send again** saves a new message with the same text and file. This
-action can cause the agent to do an external action again.
+by itself. **Send again** saves a new message with the same text and file. Such a
+message can cause the agent to do an external action again.
 
 Druks tries a delivery up to five times. It stops at the first attempt when a
 person must change the Chat agent's settings or provider credentials. When the
@@ -141,18 +142,19 @@ again and reads the saved messages and available live events.
 
 ## Read replies and tool calls
 
-Agent text streams into the conversation. A tool row shows its ACP title
-and status. Select the row to read its input and output.
-Tool rows have no timestamps. Saved replies retain their tool details and
-their position between text segments. Slack, GitHub, and WhatsApp get the text
-after the agent's last tool call. The text before it holds the agent's
-notes. Only the Chat page shows them. When the agent writes nothing after its
-last tool call, Druks asks it once for the answer in an internal message. When
-that turn ends without text too, the channel gets "The reply is unavailable.
-Send the message again to retry." A turn that asks a [question](#questions) or
-shows [blocks](#blocks) has an answer, even with no text.
+Agent text streams into the conversation. A tool row shows its ACP title and status.
+Select the row to read its input and output. Tool rows have no timestamps. Saved replies
+keep their tool details and their position between text segments.
 
-An agent plan shows the latest complete plan. A plan update replaces the
+Slack, GitHub, and WhatsApp get the text after the agent's last tool call. The text
+before it holds the agent's notes. Only the Chat page shows them.
+
+When the agent writes nothing after its last tool call, Druks asks it once for the
+answer in an internal message. When that turn ends without text too, the channel gets
+"The reply is unavailable. Send the message again to retry." A turn that asks a
+[question](#questions) or shows [blocks](#blocks) has an answer, even with no text.
+
+An agent plan shows the newest plan in full. A plan update replaces the
 previous list. Tool updates instead change only the fields that the adapter
 sends. Completed replies retain text, tool calls, and blocks, not the live plan.
 
@@ -309,6 +311,9 @@ When the turn ends, Druks sends the blocks after the agent's text:
   other blocks. The Chat page also draws the blocks of a Slack reply.
 - In WhatsApp and GitHub, the reply ends with the text form of the blocks.
 
+In Slack, Druks uploads the image of a Druks file when the account of the conversation
+can use the app of the file. Each person who sees the message then sees that image.
+
 A turn can show blocks and ask a question. In Slack, you then get one message: the
 text, the blocks, the question, and its buttons or inputs. When Druks cuts the rest to
 fit, the question, the buttons, and the inputs stay whole. They also stay whole when
@@ -324,11 +329,11 @@ An operator's Chat key permits every tool of the Druks toolkit: the routes tagge
 tool list lists and calls only those tools. The agents of a public WhatsApp number
 have such keys: see [WhatsApp](#whatsapp).
 
-An operator's agent also reaches every MCP server that is enabled in
-**Settings → MCP servers**, with the same credentials as a workflow agent. Chat
-leaves out a server that cannot authenticate for you, such as an OAuth server
-that you have not connected. A Bot's agent reaches only the Druks server. When
-you enable, disable, or connect a server, the next turn replaces the sandbox.
+An operator's agent also reaches every MCP server that is enabled in **Settings → MCP
+servers**, with the same credentials as a workflow agent. Chat leaves out a server that
+cannot authenticate for you, such as an OAuth server that you did not connect. The
+agent of a public number reaches only the Druks server. When you enable, disable, or
+connect a server, the next turn replaces the sandbox.
 
 An operator's sandbox also holds their own sign-in at each service that names a
 host. The command line acts as that person. With a GitHub sign-in, git and
@@ -367,9 +372,9 @@ approver. The request is the ask as JSON, as
 `get_gate` gives it. A review's context is text, or the JSON of its
 [blocks](writing-an-app.md#wait-for-input). Druks reads each subject status in the
 blocks when it writes the message. In a Slack conversation, you also get the
-question of a run that waits for an answer in the dashboard, unless it names
-another account as its approver. It comes in the thread
-or direct message, with a button for each choice. Only the person who started the
+question of a run that waits for an answer in the dashboard. You do not get a question
+that names another account as its approver. The question that you get comes in the
+thread or direct message, with a button for each choice. Only the person who started the
 run can click them. The question with its buttons is the only message that you get
 about it. Druks keeps the internal message for the agent's next turn, such as the
 turn of your next message there, and starts no turn for it. The agent then knows
@@ -378,8 +383,8 @@ each of the question's own questions. The input is a menu of its options or a bo
 for your own words. A last box takes your note. A click sends them with your choice and answers
 the run. The agent does not ask for them. When the run waits for the provider's
 usage limit to reset, Druks itself posts a line. The line gives the time the run
-continues, in the installation's timezone. The agent shares the run's login. Its own turn would
-fail on the same limit. When the run continues, Druks adds an internal message that
+continues, in the installation's timezone. The agent shares the run's login. Its own turn fails
+on the same limit. When the run continues, Druks adds an internal message that
 says so. When the run fails, Druks adds an internal message with the failure to that
 conversation. When someone cancels the run, Druks adds an internal message with the
 reason. A cancel that the agent of the same conversation made adds none, because
@@ -394,9 +399,10 @@ on. See [Report status](writing-an-app.md#report-status). The Chat page shows th
 status in the conversation, whatever its channel: see
 [Read replies and tool calls](#read-replies-and-tool-calls).
 
-The sandbox receives credential placeholders. The Drukbox proxy exchanges
-them for real credentials. See [public URLs and access control](configuration.md#public-urls-and-access-control)
-for the MCP address and edge requirements.
+The sandbox receives credential placeholders. The Drukbox proxy exchanges them for real
+credentials. See
+[public URLs and access control](configuration.md#public-urls-and-access-control) for
+the MCP address and edge requirements.
 
 ## Execution and recovery
 
@@ -428,23 +434,23 @@ prompt. The `deferred` message waits for the next turn.
 After delivery wins, Stop sends ACP `session/cancel` through the bridge.
 The bridge matches the message ID. A delayed Stop cannot cancel the next
 turn. Druks saves the partial reply and marks the message `cancelled`.
+
 The bridge records the message ID when it accepts a prompt. When a delivery
 fails, the next delivery asks the bridge for that ID. If the bridge holds the
 message, Druks follows the turn. If the bridge is idle with another ID, the
 prompt never arrived. Druks sends the message again. The bridge refuses a
 prompt for an ID it already accepted. A turn never runs twice.
 
-The bridge numbers the current turn's events and writes them to disk. Druks
-reads the events after its last position and streams them only to the owner's
-open pages.
-After a completed turn, Druks saves the adapter's session files as a Druks
-file. The next saved archive replaces the previous archive. A conversation that
-moves to another harness starts a fresh agent session and keeps its messages.
+The bridge numbers the current turn's events and writes them to disk. Druks reads the
+events after its last position and streams them only to the owner's open pages. After a
+completed turn, Druks saves the adapter's session files as a Druks file. The next saved
+archive replaces the previous archive. A conversation that moves to another harness
+starts a fresh agent session and keeps its messages.
 
 Before each turn, the bridge compares the conversation's instructions and MCP
 servers with the ones its adapter opened with. When they differ, it starts a
 new adapter and loads the same agent session. A deployed prompt change or a
-newly connected MCP server therefore reaches the next message. The history
+newly connected MCP server thus reaches the next message. The history
 stays. A model or effort change applies to the live adapter. Each Druks release
 carries its own bridge program. A bridge of an older release exits once no turn
 runs in it. The next turn starts the current one.
@@ -547,19 +553,21 @@ cron, and next time. `change_schedule` replaces the tool, the arguments, and the
 cron of one of the caller's schedules. `stop_schedule` stops it. The runs its
 calls already started go on. An admin can also stop another person's schedule.
 
-An agent's page lists the schedules set in the agent's conversations, each with
-its owner, its last run and how it ended. A person sees the schedules whose tool
-belongs to an app that they can use.
+An agent's page lists the schedules that people set in the agent's conversations, each
+with its owner, its last run, and how that run ended. A person sees the schedules whose
+tool belongs to an app that they can use.
 
 ## Tasks
 
 Some asks fit no tool, such as "get the price from this site every 2 hours".
 For these, the agent calls `chat_run_instruction` with the task in words. The
-tool starts a `chat.run_instruction` run in a fresh sandbox. Like any run, it shows
-on the run page with its cost. In the sandbox, the conversation's agent does the
+tool starts a `chat.run_instruction` run in a fresh sandbox. Like every run, it shows
+on the run page with its cost.
+
+In the sandbox, the conversation's agent does the
 task with its instructions and its model, on its billing, and with only its
-picked skills. In a chat without an agent, the call uses the model set for the
-`chat.run_instruction` instruction in Settings and every enabled skill. The run
+picked skills. In a chat without an agent, the call uses the model that Settings gives the
+`chat.run_instruction` instruction, and every enabled skill. The run
 belongs to the person in the chat and reports the task with its answer, or its
 failure, to the conversation.
 
@@ -582,8 +590,9 @@ A number is public or private:
 
 - **A public number**, such as an app's, answers anyone who writes. One person
   is the number's [admin](#admins).
-- **A private number**, such as Chat's, answers only operators who paired their
-  phone with it. Each operator talks to the Bot in a conversation of their own. It has no admin.
+- **A private number**, such as Chat's, answers only operators who paired their phone
+  with it. Each operator talks to the Bot in a conversation of their own. It has no
+  admin.
 
 ### Link a number
 
@@ -660,7 +669,7 @@ the person in one line to write instead. The web page shows the typed text, the
 words, and a link to the audio.
 
 Druks also adds **internal messages** to a conversation. Each one comes from a
-fixed template. An internal message starts a turn like any message, unless it
+fixed template. An internal message starts a turn like every other message, unless it
 waits for the agent's next turn: see [Agent access](#agent-access). It never
 goes to WhatsApp.
 
@@ -710,7 +719,7 @@ puts `[Druks] ` before each reply that it sends into a number's chat with itself
 Then you can tell the agent's replies from your own messages.
 
 To get the questions on another phone, which rings, select **Add admin** on the
-number. This opens a one-time code that expires after 10 minutes. Druks then
+number. The button opens a one-time code that expires after 10 minutes. Druks then
 sends the number's questions to the person who sends exactly that code from
 their own WhatsApp. The admin's agent greets them. A number has one such
 person. Both chats belong to the number's bot admin account, which never signs
@@ -720,7 +729,7 @@ in. The only text that Druks reads in a message is an open one-time code.
 
 A run records the conversation whose tool call started it. When such a run
 parks with an in-app question, Druks adds an internal message to the admin's
-conversation. The message holds the request, the person it is about, the run ID,
+conversation. The message holds the request, the person that it is about, the run ID,
 and when the run started to wait. The admin's agent asks the admin, and answers
 with `answer_gate`. When two questions are open, the run ID tells them apart.
 
@@ -784,14 +793,16 @@ deletes, joins, hidden events, and people from other workspaces.
 
 ### Files
 
-A file you send to the bot, in a direct message or in a thread you joined,
+In a direct message or a thread that you joined, a file that you send to the bot
 becomes a Druks file on its message. A message with only a file starts a turn
-like any other. An image reaches the agent with its message. Any other file
-except audio reaches the agent as a link to a copy in the sandbox. The agent
-opens the copy with its tools. An image over 25 MiB goes as a link too. An audio
-clip becomes text the way a WhatsApp voice note does: see
+like every other message. An image reaches the agent with its message. Every other file,
+except audio, reaches the agent as a link to a copy in the sandbox. The agent
+opens the copy with its tools. An image over 25 MiB goes as a link too.
+
+An audio clip becomes text the way a WhatsApp voice note does: see
 [WhatsApp](#whatsapp). Each further file in one Slack message gets a message of
-its own. The agent sends no files back.
+its own. The agent attaches no file to a reply. When the agent shows the image of
+a Druks file with `chat_show`, Slack shows the image: see [Blocks](#blocks).
 
 ### Rooms
 
@@ -948,8 +959,8 @@ removes every linked number first.
 1. Twilio sends the call to Druks. Druks checks Twilio's signature and starts a
    new conversation for the caller.
 2. Druks tells Twilio to stream the call's audio to the calls server.
-3. The voice model answers. It starts by saying that it is an automated
-   assistant and that the call is transcribed.
+3. The voice model answers. It first says that it is an automated assistant
+   and that the call is transcribed.
 
 Druks rejects a call to a number that is not linked, and a call while the Voice
 card is disconnected.
@@ -970,8 +981,8 @@ Druks saves each line of the call in the conversation as it is said. If a tool
 starts a run, the run reports back to the conversation. Nothing reads the
 report during the call. The caller hears the outcome on their next call.
 
-A call ends when the caller hangs up, when the voice model ends it, after 15
-seconds of silence, or after 5 minutes.
+A call ends when the caller or the voice model ends it, after 15 seconds of
+silence, or after 5 minutes.
 
 ### Read a call
 
@@ -983,7 +994,6 @@ An operator who can use the number's app can read its calls:
 3. Select a call to read its transcript.
 
 A call belongs to the number's bot account, and nobody signs in as that
-account. That is why every operator who can use the app can read calls,
-although only the creator can read any other conversation. A removed number
-keeps its calls. An access token cannot read calls, and the Chat page does not
-show them.
+account. As a result, every operator who can use the app can read calls. Other
+conversations are for their creator only. A removed number keeps its calls. An
+access token cannot read calls, and the Chat page does not show them.

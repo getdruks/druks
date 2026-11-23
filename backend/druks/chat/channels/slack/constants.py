@@ -67,9 +67,13 @@ CONFIRM_BUTTON_LIMIT = 30
 CONFIRM_DENY_TEXT = "Back"
 # The image formats that Slack draws, and its limits for an image, from the Block Kit reference.
 IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif")
+IMAGE_CONTENT_TYPES = ("image/png", "image/jpeg", "image/gif")
 IMAGE_URL_LIMIT = 3000
 IMAGE_ALT_TEXT_LIMIT = 2000
 IMAGE_TITLE_LIMIT = 2000
+# The largest Druks file that Druks uploads to Slack for an image. Druks keeps the whole file in
+# memory while it uploads it.
+IMAGE_BYTES_LIMIT = 10 * 1024 * 1024
 # What a button that opens a link sends as its action. A click on it answers no notification.
 LINK_BUTTON_ACTION_ID = "link"
 # The id of each input of a block of a notification starts with the position of the block.

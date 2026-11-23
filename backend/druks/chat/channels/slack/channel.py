@@ -87,11 +87,12 @@ class SlackChannel(Channel):
         account's own conversation, or waits under a private link until the person
         connects their Slack account. A tag followed by an agent's name reaches the
         person's conversation with that agent. A tag that names none reaches the
-        person's latest conversation in the thread, or else the channel's agent. An
-        untagged reply reaches the thread conversation the person used in the last day,
-        unless they asked for a tag. The tag of an automation, which is another app's bot
-        or a workflow, reaches the default account once an admin accepted the automation,
-        and its first tag waits for that. Everything else is not for the bot."""
+        person's latest conversation in the thread, or else the channel's agent.
+
+        An untagged reply reaches the thread conversation that the person used in the last
+        day, unless they asked for a tag. The tag of an automation, which is another app's
+        bot or a workflow, reaches the default account once an admin accepted the
+        automation. Its first tag waits for that. Everything else is not for the bot."""
         if bot_id := message.get("bot_id"):
             automation = await Automation.get_or_none(
                 session, connection_id=row.id, source_id=bot_id
@@ -171,7 +172,7 @@ class SlackChannel(Channel):
         agent_id: str | None,
     ) -> Conversation:
         """Save the message in the account's conversation with the agent, or with the
-        Bot, for its place, and start its turn. Each file the message carries is a Druks
+        Bot, for its place, and start its turn. Each file that the message carries is a Druks
         file: the first on the message, each further one on a message of its own. A
         message with no text and no file gives the agent nothing to read."""
         conversation = await Conversation.get_or_create_for_user(
@@ -201,7 +202,7 @@ class SlackChannel(Channel):
             )
             for shared, content in zip(shares, contents, strict=True)
         ]
-        # The agent would take the bot's own mention for the person it answers.
+        # Else the agent takes the bot's own mention for the person that it answers.
         text = message["text"].replace(f"<@{row.identity['bot_user_id']}>", "").strip()
         source_id = f"{message['channel']}:{message['ts']}"
         if files:
@@ -248,7 +249,7 @@ class SlackChannel(Channel):
         if is_first_contact:
             await client.post_markdown(message["user"], await cls.get_welcome())
         # Slack drops a message that only one person sees unless they are active in
-        # that client, so the link goes to their DM, which keeps it.
+        # that client. The link goes to their DM, which keeps it.
         await client.post_markdown(
             message["user"],
             LINK_MESSAGE.format(url=f"{endpoint}/api/chat/services/slack/link/{token}"),
@@ -270,8 +271,8 @@ class SlackChannel(Channel):
                 connection_id=row.id, source_id=bot["id"], name=bot["name"], first_message=message
             )
         )
-        # Saved before the post: a second first tag of one automation fails here and
-        # posts nothing.
+        # The flush comes before the post: a second first tag of one automation fails here
+        # and posts nothing.
         await session.flush()
         endpoint = get_settings().urls.endpoint.rstrip("/")
         room, _, thread_ts = get_thread_id(message).partition(":")
@@ -304,6 +305,8 @@ class SlackChannel(Channel):
                 client,
                 room or conversation.user_id,
                 ui.Stack(blocks).to_markdown(),
+                session=session,
+                account=conversation.account,
                 blocks=blocks,
                 thread_ts=thread_ts,
                 username=username,
@@ -349,9 +352,9 @@ class SlackChannel(Channel):
         """Post the notification in the conversation's thread, or its DM. A notification
         that an answer closed before the post says that its question is closed, in place
         of its buttons and inputs. Without a conversation, post the notification for its
-        account: in the channel that the person chose, then in the bot's DM with their
-        Slack user when the bot cannot post in that channel. An account with neither gets
-        no message."""
+        account in the channel that the person chose. When the bot cannot post there, post
+        it in the bot's DM with their Slack user. An account with neither gets no
+        message."""
         return await cls._post(
             session,
             conversation=conversation,
@@ -373,13 +376,13 @@ class SlackChannel(Channel):
         ``post_buttons`` says. A status gives its content as its message draws it."""
         thread_ts = ""
         actions, fields, outcome = notification.actions, notification.fields, ""
+        account = await notification.get_account(session)
         if conversation:
             room, _, thread_ts = conversation.thread_id.partition(":")
             rooms = [room or conversation.user_id]
             if notification.is_acknowledged:
                 actions, fields, outcome = None, None, CLOSED_MESSAGE
         else:
-            account = await session.get(Account, notification.account_id)
             sign_ins = await VaultSecret.list_account_connections(
                 session,
                 audience=Audience.service(Slack.slug),
@@ -396,6 +399,8 @@ class SlackChannel(Channel):
             deliver_notification,
             SlackClient(token=await Slack.get_bot_token()),
             body=body,
+            session=session,
+            account=account,
             blocks=blocks,
             thread_ts=thread_ts,
             actions=actions,
@@ -427,6 +432,8 @@ class SlackChannel(Channel):
             SlackClient(token=await Slack.get_bot_token()),
             channel=room,
             body=notification.body,
+            session=session,
+            account=await notification.get_account(session),
             blocks=notification.blocks,
             message_ts=message_ts,
             deep_link=notification.deep_link,
@@ -452,6 +459,8 @@ class SlackChannel(Channel):
                 SlackClient(token=await Slack.get_bot_token()),
                 channel=room,
                 body=body,
+                session=session,
+                account=await notification.get_account(session),
                 blocks=blocks,
                 message_ts=message_ts,
                 deep_link=notification.deep_link,
@@ -478,7 +487,7 @@ class SlackChannel(Channel):
 
     @classmethod
     def get_block_text(cls, block: dict) -> str:
-        """A link shows its URL so the agent can follow it."""
+        """A link shows its URL, so that the agent can follow it."""
         match block["type"]:
             case "plain_text" | "mrkdwn" | "text":
                 return block["text"]
@@ -536,8 +545,8 @@ class SlackChannel(Channel):
     async def read_thread(cls, session: AsyncSession, conversation: Conversation) -> list[dict]:
         """The thread's newest messages, oldest first, with who wrote each one and the
         files on it. Every agent in the thread posts as the one bot, so a reply is this
-        conversation's by its recorded Slack id. A webhook's post has no author and is
-        left out."""
+        conversation's by its recorded Slack id. A webhook's post has no author, so the
+        list leaves it out."""
         room, _, thread_ts = conversation.thread_id.partition(":")
         if not room:
             raise ChannelHasNoThreadsError("A direct message has no thread to read.")
@@ -580,6 +589,9 @@ class SlackChannel(Channel):
         client = SlackClient(token=await Slack.get_bot_token())
         shared = (await client.files_info(file=file_id))["file"]
         if room not in shared["channels"] + shared["groups"]:
-            raise FileNotInThreadError(f"File {file_id} is not shared where this thread lives.")
+            raise FileNotInThreadError(
+                f"File {file_id} is not shared where this thread lives. "
+                "Give the id of a file that the thread lists."
+            )
         content = await client.download(shared["url_private_download"])
         return content, shared["name"], shared["mimetype"]
