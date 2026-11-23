@@ -3526,7 +3526,7 @@ export function AppPane({
                             key={option.scope + '.' + option.kind + '.' + option.field.name}
                             setting={`${option.scope}.${option.kind}.${option.field.name}`}
                             label={option.field.label}
-                            help={option.field.help}
+                            help={option.field.managed ? 'Managed by configuration' : option.field.help}
                             type={option.field.type}
                             choices={option.field.choices}
                             choiceDetails={option.field.choiceDetails}
@@ -3538,7 +3538,7 @@ export function AppPane({
                             value={secret ? String(override ?? '') : String(currentValue ?? '')}
                             onChange={(next) => setTypedOption(option, next)}
                             error={fieldError}
-                            disabled={busy}
+                            disabled={busy || option.field.managed}
                           />
                         )
                       })}

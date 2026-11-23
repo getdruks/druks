@@ -192,15 +192,15 @@ async def update_app_settings(
             for field, value in changes.items():
                 await app.override_setting(field, value)
             changed_apps.append(app)
+        settings_problems = {}
+        for app in changed_apps:
+            if problems := (await app.settings()).clean():
+                settings_problems[app.name] = problems
     except ValueError as exc:
-        # A domain rejection answers 422. override_setting already redacted the submitted
-        # value, so a rejected secret stays out of the message.
+        # A domain rejection answers 422. override_setting redacts a submitted value, and
+        # App.settings() the value of a secret file, so neither reaches the message.
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    settings_problems = {}
-    for app in changed_apps:
-        if problems := (await app.settings()).clean():
-            settings_problems[app.name] = problems
     if settings_problems:
         raise HTTPException(status_code=422, detail=settings_problems)
 

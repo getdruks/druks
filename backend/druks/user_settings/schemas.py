@@ -112,10 +112,12 @@ class SettingsFieldResponse(Schema):
     secret_set: bool | None
     multiline: bool = False
     overridden: bool
+    # A secret file sets the field, so the settings form cannot change or clear it.
+    managed: bool = False
 
     @classmethod
     def from_field(
-        cls, name: str, field: FieldInfo, *, value: Any, overridden: bool
+        cls, name: str, field: FieldInfo, *, value: Any, overridden: bool, managed: bool = False
     ) -> "SettingsFieldResponse":
         kind = field_kind(field)
         secret = kind == "secret"
@@ -135,6 +137,7 @@ class SettingsFieldResponse(Schema):
             secret_set=bool(value) if secret else None,
             multiline=field_multiline(field),
             overridden=overridden,
+            managed=managed,
         )
 
 

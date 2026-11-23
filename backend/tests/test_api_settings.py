@@ -287,6 +287,7 @@ def test_apps_surface_build_agents_and_workflow_defaults(tmp_path: Path):
         "secretSet": None,
         "multiline": False,
         "overridden": False,
+        "managed": False,
     }
 
 

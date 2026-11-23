@@ -119,6 +119,20 @@ as files. Set `DRUKS_SECRETS_DIR` to the directory, for example a mounted
 `sandbox.service_token`. Druks does not start when a secret is in the
 environment and in a file. The installer does not use files.
 
+A file can also set a `Secret` field of an app's settings. Name the file
+`apps.<app>.<field>`, for example `apps.ops.dev_ops_key`. When the file exists,
+its content is the value. The app settings form shows the field as **Managed by
+configuration**, and nobody can change or clear it there. When the file is
+absent, the field keeps the value that an admin saved, or stays unset. Plain
+fields of app settings stay on the dashboard. Druks reads the files at startup,
+so restart Druks after a change. Druks does not start when a file
+`apps.<app>.<field>` names an app that is not installed or not enabled, a field
+that the app does not declare, or a field that is not a `Secret`. The error
+names the file. A file cannot switch an app on or off: `[apps.<name>] enabled`
+in `druks.toml` does, and Druks does not start with a file
+`apps.<app>.enabled`. When the app's settings refuse a file's value, reading
+them fails with an error that names the files, never the value.
+
 ## Managed services
 
 A `[services.<slug>]` table makes that service managed. `druks.toml` and the

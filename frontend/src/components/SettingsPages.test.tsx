@@ -169,6 +169,7 @@ const appSettings: AppsSettingsResponse = {
           secretSet: null,
           multiline: false,
           overridden: false,
+          managed: false,
         },
         {
           name: 'trigger_status',
@@ -184,6 +185,7 @@ const appSettings: AppsSettingsResponse = {
           secretSet: null,
           multiline: false,
           overridden: false,
+          managed: false,
         },
       ],
     },
@@ -211,6 +213,7 @@ const appSettings: AppsSettingsResponse = {
           secretSet: false,
           multiline: false,
           overridden: false,
+          managed: false,
         },
         {
           name: 'private_key',
@@ -226,6 +229,7 @@ const appSettings: AppsSettingsResponse = {
           secretSet: true,
           multiline: true,
           overridden: true,
+          managed: false,
         },
       ],
     },
@@ -253,6 +257,7 @@ const appSettings: AppsSettingsResponse = {
           secretSet: null,
           multiline: false,
           overridden: false,
+          managed: false,
         },
       ],
     },
@@ -648,6 +653,18 @@ describe('SettingsPages app fields', () => {
       )
     const body = JSON.parse(String(patchCall?.[1]?.body))
     expect(body.appSettings.review).toEqual({ private_key: pem })
+  })
+
+  it('shows a secret that a file sets as managed and keeps its box disabled', async () => {
+    const settings = structuredClone(appSettings)
+    const appId = settings.apps.find((app) => app.name === 'review')!.settings[0]!
+    Object.assign(appId, { secretSet: true, managed: true })
+    stubFetch(false, {}, settings)
+    renderSettings('/apps/review/settings')
+
+    const appIdField = (await screen.findByText('Review App ID')).closest('.set-field')
+    expect(appIdField?.textContent).toContain('Managed by configuration')
+    expect(appIdField?.querySelector('input')?.disabled).toBe(true)
   })
 
   it('shows live choices as a select that keeps the stored value', async () => {
@@ -1289,6 +1306,7 @@ describe('canonical app settings', () => {
             secretSet: null,
             multiline: false,
             overridden: false,
+            managed: false,
           },
         ],
       },

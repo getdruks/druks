@@ -151,6 +151,7 @@ async def get_app_settings(
     overrides: dict[str, SettingsOverride],
 ) -> AppSettingsResponse:
     model = app.settings_model
+    configured = app.configured_settings()
     return AppSettingsResponse(
         name=app.name,
         description=app.description,
@@ -172,7 +173,9 @@ async def get_app_settings(
             SettingsFieldResponse.from_field(
                 name,
                 field,
-                value=await SettingsOverride.app_setting(
+                value=configured[name]
+                if name in configured
+                else await SettingsOverride.app_setting(
                     session,
                     app.name,
                     name,
@@ -181,6 +184,7 @@ async def get_app_settings(
                     overrides=overrides,
                 ),
                 overridden=f"app:{app.name}:{name}" in overrides,
+                managed=name in configured,
             )
             for name, field in (model.model_fields if model else {}).items()
         ],

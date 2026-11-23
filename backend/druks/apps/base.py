@@ -8,7 +8,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING, Annotated, Any, ClassVar
 
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, Field, SecretStr, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # Every layer imports druks.apps, so this module loads no models. A method that
@@ -25,6 +25,7 @@ from .settings import (
     coerce_setting_value,
     field_kind,
     field_live_choices,
+    redacted_validation_message,
     validate_setting_override,
     validate_settings_declaration,
 )
@@ -201,7 +202,25 @@ class App:
             )
             for name, field in model.model_fields.items()
         }
-        return model.model_validate(values)
+        configured = cls.configured_settings()
+        try:
+            return model.model_validate({**values, **configured})
+        except ValidationError as error:
+            if not configured:
+                raise
+            # A validator can quote the value it refuses, and a file's value is a secret.
+            files = ", ".join(f"apps.{cls.name}.{field}" for field in configured)
+            raise ValueError(
+                f"The settings of {cls.name} are invalid: "
+                f"{redacted_validation_message(model, error)}. Secret files set {files}."
+            ) from None
+
+    @classmethod
+    def configured_settings(cls) -> dict[str, str]:
+        """The secret settings that configuration sets: the file ``apps.<name>.<field>``
+        in DRUKS_SECRETS_DIR, read at startup. The settings form cannot change them."""
+        table = get_settings().apps.get(cls.name, {})
+        return {field: value for field, value in table.items() if field != "enabled"}
 
     @classmethod
     async def override_setting(cls, field: str, value: Any) -> None:
@@ -213,6 +232,11 @@ class App:
         model = cls.settings_model
         if not model or field not in model.model_fields:
             raise ValueError(f"Unknown {cls.name} setting {field!r}")
+        if field in cls.configured_settings():
+            raise ValueError(
+                f"{field} is managed by configuration. Change the file apps.{cls.name}.{field} "
+                "in DRUKS_SECRETS_DIR."
+            )
         if value is not None:
             value = coerce_setting_value(model, field, value)
             validate_setting_override(model, (await cls.settings()).model_dump(), field, value)
