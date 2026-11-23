@@ -67,6 +67,7 @@ class SlackChannel(Channel):
     has_inputs = True
     has_blocks = True
     has_account_notifications = True
+    has_editable_status = True
     reaction_ack = "eyes"
 
     @classmethod
@@ -75,7 +76,9 @@ class SlackChannel(Channel):
     ) -> Account | None:
         """The account with a live Slack grant for the Slack user who wrote the message."""
         authority = Slack.Authentication.get_authority(row.identity["team_id"])
-        owner_id = await VaultSecret.get_owner_id(session, authority, message["user"])
+        owner_id = await VaultSecret.get_owner_id(
+            session, authority=authority, subject=message["user"]
+        )
         return await session.get(Account, owner_id) if owner_id else None
 
     @classmethod
@@ -95,9 +98,11 @@ class SlackChannel(Channel):
             )
             if automation and automation.is_accepted:
                 account = await Account.get_default(session)
-                await cls.save_message(session, row, account, message, agent_id=None)
+                await cls.save_message(
+                    session, row, account=account, message=message, agent_id=None
+                )
             elif not automation:
-                await cls.hold_message(session, row, message)
+                await cls.hold_message(session, row, message=message)
             return
         thread_id = get_thread_id(message)
         mention = f"<@{row.identity['bot_user_id']}>"
@@ -114,11 +119,11 @@ class SlackChannel(Channel):
                 text = message["text"].partition(mention)[2].lstrip(",: \n")
                 agent = await Agent.lookup(session, text)
                 if not agent and thread_id:
-                    latest = await Conversation.get_for_user(
+                    latest_conversation = await Conversation.get_for_user(
                         session, row, user_id=message["user"], thread_id=thread_id
                     )
-                    if latest:
-                        agent = latest.agent
+                    if latest_conversation:
+                        agent = latest_conversation.agent
                     else:
                         agent = await Agent.get_for_channel(session, message["channel"])
             if agent and not linked_account.can_talk_to(agent):
@@ -129,18 +134,30 @@ class SlackChannel(Channel):
                 )
                 return
             await cls.save_message(
-                session, row, linked_account, message, agent_id=agent.id if agent else None
+                session,
+                row,
+                account=linked_account,
+                message=message,
+                agent_id=agent.id if agent else None,
             )
         elif is_addressed:
             await cls.send_link(message)
         elif linked_account:
-            joined = await Conversation.get_for_user(
+            joined_conversation = await Conversation.get_for_user(
                 session, row, user_id=message["user"], thread_id=thread_id
             )
             since = Base.utc_now() - timedelta(seconds=JOINED_THREAD_SECONDS)
-            if joined and not joined.is_tag_required and joined.last_message_at > since:
+            if (
+                joined_conversation
+                and not joined_conversation.is_tag_required
+                and joined_conversation.last_message_at > since
+            ):
                 await cls.save_message(
-                    session, row, linked_account, message, agent_id=joined.agent_id
+                    session,
+                    row,
+                    account=linked_account,
+                    message=message,
+                    agent_id=joined_conversation.agent_id,
                 )
 
     @classmethod
@@ -160,7 +177,7 @@ class SlackChannel(Channel):
         conversation = await Conversation.get_or_create_for_user(
             session,
             row,
-            account.id,
+            account_id=account.id,
             source=ConversationSource.SLACK,
             # A workflow's post has no user, so its bot ID stands for the person.
             user_id=message.get("user") or message["bot_id"],
@@ -191,7 +208,7 @@ class SlackChannel(Channel):
             await conversation.create_message(session, text, source_id=source_id, file=files[0])
             for shared, file in zip(shares[1:], files[1:], strict=True):
                 await conversation.create_message(
-                    session, "", source_id=f"{source_id}:{shared['id']}", file=file
+                    session, body="", source_id=f"{source_id}:{shared['id']}", file=file
                 )
         elif text:
             await conversation.create_message(session, text, source_id=source_id)
@@ -218,12 +235,15 @@ class SlackChannel(Channel):
         thread where the link is."""
         token = secrets.token_urlsafe(32)
         await get_client().set(
-            LINK_KEY.format(token=token), json.dumps(message), ex=LINK_TTL_SECONDS
+            name=LINK_KEY.format(token=token), value=json.dumps(message), ex=LINK_TTL_SECONDS
         )
         endpoint = get_settings().urls.endpoint.rstrip("/")
         client = SlackClient(token=await Slack.get_bot_token())
         is_first_contact = await get_client().set(
-            WELCOME_KEY.format(user=message["user"]), "1", nx=True, ex=WELCOME_TTL_SECONDS
+            name=WELCOME_KEY.format(user=message["user"]),
+            value="1",
+            nx=True,
+            ex=WELCOME_TTL_SECONDS,
         )
         if is_first_contact:
             await client.post_markdown(message["user"], await cls.get_welcome())
@@ -308,7 +328,7 @@ class SlackChannel(Channel):
         """Refuse fields whose message Slack refuses: more blocks than one message holds, or
         a name, a text, or options past their Slack limits. The check reads the blocks that
         delivery posts. A field's name is the id of its block."""
-        blocks = get_blocks("", fields=fields, token=mint_correlation_token())
+        blocks = get_blocks(text="", fields=fields, token=mint_correlation_token())
         if len(blocks) > MESSAGE_BLOCKS_LIMIT:
             raise FormError(
                 f"A Slack message holds {MESSAGE_BLOCKS_LIMIT} blocks: the question, an input "
@@ -332,6 +352,25 @@ class SlackChannel(Channel):
         account: in the channel that the person chose, then in the bot's DM with their
         Slack user when the bot cannot post in that channel. An account with neither gets
         no message."""
+        return await cls._post(
+            session,
+            conversation=conversation,
+            notification=notification,
+            body=notification.body,
+            blocks=notification.blocks,
+        )
+
+    @classmethod
+    async def _post(
+        cls,
+        session: AsyncSession,
+        conversation: Conversation | None,
+        notification: Notification,
+        body: str,
+        blocks: list[dict] | None,
+    ) -> str | None:
+        """Post ``body`` and ``blocks`` as the message of the notification, where
+        ``post_buttons`` says. A status gives its content as its message draws it."""
         thread_ts = ""
         actions, fields, outcome = notification.actions, notification.fields, ""
         if conversation:
@@ -342,7 +381,9 @@ class SlackChannel(Channel):
         else:
             account = await session.get(Account, notification.account_id)
             sign_ins = await VaultSecret.list_account_connections(
-                session, Audience.service(Slack.slug), notification.account_id
+                session,
+                audience=Audience.service(Slack.slug),
+                account_id=notification.account_id,
             )
             rooms = []
             if account.notification_channel_id:
@@ -354,8 +395,8 @@ class SlackChannel(Channel):
         post = partial(
             deliver_notification,
             SlackClient(token=await Slack.get_bot_token()),
-            body=notification.body,
-            blocks=notification.blocks,
+            body=body,
+            blocks=blocks,
             thread_ts=thread_ts,
             actions=actions,
             fields=fields,
@@ -381,17 +422,43 @@ class SlackChannel(Channel):
         notification: Notification,
     ) -> None:
         """Edit the notification's message to say that its question is closed."""
-        client = SlackClient(token=await Slack.get_bot_token())
         room, message_ts = notification.message_id.split(":")
         await deliver_notification(
-            client,
-            room,
-            notification.body,
+            SlackClient(token=await Slack.get_bot_token()),
+            channel=room,
+            body=notification.body,
             blocks=notification.blocks,
             message_ts=message_ts,
             deep_link=notification.deep_link,
             outcome=CLOSED_MESSAGE,
             question_offset=notification.question_offset,
+        )
+
+    @classmethod
+    async def show_status(
+        cls,
+        session: AsyncSession,
+        conversation: Conversation | None,
+        notification: Notification,
+        body: str,
+        blocks: list[dict],
+    ) -> str | None:
+        """Edit the status's message in the channel that Slack gave it, such as a DM, to show
+        ``body`` and ``blocks``. A status with no message yet posts where ``post_buttons``
+        posts."""
+        if notification.message_id:
+            room, message_ts = notification.message_id.split(":")
+            await deliver_notification(
+                SlackClient(token=await Slack.get_bot_token()),
+                channel=room,
+                body=body,
+                blocks=blocks,
+                message_ts=message_ts,
+                deep_link=notification.deep_link,
+            )
+            return notification.message_id
+        return await cls._post(
+            session, conversation=conversation, notification=notification, body=body, blocks=blocks
         )
 
     @classmethod
@@ -475,7 +542,9 @@ class SlackChannel(Channel):
         if not room:
             raise ChannelHasNoThreadsError("A direct message has no thread to read.")
         client = SlackClient(token=await Slack.get_bot_token())
-        messages = await client.list_replies(room, thread_ts, limit=THREAD_MESSAGES)
+        messages = await client.list_replies(
+            channel=room, thread_ts=thread_ts, limit=THREAD_MESSAGES
+        )
         own_replies = await conversation.list_reply_source_ids(session)
         bot_user_id = (await Slack.get()).identity["bot_user_id"]
         return [

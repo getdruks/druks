@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from dbos import DBOS
-from dbos._error import DBOSWorkflowCancelledError
+from dbos import error as dbos_error
 from druks import ui
 from druks.contrib.software_factory.workflows import PullRequestReview
 from druks.durable.exceptions import GateTimeout
@@ -27,29 +27,6 @@ _STORED_ASK = {
     "reply_fields": ["action", "answers", "note"],
 }
 _NOTE = ui.Follows(subject_type="note", subject_id="7")
-
-
-@pytest.fixture
-def direct_steps(monkeypatch):
-    async def call_through(options, function, *args, **kwargs):
-        return await function(*args, **kwargs)
-
-    monkeypatch.setattr(DBOS, "run_step_async", call_through)
-    monkeypatch.setattr("druks.workflows._notify_account", AsyncMock())
-
-
-@pytest.fixture
-async def summarize(druks_db, direct_steps):
-    """The proof app's workflow, in the body of its run on a note."""
-    note = await Note.create(body="A plan")
-    run = await seed_run(druks_db, kind=Summarize.kind, subject=note)
-    workflow = Summarize()
-    workflow._workflow_id = run.id
-    workflow._subject = note.identity
-    workflow.subject = note
-    token = current_workflow.set(workflow)
-    yield workflow
-    current_workflow.reset(token)
 
 
 @pytest.fixture(params=["gate", "review"])
@@ -298,10 +275,10 @@ async def test_invalid_reply_or_timeout_records_no_receipt(
 async def test_cancel_records_no_receipt(druks_db, request_reply, monkeypatch):
     run_id, call = request_reply
     monkeypatch.setattr(
-        DBOS, "recv_async", AsyncMock(side_effect=DBOSWorkflowCancelledError(run_id))
+        DBOS, "recv_async", AsyncMock(side_effect=dbos_error.DBOSWorkflowCancelledError(run_id))
     )
 
-    with pytest.raises(DBOSWorkflowCancelledError):
+    with pytest.raises(dbos_error.DBOSWorkflowCancelledError):
         await call
 
     druks_db.expunge_all()

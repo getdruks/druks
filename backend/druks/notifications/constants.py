@@ -20,5 +20,45 @@ CLOSE_QUESTION_WORKFLOW = "notifications.close_question"
 # The workflow that sends one notification, by the name a producer queues it.
 SEND_WORKFLOW = "notifications.send"
 
+# The workflow that shows the status of a run again, by the name a run queues it.
+REFRESH_STATUS_WORKFLOW = "notifications.refresh_status"
+
+# The reason of the one notification that shows the status of a run.
+STATUS_REASON = "run.status"
+
+# What the callout at the end of a run's status says while the run waits and after it
+# ends, and its tone. A run that works adds no callout.
+RUN_STATE_CALLOUTS = {
+    "parked": ("Waiting for an answer.", "warning"),
+    "finished": ("Finished.", "success"),
+    "failed": ("Failed.", "danger"),
+    "cancelled": ("Cancelled.", "warning"),
+}
+
+# What the callout of a parked run says when its ask has a label.
+ASK_CALLOUT = "Waiting for an answer: {label}"
+
+# The status and tone that each step in progress takes in those states of the run.
+RUN_STATE_STEPS = {
+    "parked": ("waiting", "active"),
+    "finished": ("finished", "success"),
+    "failed": ("failed", "danger"),
+    "cancelled": ("cancelled", "neutral"),
+}
+
+# The ends that a run announces in its own last step. DBOS records them after that step.
+RUN_ENDS = ("finished", "failed")
+
+# Druks sends a status this long after its last change, so changes that come close
+# together go out in one edit.
+STATUS_DELAY_SECONDS = 1
+
+# A status that keeps changing goes out this long after its first unsent change.
+STATUS_DELAY_LIMIT_SECONDS = 5
+
+# The lock that keeps one send of a status at a time. A retry gives the status to another
+# run, so the id of the status names the lock.
+STATUS_LOCK = "notifications:status:{status}"
+
 # What a person reads when they cannot answer a run of an app that a team lists.
 TEAM_ONLY_MESSAGE = "Only an admin or the team that uses {app} can answer this run."
