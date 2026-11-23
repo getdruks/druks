@@ -648,6 +648,39 @@ async def test_a_split_outside_linear_fails_the_run_before_any_review(monkeypatc
         await flow._plan_phase()
 
 
+async def test_a_build_that_was_open_before_the_sandbox_key_went_replays_its_stored_policy():
+    flow = Build()
+    flow.journal = BuildJournal()
+    flow.journal.add(_split_plan())
+    _record_reports(flow)
+    stored = {**RepoPolicy().model_dump(mode="json"), "sandbox": {"image": None, "env": {}}}
+
+    async def load_policy_and_profile():
+        return {"policy": stored, "profile": {}}
+
+    async def load_settings():
+        return Build.Settings()
+
+    async def load_blockers():
+        return []
+
+    async def plan_phase():
+        return True
+
+    async def split():
+        return {"acme/api": "ENG-2", "acme/web": "ENG-3"}
+
+    flow._load_policy_and_profile = load_policy_and_profile
+    flow._load_settings = load_settings
+    flow._load_blockers = load_blockers
+    flow._plan_phase = plan_phase
+    flow._split = split
+
+    await flow.run_multistep()
+
+    assert flow._policy == RepoPolicy()
+
+
 async def test_an_approved_split_reports_its_new_tickets_instead_of_implementing():
     flow = Build()
     flow.journal = BuildJournal()
