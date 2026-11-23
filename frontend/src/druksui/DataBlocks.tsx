@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
+import { useContext, useEffect, useId, useRef, useState, type ReactNode } from 'react'
 
 import type {
   Action,
@@ -16,23 +16,26 @@ import type {
 import { RelTime } from '../components/RelTime'
 import { ActionButton } from './Form'
 import { LinkControl } from './LinkControl'
+import { HasTextFormContext } from './pages'
 import { Image, Status } from './RunBlocks'
 
-// The plot's own coordinates; CSS gives it its real size.
+// The plot's own coordinates. CSS gives it its real size.
 const PLOT_WIDTH = 300
 const PLOT_HEIGHT = 120
 const BAR_GAP = 1
 
-/** One datum, wherever it sits — a fact, a metric, a list item, a table cell. */
+/** One value: of a fact, a metric, a list item, or a table cell. */
 export function Datum({ value }: { value: Value }) {
+  const hasTextForm = useContext(HasTextFormContext)
+
   switch (value.value) {
     case 'text':
       return <TextDatum text={value.text} description={value.description} link={value.link} />
     case 'number':
       return (
         <span className={`dui-number mono dui-number-${value.tone}`}>
-          {/* Grouped for reading, but never rounded: the app's number is the
-              operator's number. */}
+          {/* Grouped for reading, but never rounded. The operator sees the
+              app's exact number. */}
           {value.number.toLocaleString(undefined, { maximumFractionDigits: 20 })}
           {value.unit && <span className="dui-unit dim"> {value.unit}</span>}
         </span>
@@ -50,12 +53,15 @@ export function Datum({ value }: { value: Value }) {
       )
     case 'controls':
       return <Controls controls={value.controls} />
-    default:
+    default: {
+      const kind = (value as { value: string }).value
+      if (hasTextForm) throw new Error(`this dashboard cannot render a ${kind} value`)
       return (
         <span className="dui-unknown mono" role="alert">
-          this dashboard cannot render a {(value as { value: string }).value} value
+          this dashboard cannot render a {kind} value
         </span>
       )
+    }
   }
 }
 
@@ -72,8 +78,8 @@ function subjectStatusWord(
   return ['idle', 'neutral']
 }
 
-/** Where the work on one subject stands: the shell's word for the run, the
- * app's verb while it works, and the message of a run that stopped. */
+/** The state of the work on one subject. It shows the shell's word for the run,
+ * the app's verb while it works, and the message of a run that stopped. */
 function SubjectStatus({ value: { status, working } }: { value: SubjectStatusValue }) {
   if (!status) return null
   const [label, tone] = subjectStatusWord(status, working)
@@ -304,8 +310,8 @@ export function ImageGallery({ title, images }: { title: string; images: ImageBl
       <ul className="dui-gallery-grid">
         {images.map((image) => (
           <li key={image.url}>
-            {/* A plain link: the image opens in its own tab, so viewing needs no
-                trap to escape from and the keyboard reaches every one. */}
+            {/* A plain link opens the image in its own tab. The gallery needs no
+                focus trap. The keyboard reaches every image. */}
             <a href={image.url} target="_blank" rel="noreferrer" className="dui-gallery-item">
               <Image
                 url={image.url}
@@ -411,7 +417,7 @@ export function Table({
     ) : null
 
   if (rows.length === 0) {
-    // Nothing to show and nothing to say about it: a heading over an empty box
+    // Nothing to show and nothing to say about it. A heading over an empty box
     // is worse than no block at all.
     if (!empty) return null
     return (

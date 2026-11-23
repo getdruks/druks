@@ -13,15 +13,17 @@ import { appLabel } from '../apps/registry'
 import { chatApi } from '../chat/api'
 import {
   compareConversations, conversationReducer, conversationTitle, formAnswer, formErrors, initialConversation, questionAnswer, savedReplyRows, threadRows,
-  type ActiveRun, type Conversation, type ConversationAction, type ConversationSummary, type Message, type Question, type ReplyRow,
+  type ActiveRun, type Conversation, type ConversationAction, type ConversationSummary, type Message, type Question, type ReplyBlock, type ReplyRow,
 } from '../chat/state'
 import { Button, Select } from '../components/Control'
 import { Markdown } from '../components/Markdown'
 import { Page } from '../components/Page'
 import { AppPagesProvider } from '../druksui/AppPage'
+import { AppSurface } from '../druksui/AppSurface'
 import { Blocks } from '../druksui/Blocks'
 import { Fields } from '../druksui/Fields'
 import { useFieldState } from '../druksui/Form'
+import { HasTextFormContext } from '../druksui/pages'
 import { PageHeading } from '../components/PageHeading'
 import { ConnectionCards } from '../components/ConnectionCards'
 import { CurrentMilestoneCard } from '../components/OnboardingProgress'
@@ -219,12 +221,12 @@ function ConversationThread({ id, account, showMilestone, summary, onPin, pinPen
   const format = useFormatters()
   const apps = useQuery({ queryKey: ['apps'], queryFn: api.listApps, enabled: !id, staleTime: 60_000 })
   const agents = useQuery({ queryKey: ['agents'], queryFn: api.agents, enabled: !id })
-  // An admin sees every agent, but only its owner talks to a private agent.
+  // An admin sees every agent. Only its owner talks to a private agent.
   const talkableAgents = (agents.data ?? []).filter((agent) => !agent.isPrivate || agent.ownerId === account.id)
   const chosenAgent = talkableAgents.find((agent) => agent.id === agentId)
-  // A run's state sends no events, so the page reads its active runs again.
+  // A run's state sends no events. The page reads its active runs again.
   const activeRuns = useQuery({ queryKey: ['chat', 'active-runs', id], queryFn: () => chatApi.listActiveRuns(id!), enabled: Boolean(id), refetchInterval: 2_000 })
-  // A report sends no events either, so the page reads the run statuses again.
+  // A report sends no events either. The page reads the run statuses again.
   const statuses = useQuery({ queryKey: ['chat', 'statuses', id], queryFn: () => chatApi.listStatuses(id!), enabled: Boolean(id), refetchInterval: 2_000 })
   const { scrollRef, contentRef, isAtBottom, scrollToBottom } = useStickToBottom({ initial: 'instant', resize: 'instant' })
 
@@ -350,7 +352,7 @@ function ConversationThread({ id, account, showMilestone, summary, onPin, pinPen
   const replies = new Map(messages.filter((message) => message.role === 'assistant').map((message) => [message.replyTo, message]))
   const userMessages = messages.filter((message) => message.role === 'user')
   const lastReply = messages.findLast((message) => message.role === 'assistant')
-  // A WhatsApp turn can answer several messages, and its newest delivered message names it.
+  // A channel's turn can answer several messages. Its newest delivered message names the turn.
   const unansweredMessage = userMessages.findLast((message) => message.state === 'delivered')
     ?? userMessages.find((message) => message.state === 'pending')
 
@@ -429,7 +431,7 @@ function ConversationThread({ id, account, showMilestone, summary, onPin, pinPen
                 {message.file && <a href={message.file.url} target="_blank" rel="noreferrer">{message.file.name}</a>}
               </div>
             </div>
-            {(rows.length > 0 || isWaiting || stoppedTurn || reply?.question) && <div className="chat-reply">
+            {(rows.length > 0 || reply?.blocks.length || isWaiting || stoppedTurn || reply?.question) && <div className="chat-reply">
               <div className="druks-chat-message">
                 <div className="druks-chat-message__meta">
                   <span className="chat-agent-status">{conversation?.agentName ?? 'Agent'}
@@ -439,6 +441,7 @@ function ConversationThread({ id, account, showMilestone, summary, onPin, pinPen
                 </div>
                 <div className="druks-chat-message__content">
                   <Reply rows={rows} />
+                  {reply && <ReplyBlocks blocks={reply.blocks} />}
                   {reply?.question && <ReplyQuestion question={reply.question} answer={questionAnswer(messages, reply)} sending={sending} onAnswer={(body) => void send(body)} />}
                   {isWaiting && <p className="chat-waiting" role="status"><span className="chat-activity-dot" />{message.state === 'delivered' ? `${conversation?.agentName ?? 'Agent'} is replying…` : 'Connecting…'}</p>}
                   {stoppedTurn && <div className="chat-interrupted" role="status">
@@ -515,6 +518,16 @@ function Reply({ rows }: { rows: ReplyRow[] }) {
       </li>)}
     </ol>
   })
+}
+
+function ReplyBlocks({ blocks }: { blocks: ReplyBlock[] }) {
+  return blocks.length > 0 && <div className="chat-blocks">
+    <HasTextFormContext.Provider value={true}>
+      {blocks.map(({ block, textForm }, index) => <AppSurface key={index} fallback={() => <Markdown source={textForm} />}>
+        <Blocks blocks={[block]} />
+      </AppSurface>)}
+    </HasTextFormContext.Provider>
+  </div>
 }
 
 function ReplyQuestion({ question, answer, sending, onAnswer }: {

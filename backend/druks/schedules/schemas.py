@@ -1,5 +1,4 @@
 from datetime import datetime
-from typing import Any
 
 from pydantic import ConfigDict
 
@@ -15,7 +14,7 @@ class ScheduleResponse(Schema):
     id: str
     conversation_id: str
     tool: str
-    arguments: dict[str, Any]
+    arguments: dict
     cron: str
     next_run_at: datetime
 

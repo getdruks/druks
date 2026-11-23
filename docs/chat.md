@@ -5,21 +5,21 @@ icon: "messages-square"
 ---
 
 Chat lets you talk to an agent that acts on Druks as your account.
-A conversation is a live agent session, not a workflow. Chat has no Druks run,
-gate, or park. Chat does not add entries to Activity.
+A conversation is a live agent session, not a workflow. It has no gate, and it
+does not park. Chat does not add entries to Activity.
 
 Only the creator can read a conversation or receive its live events. Operators
-do not see the chats of an app's WhatsApp numbers: the people who hold the
-number's phone read them there. There is one exception: an operator who can use
+do not see the chats of an app's WhatsApp numbers. The people who hold the
+number's phone read them there. There is one exception. An operator who can use
 an app can read the calls of its phone numbers. See [Read a call](#read-a-call).
 
 Chat runs on Claude, Codex, or OpenCode. The Bot's harness, model, billing, and
-effort come from Chat's row in **Chat → Channels → Bots**. A field that you
+effort come from Chat's row in **Settings → Bots**. A field that you
 leave unset uses the
 [installation settings](configuration.md#personal-and-installation-settings).
 A conversation with an agent runs on the agent's harness and model: see
 [Talk to an agent](#talk-to-an-agent).
-OpenCode ignores the effort: its effort values are model variants, and Druks's
+OpenCode ignores the effort. Its effort values are model variants. Druks's
 levels are not among them. OpenCode uses only the provider of Chat's model, also
 when it names a conversation. If OpenCode's model list does not have the model,
 OpenCode answers with another model of that provider.
@@ -32,8 +32,8 @@ OpenCode answers with another model of that provider.
 4. Select **Send**, or press Enter.
 
 The first message creates the conversation. It shows as **New conversation**
-until the harness names it from that message, in a short separate call that runs
-beside the first reply.
+until the harness names it from that message. The harness names it in a short
+separate call, at the same time as the first reply.
 New lines use Shift + Enter.
 
 The starter prompts fill the message field. They do not send a message.
@@ -42,8 +42,8 @@ The new conversation page also lists the installed apps.
 ## Talk to an agent
 
 An agent can answer a conversation instead of the Bot. Make an agent on the
-**Agents** page: give it a name, a description, instructions, skills, a harness
-and a model, and make it private or public. Its owner or an admin edits and
+**Agents** page. Give it a name, a description, instructions, skills, a harness
+and a model. Make it private or public. Its owner or an admin edits and
 deletes it. A delete also deletes every conversation with the agent and stops
 their schedules.
 
@@ -58,7 +58,7 @@ fails.
 Each turn adds the agent's instructions to the Chat prompt. The turn runs on
 the agent's harness and model, with the tool sign-ins of the person who asks.
 Druks saves an agent only on a harness that Chat runs on: Claude, Codex, or
-OpenCode. A turn reads the agent when it starts, so an edit to the agent
+OpenCode. A turn reads the agent when it starts. An edit to the agent
 reaches the next turn.
 
 A private agent runs on its owner's subscription. With
@@ -93,12 +93,13 @@ field when you switch conversations.
 
 ## Wait for a reply
 
-Replies use the **Agent** label. Messages that Druks writes for the agent use
-**Druks**. Your messages use **You**.
+Replies use the agent's name, or **Agent** in a conversation with the Bot.
+Messages that Druks writes for the agent use **Druks**. Your messages use **You**.
 
 **Connecting…** appears at the next reply position until the agent can reply.
-The first message can take longer than later messages. The composer stays
-available while you wait.
+When the agent has your message, the line says that the agent is replying,
+until its first text or tool row. The first message can take longer than later
+messages. The composer stays available while you wait.
 
 On Slack, GitHub, and WhatsApp, Druks reacts with 👀 to your message when
 delivery starts, before the sandbox is ready. A paused conversation gets none.
@@ -107,7 +108,8 @@ delivery starts, before the sandbox is ready. A paused conversation gets none.
 
 You can send a message while the agent replies. Druks saves the message and
 shows **Queued** until its turn. A conversation processes one turn at a time.
-A turn consists of one user message and its reply.
+In the web chat, a turn consists of one message and its reply. In Slack, GitHub,
+and WhatsApp, a turn takes every pending message of the conversation.
 
 **Stop** appears beside **Send** during Connecting and while a turn runs.
 It cancels only that message, not the conversation. Other queued messages
@@ -123,14 +125,14 @@ action can cause the agent to do an external action again.
 
 Druks tries a delivery up to five times. It stops at the first attempt when a
 person must change the Chat agent's settings or provider credentials. When the
-delivery fails, the pending messages show **Failed**, and Druks never sends them
+delivery fails, the pending messages show **Failed**. Druks never sends them
 again by itself. **Send again** saves a new message with the same text and file.
-A turn that the agent already runs keeps running, and the next delivery saves
-its reply. In a Slack, GitHub, or WhatsApp conversation, Druks also replies in
-the channel that the message failed, unless the conversation is paused or its
-connection was removed. When a person must change a setting or credential, the
-reply names it, except in a Bot's conversation. When the provider is not
-connected, the reply also gives the link to **Settings → Providers**
+A turn that the agent already runs keeps running. The next delivery saves
+its reply. In a Slack, GitHub, or WhatsApp conversation, Druks also says in the
+channel that the message failed. It does not say so in a paused conversation, or
+after someone removes its connection. When a person must change a setting or
+credential, the reply names it, except in a Bot's conversation. When the provider
+is not connected, the reply also gives the link to **Settings → Providers**
 when `urls.endpoint` is set. Connect the provider first. For any other failure,
 send the message again in the channel to retry.
 
@@ -152,26 +154,26 @@ shows [blocks](#blocks) has an answer, even with no text.
 
 An agent plan shows the latest complete plan. A plan update replaces the
 previous list. Tool updates instead change only the fields that the adapter
-sends. Completed replies retain text and tool calls, not the live plan.
+sends. Completed replies retain text, tool calls, and blocks, not the live plan.
 
 A run that the conversation started can report its status: see
 [Report status](writing-an-app.md#report-status). The page shows the status as a
 message of its own and draws its blocks as an app page draws them. Druks does not
-record which message started the run, so the page places the status by time: after
-each turn that started at or before the run. Each report replaces the status, and the
+record which message started the run. The page places the status by time: after
+each turn that started at or before the run. Each report replaces the status. The
 page adds no message. While the run waits, and after it ends, the status also shows
 where the run stands, for example "Failed.". The status stays after the run ends. A
 retry of the run keeps the status and its place. The page reads the statuses again
-every two seconds, so the status follows the run with no reload. A link to an app page
+every two seconds. The status follows the run with no reload. A link to an app page
 in the blocks opens that page of the run's app. When no installed app declares the
 run's workflow, such a link shows as text.
 
 While a run that the conversation started is active and shows no status, the page
-shows one line for it below the messages. The line names the workflow and its subject,
-and says what the run does now: it is queued, it waits for an answer, or it runs a
-step, such as an agent call or a wait for CI. The page reads the runs again
-every two seconds, so the line follows the run and goes when the run ends.
-Only the Chat page shows it.
+shows one line for it below the messages. The line names the workflow and its
+subject. It says what the run does now. The run is queued, waits for an answer, or
+runs a step, such as an agent call or a wait for CI. The page reads the runs again
+every two seconds. The line changes with the run. It goes away when the run
+ends. Only the Chat page shows it.
 
 The page stays at the bottom while text arrives. Scroll up to read earlier
 messages. **Latest message** returns to the bottom.
@@ -179,11 +181,11 @@ messages. **Latest message** returns to the bottom.
 ## Questions
 
 The agent can ask you a question with two to four short choices, or with a
-[form](#forms) of fields. It calls `chat_ask` during its turn, and the call
-returns at once: the agent does not wait for your answer. `chat_ask` is a tool of
-the Druks toolkit, so the agent of an operator has it, on the web and on each
+[form](#forms) of fields. It calls `chat_ask` during its turn. The call
+returns at once. The agent does not wait for your answer. `chat_ask` is a tool of
+the Druks toolkit. The agent of an operator has it, on the web and on each
 channel. The agents of a public WhatsApp number have only the tools that their Bot
-names, so they do not have it.
+names. They do not have it.
 
 When the turn ends, Druks sends the question after the agent's reply:
 
@@ -192,30 +194,31 @@ When the turn ends, Druks sends the question after the agent's reply:
   stays out of the reply's text.
 - In Slack, the reply, the question, and a button for each choice come in one
   message. A form comes the same way, with an input for each field and a
-  **Submit** button. A reply too long for one message loses its end. The question,
-  the buttons, and the inputs stay whole.
-- In WhatsApp and GitHub, the reply ends with the question and its choices or
-  fields as a numbered list, with the options of a field below it. Answer with a
-  number or in your own words. The agent reads your message as your answer.
+  **Submit** button. Druks cuts the end of a reply that is too long for one
+  message. The question, the buttons, and the inputs stay whole.
+- In WhatsApp and GitHub, the reply ends with the question. Its choices or fields
+  follow as a numbered list, with the options of a field below the field. Answer
+  with a number or in your own words. The agent reads your message as your answer.
 
-In the web chat, select a button, and its choice is your next message, as if you
-wrote it. You can also write your answer in the message field. The agent reads one
-message in each turn, so your first message after the one that the reply answers is
-your answer. That message can be one that you sent while the agent replied, which
-waits as **Queued**. The reply then shows the question with your answer in place of
+In the web chat, when you select a button, its choice is your next message, as if
+you wrote it. You can also write your answer in the message field. The agent reads one
+message in each turn. Your answer is your next message after the one that
+started the turn. You can send it while the agent replies. It then waits as
+**Queued**. The reply then shows the question with your answer in place of
 the buttons. A message that Druks writes for the agent answers nothing. The page
-finds the answer in the saved messages, so a reload shows the same answer.
+finds the answer in the saved messages. A reload shows the same answer.
 
-In Slack, select a button, and its choice reaches the agent as your next message.
-The message then shows your choice in place of the buttons. Only the person of the
-conversation can select one. When you write an answer instead, it reaches the
-agent as any message does. When your message reaches the agent, Druks takes the
-buttons off each open question of the conversation, and its message says that the
-question is closed. When you write while the agent asks, your message can close
-the question before Druks posts it. Druks then posts the reply and the question
-with no buttons, and the message says that the question is closed.
+In Slack, when you select a button, its choice reaches the agent as your next
+message. The message then shows your choice in place of the buttons. Only the
+person of the conversation can select one. When you write an answer instead, it
+reaches the agent as any message does. When your message reaches the agent, Druks
+takes the buttons off each open question of the conversation. The message of each
+question then says that the question is closed. When you write while the agent
+asks, your message can close the question before Druks posts it. Druks then posts
+the reply and the question with no buttons. The message says that the question is
+closed.
 
-A turn that you stop asks nothing, and neither does a turn of a paused conversation.
+A turn that you stop asks nothing. Neither does a turn of a paused conversation.
 
 ### Forms
 
@@ -231,39 +234,41 @@ A form takes `TextField`, `TextAreaField`, `NumberField`, `SelectField`,
 `MultiSelectField`, `RadioField`, and `CheckboxField`, by their bare names or with
 the `ui.` prefix. Each argument has the name that `druks.ui` gives it, such as
 `help_text`. Only the label of an `Option` goes without its name. Druks reads the
-list with Python's `ast` module and runs no code: it takes literals, lists, and
-these calls, and Pydantic checks each field. A form takes no `SecretField`,
+list with Python's `ast` module and runs no code. It takes only literals, lists,
+and these calls. Pydantic checks each field. A form takes no `SecretField`,
 because a secret that you type in Slack stays in Slack. It takes no `UploadField`
-or `MultiUploadField`, because Slack shows a file input only in a modal. Druks
-also refuses a form that Slack cannot show in one message, such as a form of more
-than 48 fields. The agent gets the reason in the same turn.
+or `MultiUploadField`, because Slack shows a file input only in a modal. In a
+Slack conversation, Druks also refuses a form that Slack cannot show in one
+message, such as a form of more than 48 fields. The agent gets the reason in the
+same turn.
 
-In Slack, fill in the inputs and select **Submit**. Druks checks your answers: a
-required field needs an answer, a number field takes a number within its minimum,
-its maximum, and its step, and a choice takes one of its options. When an answer
-does not fit, only you see why, and the form stays open for you to correct it.
+In Slack, fill in the inputs and select **Submit**. Druks checks your answers. A
+required field needs an answer. A number field takes a number within its minimum,
+its maximum, and its step. A choice takes one of its options. When an answer
+does not fit, only you see why. The form stays open for you to correct it.
 Your answers reach the agent as your next message, with one line for each field:
-its label, then your answer. A checkbox reads Yes or No, and a field that you
+its label, then your answer. A checkbox reads Yes or No. A field that you
 leave empty reads (no answer). The message then shows your answers in place of
 the inputs. Only the person of the conversation can submit the form. When you
 write an answer instead, the form closes as a question with buttons does.
 
 In the web chat, fill in the inputs and select **Submit**. A required field needs
-an answer, and a required checkbox needs a check. The browser checks the inputs
-first. It shows its own message at an empty required input, at a required checkbox
-that is not checked, and at a number outside its minimum, its maximum, or its step.
-The page then checks the answers that the browser lets through, such as text of
-only spaces or a multi-select with no option checked, and says so under the field.
-In both cases, the page sends nothing. Druks does not check the answers again: they
-go as an ordinary message, with the same lines as a Slack Submit. The reply then
-shows your answers in place of the inputs. When the message is not sent, the inputs
-keep your answers, and you can select **Submit** again.
+an answer. A required checkbox needs a check. The browser checks the inputs
+first. It shows its own message at an empty required input, and at a required
+checkbox that is not checked. It also shows one at a number outside its minimum,
+its maximum, or its step. The page then checks the answers that the browser lets
+through, such as text of only spaces or a multi-select with no option checked. It
+says what is wrong under the field. In both cases, the page sends nothing. Druks
+does not check the answers again. They go as an ordinary message, with the same
+lines as a Slack Submit. The reply then shows your answers in place of the inputs.
+When the page cannot send the message, the inputs keep your answers. You can
+select **Submit** again.
 
 ## Blocks
 
 The agent can show blocks in its reply, such as a chart, an image, a table, or a grid
-of facts. It calls `chat_show` during its turn, with the blocks as one Python list of
-`druks.ui` block calls, as app pages write them:
+of facts. It calls `chat_show` during its turn. It gives the blocks as one Python
+list of `druks.ui` block calls, as app pages write them:
 
 ```python
 [Chart(kind="bar", title="Builds this week", categories=["Mon", "Tue"], series=[ChartSeries(label="Builds", points=[4, 7])])]
@@ -277,9 +282,10 @@ in order, as in `Fact("Owner", "Ana")`. The agent gives every other argument by 
 value.
 
 Druks reads the list with Python's `ast` module and runs no code. It takes only
-literals, lists, and these calls. It checks each block as an app page does. A reply
-runs no operation and does not change after Druks sends it. So Druks refuses a `Form`,
-an `Action`, and `GateControls` at every depth, such as an action in a `ControlsValue`.
+literals, lists, and these calls. It checks each block as it checks the blocks of an
+app page. A reply runs no operation and does not change after Druks sends it.
+Druks refuses a `Form`, an `Action`, and `GateControls` at every depth, such as an
+action in a `ControlsValue`.
 Druks also refuses `SubjectStatus`, because a chat has no status to show. It refuses
 the `subject=`, `page=`, and `follows=` arguments too. The agent gets the reason in the
 same turn and can call `chat_show` again. A second call that Druks accepts replaces the
@@ -289,29 +295,34 @@ When the turn ends, Druks sends the blocks after the agent's text:
 
 - In Slack, the text and the blocks come in one message. Slack draws them as it draws
   the blocks of an approval: see [Approvals in Slack](druks-ui.md#approvals-in-slack).
-  Facts and metrics show as Slack's own fields, a divider shows as a divider, a link
-  shows as a button, and a table shows as a data table. Any other block, and a block
-  past a limit of Slack, shows as its [text form](druks-ui.md#text-forms). A reply too
-  long for one message loses its end. When Slack refuses the blocks, Druks sends their
-  text form in their place.
-- In the web chat, the reply keeps the blocks, and the page shows their text form after
-  the reply's text.
+  Facts and metrics show as Slack's own fields. A table shows as a data table. A
+  divider shows as a divider. A link shows as a button. A chart shows as a Slack
+  chart. An image with a public address shows as an image. So does each such image
+  of a gallery. Any other block, and a block past a limit of Slack, shows as its
+  [text form](druks-ui.md#text-forms). Druks cuts the end of a reply that is too long
+  for one message. When Slack refuses the blocks, Druks sends their text form in
+  their place.
+- In the web chat, the Chat page draws the blocks after the reply's text when the
+  turn ends. It draws them as an app page does. While the reply streams, the page
+  shows no blocks. When the page cannot draw a block, it shows the block's
+  [text form](druks-ui.md#text-forms) instead. It still shows the text and draws the
+  other blocks. The Chat page also draws the blocks of a Slack reply.
 - In WhatsApp and GitHub, the reply ends with the text form of the blocks.
 
 A turn can show blocks and ask a question. In Slack, you then get one message: the
 text, the blocks, the question, and its buttons or inputs. When Druks cuts the rest to
 fit, the question, the buttons, and the inputs stay whole. They also stay whole when
-Slack refuses the blocks, and when the question closes or gets your answer. In WhatsApp
-and GitHub, the numbered question follows the text form of the blocks. A turn that you
-stop shows no blocks.
+Slack refuses the blocks, when the question closes, and when you answer it. In the web
+chat, the question follows the blocks. In WhatsApp and GitHub, the numbered question
+follows the text form of the blocks. A turn that you stop shows no blocks.
 
 ## Agent access
 
 The agent uses the installation's `/mcp` endpoint as the conversation's owner.
 An operator's Chat key permits every tool of the Druks toolkit: the routes tagged
 `agent`. Builds keep a separate key with their restricted tool list. A key with a
-tool list lists and calls only those tools. The agents of a WhatsApp number have
-such keys: see [WhatsApp](#whatsapp).
+tool list lists and calls only those tools. The agents of a public WhatsApp number
+have such keys: see [WhatsApp](#whatsapp).
 
 An operator's agent also reaches every MCP server that is enabled in
 **Settings → MCP servers**, with the same credentials as a workflow agent. Chat
@@ -320,13 +331,13 @@ that you have not connected. A Bot's agent reaches only the Druks server. When
 you enable, disable, or connect a server, the next turn replaces the sandbox.
 
 An operator's sandbox also holds their own sign-in at each service that names a
-host, so the command line acts as that person. With a GitHub sign-in, git and
-`gh` act as you: your name is on the issues and comments, and the token permits
+host. The command line acts as that person. With a GitHub sign-in, git and
+`gh` act as you. Your name is on the issues and comments. The token permits
 only what both you and the App can do. Druks refreshes the token before it
 expires. Before each turn, Druks makes the App's bot user the author of the
 sandbox's commits. Druks asks GitHub for the bot's user id once and keeps it. If
-GitHub does not answer, the turn runs without that author or the co-author line,
-and the next turn asks again. A commit in a repo that the agent clones or
+GitHub does not answer, the turn runs without that author or the co-author line.
+The next turn asks again. A commit in a repo that the agent clones or
 creates afterwards gets a `Co-Authored-By` line for your GitHub user. A repo with
 its own hooks directory, as husky sets, gets no such line. Without a sign-in the
 sandbox has no access to that service: see
@@ -343,34 +354,33 @@ denies the file, shell, and web tools.
 
 A run that the agent starts with a tool records its conversation. When the run
 parks with a question, Druks adds an internal message with the request to that
-conversation, except on a WhatsApp number with an admin, where the admin answers
-instead (see [Confirmation](#confirmation)). The request is the ask as JSON, as
-`get_gate` gives it. A review's context is text, or the JSON of its
-[blocks](druks-ui.md#text-forms). Druks reads each subject status in the blocks
-when it writes the message. In a Slack conversation, a run
-that waits for an answer in the dashboard also gets the question in the thread or direct
-message, with a button for each choice. Only the person who started the run can click
-them. The question with its buttons is the only message that you get about it. Druks
-keeps the internal message for the agent's next turn, such as the turn of your next
-message there, and starts no turn for it. The agent then knows that the run waits and
-what it waits for. The message also has an input for each of the question's own
-questions, a menu of its options or a box for your own words, and a box for your note. A
-click sends them with your choice and answers the run, so the agent does not ask for
-them. When the run
-waits for the provider's usage limit to reset, Druks itself posts a line with the
-time the run continues, in the installation's timezone. The agent shares the
-run's login, so its own turn would fail on the same limit. When the run
-continues, Druks adds an internal message that says so. When the run
-fails, Druks adds an internal message with the failure to that conversation.
-When the run is cancelled, Druks adds an internal message with the reason. A
-cancel that the agent of the same conversation made adds none, because the
-agent already told you.
+conversation. On a WhatsApp number with an admin, the admin answers instead: see
+[Confirmation](#confirmation). The request is the ask as JSON, as `get_gate`
+gives it. A review's context is text, or the JSON of its
+[blocks](writing-an-app.md#wait-for-input). Druks reads each subject status in the
+blocks when it writes the message. In a Slack conversation, you also get the
+question of a run that waits for an answer in the dashboard. It comes in the thread
+or direct message, with a button for each choice. Only the person who started the
+run can click them. The question with its buttons is the only message that you get
+about it. Druks keeps the internal message for the agent's next turn, such as the
+turn of your next message there, and starts no turn for it. The agent then knows
+that the run waits and what it waits for. The Slack message also has an input for
+each of the question's own questions. The input is a menu of its options or a box
+for your own words. A last box takes your note. A click sends them with your choice and answers
+the run. The agent does not ask for them. When the run waits for the provider's
+usage limit to reset, Druks itself posts a line. The line gives the time the run
+continues, in the installation's timezone. The agent shares the run's login. Its own turn would
+fail on the same limit. When the run continues, Druks adds an internal message that
+says so. When the run fails, Druks adds an internal message with the failure to that
+conversation. When someone cancels the run, Druks adds an internal message with the
+reason. A cancel that the agent of the same conversation made adds none, because
+the agent already told you.
 When the run ends, Druks adds an internal message with its result, whether or
-not the run waited for an answer. A run that returns nothing, such as a review
-that posts itself, adds a message that says it ended. The agent then tells you
-in its own words.
+not the run waited for an answer. When a run returns nothing, Druks adds a message
+that says the run ended. A review that posts itself is such a run. The agent then
+tells you in its own words.
 In a Slack conversation, a workflow that reports its status keeps that status in
-one message of the thread or direct message, and Druks edits it as the work goes
+one message of the thread or direct message. Druks edits it as the work goes
 on. See [Report status](writing-an-app.md#report-status). The Chat page shows the
 status in the conversation, whatever its channel: see
 [Read replies and tool calls](#read-replies-and-tool-calls).
@@ -383,18 +393,20 @@ for the MCP address and edge requirements.
 
 Each account has one leased sandbox that serves its conversations with the Bot, and one
 more for each agent it talks to. Neither replaces the other. When a sandbox's
-credentials change, the next turn replaces that sandbox, and a turn
+credentials change, the next turn replaces that sandbox. A turn
 still running in the old sandbox ends as `interrupted`. A detached
 bridge runs in the sandbox and starts one ACP adapter per conversation. Druks
 opens an SSH channel only when it communicates with the bridge.
 
 Postgres stores conversations and messages. A reply links to the message it
-answers and keeps the tool calls it made. Your messages have seven durable
+answers and keeps the tool calls it made. A web reply also keeps its question.
+A web or Slack reply keeps its blocks. Your messages have seven durable
 states: `pending`, `deferred`, `delivered`, `replied`, `interrupted`,
 `cancelled`, and `failed`. A `delivered` message is the one the agent is
 answering. A `deferred` message is an internal message that waits for the
 agent's next turn and starts none. Redis stores the delivery locks, the read
-positions, and the live events. The bridge determines whether a turn runs.
+positions, the live events, and the question and the blocks of the running turn.
+The bridge determines whether a turn runs.
 
 Delivery and Stop each use a conditional Postgres update from `pending`.
 Delivery changes the state to `delivered` just before the prompt request. Stop
@@ -402,16 +414,16 @@ changes the state to `cancelled`. The first update wins. Delivery never sends
 a message that Stop cancelled while pending. Delivery changes a `deferred`
 message to `delivered` only after it won the update of a `pending` message in
 the same turn. When Stop cancels every pending message first, Druks sends no
-prompt, and the `deferred` message waits for the next turn.
+prompt. The `deferred` message waits for the next turn.
 
 After delivery wins, Stop sends ACP `session/cancel` through the bridge.
-The bridge matches the message ID, so a delayed Stop cannot cancel the next
+The bridge matches the message ID. A delayed Stop cannot cancel the next
 turn. Druks saves the partial reply and marks the message `cancelled`.
 The bridge records the message ID when it accepts a prompt. When a delivery
 fails, the next delivery asks the bridge for that ID. If the bridge holds the
 message, Druks follows the turn. If the bridge is idle with another ID, the
-prompt never arrived, and Druks sends the message again. The bridge refuses a
-prompt for an ID it already accepted, so a turn never runs twice.
+prompt never arrived. Druks sends the message again. The bridge refuses a
+prompt for an ID it already accepted. A turn never runs twice.
 
 The bridge numbers the current turn's events and writes them to disk. Druks
 reads the events after its last position and streams them only to the owner's
@@ -423,10 +435,10 @@ moves to another harness starts a fresh agent session and keeps its messages.
 Before each turn, the bridge compares the conversation's instructions and MCP
 servers with the ones its adapter opened with. When they differ, it starts a
 new adapter and loads the same agent session. A deployed prompt change or a
-newly connected MCP server therefore reaches the next message, and the history
+newly connected MCP server therefore reaches the next message. The history
 stays. A model or effort change applies to the live adapter. Each Druks release
 carries its own bridge program. A bridge of an older release exits once no turn
-runs in it, and the next turn starts the current one.
+runs in it. The next turn starts the current one.
 
 ### Druks restarts
 
@@ -436,7 +448,8 @@ the turn from the last read position and saves the reply.
 
 ### The bridge or sandbox dies mid-turn
 
-The next contact finds that the turn is gone and marks it `interrupted`.
+When Druks next reaches the bridge, it finds the turn gone and marks it
+`interrupted`.
 Druks does not resend it. The latest saved session archive contains only
 the session files from the last completed turn.
 
@@ -449,7 +462,7 @@ sandbox lease and its identity expiry. The lease is 270 minutes.
 ## Reminders
 
 A reminder sends a message in a conversation once, or again on a cron. Ask the
-agent for one in plain words, and it calls `chat_create_reminder` with exactly
+agent for one in plain words. It calls `chat_create_reminder` with exactly
 one of these:
 
 | Field | Sends | Example |
@@ -459,38 +472,39 @@ one of these:
 | `cron` | Again and again, in local time | `0 9 * * 1` for Mondays at 9 |
 
 Local time is the installation `timezone`. Each turn opens with the current time
-and that timezone, so the agent never guesses them. Without `conversation_id`, the
-reminder sends in the chat that asked for it. The answer gives `nextSendAt` in
-local time, and the agent tells the person that time.
+and that timezone, so that the agent never guesses them. Without
+`conversation_id`, the reminder sends in the chat that asked for it. The answer
+gives `nextSendAt` in local time. The agent tells the person that time.
 
-Druks checks for due reminders every minute, so a reminder sends up to a minute
+Druks checks for due reminders every minute. A reminder sends up to a minute
 after its time. It sends the words as written, as the agent's message, and runs no
-turn. The message goes through the conversation's channel, so it reaches WhatsApp,
+turn. The message goes through the conversation's channel. It reaches WhatsApp,
 Slack, or the web page. A reminder sends once for each due time. When Druks was
-down at that time, it sends once on the next check and moves on.
+down at that time, it sends once on the next check and then waits for the next
+due time.
 
 | Caller | Where their reminders go |
 | --- | --- |
 | An operator | The operator's own conversations |
 | A public number's admin | The direct chats of everyone who wrote to the number, and the groups that the admin turned on |
-| Anyone else who writes to a public number | Nowhere: they get no reminder tools |
+| Anyone else who writes to a public number | Nowhere. They get no reminder tools. |
 
 On a public number, a person gets a reminder in their own chat only after they
-wrote to the number, so Druks never starts a chat there. On a private number,
-the operator's agent can start one with `chat_start_conversation`: it takes the
-person's phone number and name, and the chat is the operator's own, so their
+wrote to the number. Druks never starts a chat there. On a private number,
+the operator's agent can start one with `chat_start_conversation`. It takes the
+person's phone number and name. The chat is the operator's own. Their
 reminders reach it. WAHA confirms that the number is on WhatsApp. Druks sends
-nothing until a reminder does, and the person's replies reach no agent.
+nothing until a reminder does. The person's replies reach no agent.
 
 `chat_list_conversations` lists where the caller can send. `chat_list_reminders`
 lists the caller's reminders with each one's cron and next time.
-`chat_cancel_reminder` stops a reminder, and what it already sent stays in the
+`chat_cancel_reminder` stops a reminder. What it already sent stays in the
 conversation.
 
 ## Schedules
 
 A schedule makes one of the agent's tool calls again and again on a cron. Say
-"review pull request 7 in acme/api every morning", and the agent calls
+"review pull request 7 in acme/api every morning". The agent then calls
 `create_schedule` with the tool, its arguments, and the cron. The schedule
 belongs to the person who asked and to the conversation where they asked. An
 agent has no schedule of its own.
@@ -505,23 +519,23 @@ Druks checks that the tool exists and that the cron has five fields when the
 agent saves the schedule. Local time is the installation `timezone`, as for
 reminders.
 
-Each schedule has its own DBOS schedule, which fires at each due time. Druks then
-makes the tool call through its own MCP server. It calls as the owner, from the
-conversation, with the tools of the conversation's agent. So the call goes
+Each schedule has its own DBOS schedule. At each due time, Druks makes the tool
+call through its own MCP server. It calls as the owner, from the
+conversation, with the tools of the conversation's agent. The call goes
 through the same checks as in the chat: the owner's app check, the tool's input
 check, and the route's own checks. A run that the call starts reports to the
 conversation, the same as a run that the chat started. When the tool refuses the
 call, or Druks cannot reach its own MCP server, Druks skips the call. The agent
 tells the person why in the conversation. When the agent no longer answers the
-schedule's owner, Druks skips the call and tells the person itself, and no agent
+schedule's owner, Druks skips the call and tells the person itself. No agent
 turn runs. DBOS records that due time as failed. The schedule goes on.
 
 A due time makes one call, also when two Druks servers run. An interrupted call
-can run again. A due time that passes while Druks is down is not called later.
+can run again. Druks does not call a due time that passes while it is down.
 
 `list_schedules` lists the caller's schedules with each one's tool, arguments,
 cron, and next time. `change_schedule` replaces the tool, the arguments, and the
-cron of one of the caller's schedules. `stop_schedule` stops it, and the runs its
+cron of one of the caller's schedules. `stop_schedule` stops it. The runs its
 calls already started go on. An admin can also stop another person's schedule.
 
 An agent's page lists the schedules set in the agent's conversations, each with
@@ -548,9 +562,9 @@ To repeat a task, the agent schedules the tool:
 
 ## WhatsApp
 
-WhatsApp is a source for Chat. A person writes to a linked number, and Druks
+WhatsApp is a source for Chat. A person writes to a linked number. Druks
 saves the message in that person's conversation. The agent answers through its
-MCP tools, and Druks sends the reply back to WhatsApp. A workflow never sees a
+MCP tools. Druks sends the reply back to WhatsApp. A workflow never sees a
 message. Druks reaches WhatsApp through [WAHA](https://github.com/devlikeapro/waha),
 an open source WhatsApp HTTP API. Connect WAHA first: see
 [WhatsApp](configuration.md#whatsapp).
@@ -578,9 +592,9 @@ session's key, and the webhook secret.
   your own WhatsApp, or from the phone of the number to itself. You then talk to
   your agent at that number, under your account and with the whole Druks
   toolkit. If you use a second number, replies arrive as normal incoming
-  messages, and WAHA never sees your own chats. If you use the phone of the
+  messages. WAHA never sees your own chats. If you use the phone of the
   number itself, replies arrive in your chat with yourself. WhatsApp gives no
-  sound for them, and WAHA receives the chats of that phone. Several operators
+  sound for them. WAHA receives the chats of that phone. Several operators
   can share the number. Each operator pairs their own phone. Druks ignores every
   sender that has no paired phone. **Unpair my phone** removes your phones from
   the number. This number has no take-over.
@@ -589,11 +603,11 @@ Druks creates the WAHA session and its key, saves the connection, and then
 writes the session's config. Scan the QR code from **Linked devices** in
 WhatsApp on the phone, which shows the device as Druks. The number is live when
 WAHA reports that the session works. When WhatsApp unlinks the device, the
-number shows **Disconnected**, and **Link again** takes a new scan on the same
-connection, which keeps its chats, its admin, and its paired phones. Druks
+number shows **Disconnected**. **Link again** takes a new scan on the same
+connection. The connection keeps its chats, its admin, and its paired phones. Druks
 refuses a number that another live connection holds. **Remove** deletes the WAHA
 session and its key, and ends the pauses of the number's chats.
-The connection and its chats stay as history, and each new link is a new
+The connection and its chats stay as history. Each new link is a new
 connection.
 
 ### Who writes
@@ -609,21 +623,21 @@ message to a conversation by its sender:
 
 The agents of a public number have no shell, file, or web tools. Their harness,
 model, billing, effort, and timeout come from the Bot's row in the app's
-**Settings → Bots**. A turn that runs past the timeout stops, and Druks marks
-it `interrupted`. A bot or bot admin account holds no credential of its own, so its
+**Settings → Bots**. A turn that runs past the timeout stops. Druks marks
+it `interrupted`. A bot or bot admin account holds no credential of its own. Its
 agents and runs bill the default account.
 
 All pending messages of a WhatsApp conversation go into one turn. Druks saves
 media as a Druks file on its message. An image reaches the agent with its
 message. Any other file except audio reaches it as a link to a copy in the
 sandbox. An operator's agent opens the copy with its tools. A number's bot
-agents have no file tools, so they see the link and the file's name. A shared
+agents have no file tools. They see the link and the file's name. A shared
 contact card reaches the agent as one line of text with the person's name and
 phone numbers. An operator can share a card to name a person for
 `chat_start_conversation` or a reminder, and type no number. Druks
-drops a repeated message by its WhatsApp ID. Druks writes to a person only to
-answer them, one reply for each turn. It never starts a chat and never sends in
-bulk. Before it sends a reply, Druks takes a new message ID from WAHA and
+drops a repeated message by its WhatsApp ID. Druks writes to a person to answer
+them, one reply for each turn, or to send a reminder. It never sends in bulk.
+Before it sends a reply, Druks takes a new message ID from WAHA and
 records it. WAHA's copy of the sent message then carries a known ID, even when
 the copy arrives before the send returns.
 
@@ -632,21 +646,21 @@ A voice note becomes text before its turn. Druks sends the audio to the
 the message. The agent reads them under what the person typed, marked as a
 voice note, and answers in text. Nothing goes to the person before the reply.
 When Druks cannot transcribe a note, when no card is connected, or when the
-note is over 25 MiB, the agent gets an internal message instead. It then tells
+note is over 25 MiB, the agent gets an internal message. It then tells
 the person in one line to write instead. The web page shows the typed text, the
 words, and a link to the audio.
 
 Druks also adds **internal messages** to a conversation. Each one comes from a
 fixed template. An internal message starts a turn like any message, unless it
 waits for the agent's next turn: see [Agent access](#agent-access). It never
-goes to WhatsApp. Druks talks to agents, and agents talk to people.
+goes to WhatsApp.
 
 ### Groups
 
 Add a linked number to a WhatsApp group as you add any contact. On a private
-number, such as Chat's, only a paired phone reaches an agent in a group: its tag
-or reply opens that operator's own conversation for the group, and the reply goes
-to the group. Druks drops every other group message, the tags of people who are
+number, such as Chat's, only a paired phone reaches an agent in a group. Its tag
+or reply opens that operator's own conversation for the group. The reply goes to
+the group. Druks drops every other group message, the tags of people who are
 not paired included.
 
 On a public number, the group reaches no agent until the number's admin
@@ -656,24 +670,24 @@ number or replies to one of the number's messages. Druks drops every other
 group message, saves nothing of it, and starts no turn. As in a
 [Slack room](#rooms), each person who writes to the Bot gets their own
 conversation, with the group as its thread. The admin writes
-under the bot admin account, and everyone else under the bot account. The reply
-goes to the group, so everyone in the group reads it. Druks removes the
-number's tag from the text before the agent reads it, and gives each
+under the bot admin account. Everyone else writes under the bot account. The reply
+goes to the group. Everyone in the group reads it. Druks removes the
+number's tag from the text before the agent reads it. It gives each
 conversation in the group the group's name as its title.
 
 A tag decides when the agent answers, not what it sees. In a group, every agent
-gets `chat_read_thread`, and its prompt tells it to call it first. It returns
-the group's newest 200 messages from WAHA's store, oldest first, each with its
-author's id and name, whether this agent wrote it, and whether the person it
-answers wrote it. The prompt also says
-that only the message that reached the agent is an instruction.
+gets `chat_read_thread`. Its prompt tells the agent to call this tool first.
+The tool returns the group's newest 200 messages from WAHA's store, oldest first.
+Each has its author's id and name. It also says whether this agent wrote it, and
+whether the person that the agent answers wrote it. The prompt also says that
+only the message that reached the agent is an instruction.
 
 WhatsApp can name a group member by a LID instead of a phone number. Druks asks
-WAHA for the member's phone number, so it knows a paired phone or the admin by
-either name. A message that the number's phone sends in a group pauses nothing,
-and Druks drops it.
+WAHA for the member's phone number, so that it knows a paired phone or the admin by
+either name. A message that the number's phone sends in a group pauses nothing.
+Druks drops it.
 
-Druks turns on the session's message store when it links a number, so WAHA
+Druks turns on the session's message store when it links a number, so that WAHA
 keeps the group history. A number linked before Druks read groups ignores them
 until you remove it and add it again.
 
@@ -681,16 +695,15 @@ until you remove it and add it again.
 
 Each public number has an admin from the moment it links: the person who holds
 its phone. They talk to the admin's agent in the phone's chat with itself, **Message
-yourself** in WhatsApp. This needs no setup and no second phone. WhatsApp does
-not ring for a message that an account sends to itself, so the phone shows
-Druks's questions in that chat without a sound. Druks puts `[Druks] ` before
-each reply that it sends into a number's chat with itself, so you can tell the
-agent's replies from your own messages.
+yourself** in WhatsApp. WhatsApp does not ring for a message that an account sends
+to itself. The phone shows Druks's questions in that chat without a sound. Druks
+puts `[Druks] ` before each reply that it sends into a number's chat with itself.
+Then you can tell the agent's replies from your own messages.
 
 To get the questions on another phone, which rings, select **Add admin** on the
 number. This opens a one-time code that expires after 10 minutes. Druks then
 sends the number's questions to the person who sends exactly that code from
-their own WhatsApp, and the admin's agent greets them. A number has one such
+their own WhatsApp. The admin's agent greets them. A number has one such
 person. Both chats belong to the number's bot admin account, which never signs
 in. The only text that Druks reads in a message is an open one-time code.
 
@@ -706,26 +719,26 @@ Only the number's admin can answer a question that came from the number's
 chats. The dashboard, `answer_gate`, and notification buttons all refuse
 everyone else, operators included.
 
-When a run that a chat on the number started ends, Druks reports it to that
-chat, as for every [run that a chat starts](#agent-access). The Bot then tells
-the person: a failure in one short line, with no error details and no retry,
-and a cancel in one short line.
+When a chat on the number starts a run, Druks reports the end of the run to that
+chat. It does so for every [run that a chat starts](#agent-access). The Bot then
+tells the person about a failure or a cancel in one short line. A failure gets no
+error details and no retry.
 
 ### Taking over
 
 A message that someone types on the number's phone pauses that chat. Druks
 saves the typed text as an internal message. Messages that arrive during a pause
-start no turn: they go into the chat's next turn. Druks tells the admin about the
-pause. The pause ends when the phone stays quiet in that chat for 4 hours, and
-each typed message starts the 4 hours again. To end it sooner, the admin tells
+start no turn. They go into the chat's next turn. Druks tells the admin about the
+pause. The pause ends when the phone stays quiet in that chat for 4 hours.
+Each typed message starts the 4 hours again. To end it sooner, the admin tells
 their agent, which calls `chat_resume_conversation`. The pause is a DBOS
-workflow that the typed message names, and a chat has at most one open pause.
+workflow that the typed message names. A chat has at most one open pause.
 
 ## Slack
 
 Slack is a source for Chat. You write to the Druks bot in a direct message, or
-tag it in a room, and the Bot answers there, under your account and with
-your whole toolkit.
+tag it in a room. The Bot answers there, under your account and with your whole
+toolkit.
 One Slack app serves every app in Druks. Connect the Slack card first: see
 [Slack](configuration.md#slack). **Chat → Channels** shows the workspace, the
 bot, and your Slack account while the card is connected.
@@ -733,14 +746,14 @@ bot, and your Slack account while the card is connected.
 ### Link your account
 
 Druks knows you by your Slack account. Select **Connect Slack** on the Slack
-pane. Slack asks you to sign in, and Druks saves your Slack token under your
+pane. Slack asks you to sign in. Druks saves your Slack token under your
 account, like a Gmail connection. Other apps can use that grant. **Disconnect**
 revokes it. Druks refuses a Slack account from another workspace.
 
 When you write to the bot before you connect, the bot answers with a private
 link. Open it, sign in to Druks, and connect Slack. Druks then answers the
-message you wrote. The link works for 10 minutes. A forwarded link is harmless:
-Slack's sign-in links whoever opens it, and the held message waits for the
+message you wrote. The link works for 10 minutes. A forwarded link is harmless.
+Slack's sign-in links whoever opens it. The held message waits for the
 person who wrote it.
 
 The first time the bot sends you that link, it sends a welcome before it. The
@@ -753,7 +766,7 @@ room.
 
 You have one conversation with the Bot in your direct message, and one with
 each agent that you tag by name there. Druks drops a
-repeated event by its event ID. The agent writes Markdown, and Druks
+repeated event by its event ID. The agent writes Markdown. Druks
 posts each reply in the direct message, in pieces of at most 12,000 characters. A reply
 that shows [blocks](#blocks) or asks a [question](#questions) goes as one message.
 Druks ignores the bot's own messages, other bots' direct messages, edits,
@@ -772,24 +785,25 @@ its own. The agent sends no files back.
 
 ### Rooms
 
-Invite the bot to a channel or a group. Tag it in a message, and the Bot
+Invite the bot to a channel or a group. Tag it in a message. The Bot
 answers in that message's thread. A tag inside a thread answers in that thread.
 Each person who tags the bot gets their own conversation for the thread. For 24
 hours after the last message in your conversation there, your untagged replies
-in the thread reach that conversation too. Other people must tag it, and a
+in the thread reach that conversation too. Other people must tag it. A
 top-level message with no tag reaches nobody. When you tag the bot before you
-connect Slack, it answers in the thread that your account is not connected, and
-sends you the link in a direct message.
+connect Slack, it says in the thread that your account is not connected. It sends
+you the link in a direct message.
 
 To ask an agent, write its name right after the tag:
-`@Druks Security engineer check this PR`. Case does not matter, and the longest
-name wins, so "Security engineer" beats "Security". A name before the tag does
+`@Druks Security engineer check this PR`. Case does not matter. When two names
+match, Druks takes the longer one: "Security engineer", not "Security". A name
+before the tag does
 not count. A comma or a colon after the tag is fine. The agent answers in your
-own conversation with it for that thread, so one thread can hold your
+own conversation with it for that thread. One thread can hold your
 conversations with several agents. A tag that names no agent reaches the
 conversation you last wrote in there, or the Bot if you have none. Your untagged
 replies reach the conversation you last wrote in, under the 24-hour rule above
-and the tag rule below. Name an agent you cannot talk to, and the bot says why
+and the tag rule below. When you name an agent you cannot talk to, the bot says why
 in the thread and drops the message. The same tag works in a direct message,
 where a name without the tag reaches the Bot.
 
@@ -797,7 +811,7 @@ An admin can give a public agent one Slack channel, under **Slack channel**
 when they edit the agent. The bot must be in the channel. In that channel, a tag
 that names no agent reaches that agent. This does not apply when you already
 have a conversation in the thread, with an agent or with the Bot. A tag that
-names another agent still reaches that agent, and a top-level message without
+names another agent still reaches that agent. A top-level message without
 the tag still reaches nobody. A channel has one agent at most. Choose
 **No channel** to return the channel to normal chat.
 
@@ -810,43 +824,43 @@ picture. The app needs the `chat:write.customize` scope: see
 
 Another app's bot or a Slack workflow can tag the bot in a room too, after an
 admin accepts it. Druks calls each of them an automation. The first time an
-automation tags the bot, the bot answers in the thread that it does not answer
-this automation yet, with a link to the Slack pane of **Chat → Channels**. Under
+automation tags the bot, the bot says in the thread that it does not answer this
+automation yet. It adds a link to the Slack pane of **Chat → Channels**. Under
 **Automations**, the pane lists each automation that tagged the bot, by its name
-in Slack. An admin selects **Accept**, and the agent answers the tag that waited
+in Slack. An admin selects **Accept**. The agent then answers the tag that waited
 and each later tag of that automation, in the thread. **Remove** makes the
 automation wait for an admin again. Until an admin accepts an automation, its
 later tags reach nobody.
 
 The agent of an accepted automation runs on the
 [default account](configuration.md#personal-and-installation-settings), as
-unattended runs do. That account's subscription pays, and the agent uses its
+unattended runs do. That account's subscription pays. The agent uses its
 connections. Everything that an accepted automation posts with a tag reaches
-that agent, such as the text that a person types into a workflow's form, so
-accept only an automation whose input you trust. An automation's untagged
+that agent, such as the text that a person types into a workflow's form. Accept
+only an automation whose input you trust. An automation's untagged
 message reaches nobody. Nobody can click the buttons of a question from such a
-run, so a person answers it in the dashboard.
+run. A person answers it in the dashboard.
 
-Tell the agent to answer only when you tag it, and your untagged replies in that
-thread stop reaching it. The agent records your choice with `chat_require_tag`.
-Tell it to answer your replies again, and they reach it again for the rest of the
+Tell the agent to answer only when you tag it. Your untagged replies in that
+thread then stop reaching it. The agent records your choice with `chat_require_tag`.
+Tell it to answer your replies again. They then reach it again for the rest of the
 24 hours. Your choice holds for that thread only. The Slack pane of
-**Chat → Channels** sets the default for the threads you tag the bot in from
-then on.
+**Chat → Channels** sets the default for the threads that you tag the bot in
+after that.
 
-The agent reads the thread with `chat_read_thread`: the newest 200 messages,
-oldest first, each with its author's id and name, the files on it, whether this
-agent wrote it, and whether the person it answers wrote it. A file stays in
-Slack. The agent reads one with `chat_read_file`: Druks fetches it, once Slack
-confirms it is shared where the thread lives, and puts it in the agent's
-workspace. Every agent in a thread posts as the one bot, so Druks tells an
-agent's own replies by the Slack ids it recorded. In a direct message the tool
-answers that there is no thread.
+The agent reads the thread with `chat_read_thread`. It returns the newest 200
+messages, oldest first. Each has its author's id and name, and the files on it.
+It also says whether this agent wrote it, and whether the person that the agent
+answers wrote it. A file stays in Slack. The agent reads one with
+`chat_read_file`. Druks checks with Slack that the file is shared in the thread's
+channel. Then it fetches the file into the agent's workspace. Every agent in a
+thread posts as the one bot. Druks tells an agent's own replies by the Slack
+ids it recorded. In a direct message the tool answers that there is no thread.
 
 ## GitHub
 
 GitHub is a source for Chat. You tag the operator App in an issue or pull request
-comment, and the Bot answers there, under your account and with your whole
+comment. The Bot answers there, under your account and with your whole
 toolkit. The App's slug is the tag, for example `@druks-acme`. The channel is live
 while the GitHub card is connected: see [GitHub](configuration.md#github).
 **Chat → Channels** shows the tag and your GitHub account.
@@ -854,9 +868,9 @@ while the GitHub card is connected: see [GitHub](configuration.md#github).
 ### Link your account
 
 Druks knows you by your GitHub account. Select **Connect GitHub** on the GitHub
-pane. GitHub asks you to authorize the App, and Druks saves your GitHub sign-in
-under your account, like a Gmail connection. Other apps can use that grant, and
-your Chat sandbox acts on GitHub with it. **Disconnect** revokes it.
+pane. GitHub asks you to authorize the App. Druks saves your GitHub sign-in
+under your account, like a Gmail connection. Other apps can use that grant.
+Your Chat sandbox acts on GitHub with it. **Disconnect** revokes it.
 
 When you tag the App before you connect, the App answers once in the thread:
 connect GitHub in Druks, then tag it again. It holds nothing.
@@ -866,30 +880,30 @@ connect GitHub in Druks, then tag it again. It holds nothing.
 Only a comment that tags the App reaches an agent, and only when its author can
 write to the repository. A comment with no tag does nothing, also when it
 answers the agent. A tag on a quoted line does not count. Each person who tags
-the App gets their own conversation for the issue or pull request, so two people
+the App gets their own conversation for the issue or pull request. Two people
 can each talk to the Bot in one thread. Druks saves a comment once, whatever
 GitHub delivers.
 
 The agent decides what to do: answer, open a ticket, start a build, or start a
-review. To review, it calls `review` and passes your comment as the note. A tag
-no longer starts a review by itself. When a run the agent started fails, the
+review. To review, it calls `software_factory_review` and passes your comment as
+the note. A tag starts no review by itself. When a run the agent started fails, the
 agent says so in one short line, without error details, and does not retry. Tag
 it again to try again.
 
 ### Where the reply goes
 
-The reply is a comment where the tag was: in the inline thread of a pull
-request when you tagged the App there, and at the top of the issue or pull
-request otherwise. Every write goes through the operator App, so every reply
-posts as the App. On a public repository, anyone can read it.
+The reply is a comment where the tag was. When you tagged the App in the inline
+thread of a pull request, the reply goes in that thread. Otherwise, it goes at
+the top of the issue or pull request. Every write goes through the operator App.
+Every reply posts as the App. On a public repository, anyone can read it.
 
-The agent reads the thread with `chat_read_thread`: the issue or pull request
-itself, then its newest 200 comments, oldest first, each with its author's id and
-login, whether this agent wrote it, and whether the person it answers wrote it.
-An inline comment also names its file and line. Every agent posts as the one
-App, so Druks tells an agent's own replies by the GitHub ids it recorded. The
-prompt treats only the comment of the person the agent answers as instructions.
-Everything else in the thread is context.
+The agent reads the thread with `chat_read_thread`. It returns the issue or pull
+request itself, then its newest 200 comments, oldest first. Each has its author's
+id and login. It also says whether this agent wrote it, and whether the person
+that the agent answers wrote it. An inline comment also names its file and line.
+Every agent posts as the one App. Druks tells an agent's own replies by the
+GitHub ids it recorded. The prompt treats only the comment of the person the
+agent answers as instructions. Everything else in the thread is context.
 
 ## Calls
 
@@ -908,12 +922,12 @@ Twilio to Druks. The bot account never signs in. The picker lists only numbers
 that are not linked yet. It also skips a number that a TwiML App or a SIP trunk
 handles, because Twilio ignores the voice URL of such a number.
 
-A phone number has no admin, and no agent turn runs on a call. When a call
+A phone number has no admin. No agent turn runs on a call. When a call
 starts a run that asks a question, an account that can use the app can answer
 it. The Dashboard does not show these runs, because they belong to the number's
 bot account.
 
-**Remove** clears the number's voice URL in Twilio, so Druks stops answering
+**Remove** clears the number's voice URL in Twilio. Druks stops answering
 its calls. The number and its calls stay as history. If you link the number
 again, it gets a new connection. If you disconnect the Twilio card, Druks
 removes every linked number first.
@@ -930,15 +944,19 @@ Druks rejects a call to a number that is not linked, and a call while the Voice
 card is disconnected.
 
 The voice model works from the Bot's prompt. It can call the tools in the Bot's
-`user_tools`, as often as the call needs, and it offers only what those tools
-can do. It also knows the caller's number, the number they called, the local
-time, the last 20 lines of the caller's earlier calls to that number, and what
-Druks reported after those calls ended. A caller who hides their number is a
-new person on each call, so the voice model gets no number and no history for
-them.
+`user_tools`, as often as the call needs. It offers only what those tools
+can do. It also knows:
+
+- The caller's number and the number they called.
+- The local time.
+- The last 20 lines of the caller's earlier calls to that number.
+- What Druks reported after those calls ended.
+
+A caller who hides their number is a new person on each call. The voice model
+gets no number and no history for them.
 
 Druks saves each line of the call in the conversation as it is said. If a tool
-starts a run, the run reports back to the conversation, but nothing reads the
+starts a run, the run reports back to the conversation. Nothing reads the
 report during the call. The caller hears the outcome on their next call.
 
 A call ends when the caller hangs up, when the voice model ends it, after 15

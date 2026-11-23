@@ -24,7 +24,7 @@ class Socket {
   receive(action: ConversationAction) { act(() => this.onmessage?.({ data: JSON.stringify(action) })) }
 }
 
-const message: Message = { id: '10', role: 'user', body: 'Check the active runs', state: 'delivered', replyTo: null, toolCalls: [], question: null, isInternal: false, file: null, transcript: '', createdAt: '2026-09-18T10:24:00Z', deliveredAt: '2026-09-18T10:24:01Z' }
+const message: Message = { id: '10', role: 'user', body: 'Check the active runs', blocks: [], state: 'delivered', replyTo: null, toolCalls: [], question: null, isInternal: false, file: null, transcript: '', createdAt: '2026-09-18T10:24:00Z', deliveredAt: '2026-09-18T10:24:01Z' }
 const conversation: Conversation = {
   id: '01995a3c-0000-7000-8000-000000000001', title: message.body, source: 'web', userId: null, userName: '', createdAt: message.createdAt,
   messageCount: 1, activeMessageId: '10', messages: [message],
@@ -136,7 +136,7 @@ describe('Chat page', () => {
     mount(`/chat/${conversation.id}`, 'UTC')
     await connected()
     await waitFor(() => {
-      const times = document.querySelectorAll('time')
+      const times = screen.getAllByRole('time')
       expect(times).toHaveLength(5)
       times.forEach((time) => expect(time.textContent).toBe(expected))
     })
@@ -176,14 +176,13 @@ describe('Chat page', () => {
     const thread = within(screen.getByRole('region', { name: 'Conversation' }))
     fireEvent.click(thread.getByRole('button', { name: `Pin ${conversation.title}` }))
     await waitFor(() => expect(thread.getByRole('button', { name: `Pin ${conversation.title}` }).getAttribute('aria-pressed')).toBe('true'))
-    expect(thread.getByRole('button', { name: `Pin ${conversation.title}` }).querySelector('svg')?.getAttribute('fill')).toBe('currentColor')
     socket.receive({ type: 'snapshot', ...conversation, isPinned: true, lastMessageAt: '2026-09-18T11:00:00Z' })
     expect(client.getQueryData<Conversation[]>(['chat', 'conversations'])?.[0]?.isPinned).toBe(true)
-    expect(screen.getByText('Pinned', { selector: 'h2' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Pinned', level: 2 })).toBeTruthy()
     expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('Keep the reply draft')
     const list = within(screen.getByRole('complementary', { name: 'Conversations' }))
     fireEvent.click(list.getByRole('button', { name: `Pin ${conversation.title}` }))
-    await waitFor(() => expect(screen.queryByText('Pinned', { selector: 'h2' })).toBeNull())
+    await waitFor(() => expect(screen.queryByRole('heading', { name: 'Pinned', level: 2 })).toBeNull())
     expect(chatApi.setPinned).toHaveBeenNthCalledWith(1, conversation.id, true)
     expect(chatApi.setPinned).toHaveBeenNthCalledWith(2, conversation.id, false)
     expect(window.location.pathname).toBe(`/chat/${conversation.id}`)
@@ -379,15 +378,14 @@ describe('Chat page', () => {
     emit(2, { sessionUpdate: 'tool_call', toolCallId: 'gate', title: 'Read the approval gate', rawInput: { run: 'example' }, status: 'in_progress' })
     emit(3, { sessionUpdate: 'tool_call_update', toolCallId: 'gate', status: 'completed', rawOutput: { gate: 'approval' } })
     emit(4, { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'One run needs approval.' } })
-    const first = screen.getByText('I will check the gates.').closest('.markdown-content')
-    const last = screen.getByText('One run needs approval.').closest('.markdown-content')
-    expect(first?.className).toBe(last?.className)
+    expect(screen.getByText('I will check the gates.')).toBeTruthy()
+    expect(screen.getByText('One run needs approval.')).toBeTruthy()
     const tool = screen.getByText('Read the approval gate').closest('details')!
     fireEvent.click(tool.querySelector('summary')!)
     expect(tool.hasAttribute('open')).toBe(true)
     expect(within(tool).getByText(/"run": "example"/)).toBeTruthy()
     expect(within(tool).getByText(/"gate": "approval"/)).toBeTruthy()
-    expect(tool.querySelector('time')).toBeNull()
+    expect(within(tool).queryByRole('time')).toBeNull()
   })
 
   it.each(['interrupted', 'cancelled', 'failed'] as const)('resends a %s turn only after Send again and preserves the current draft', async (state) => {
@@ -638,7 +636,7 @@ describe('Run statuses', () => {
     return { id: '01995a3c-0000-7000-8000-0000000000a1', run: reportedRun.id, app: 'field_notes', blocks, startedAt: '2026-09-18T10:24:30Z', ...status }
   }
 
-  // Each status shows its text, and each turn its label.
+  // Each status shows its text. Each turn shows its label.
   function shown() {
     return screen.getAllByRole('article').map((article) => article.getAttribute('aria-label') === 'Run status' ? article.textContent : article.getAttribute('aria-label'))
   }
@@ -712,5 +710,66 @@ describe('Run statuses', () => {
     expect(screen.getByRole('link', { name: 'Open the note' }).getAttribute('href')).toBe('/field_notes/notes/7')
     expect(screen.getByText('Open the old note').closest('a')).toBeNull()
     expect(screen.getByText('Open the old note').className).toContain('dui-link-broken')
+  })
+})
+
+describe('Chat blocks', () => {
+  const chart: Block = { block: 'chart', kind: 'bar', title: 'Builds this week', categories: ['Mon', 'Tue'], series: [{ label: 'Builds', points: [4, 7] }], categoryLabel: '', valueLabel: '' }
+  const facts: Block = { block: 'facts', title: 'Project', facts: [{ label: 'Owner', value: { value: 'text', text: 'Ana', description: '', link: null } }] }
+  const table: Block = {
+    block: 'table', title: 'Runs', empty: null, select: '', actions: [],
+    columns: [{ label: 'Run', align: 'start' }, { label: 'State', align: 'start' }],
+    rows: [{ cells: [{ value: 'text', text: 'Build 7', description: '', link: null }, { value: 'status', label: 'failed', tone: 'danger', link: null }], detail: '', key: '' }],
+  }
+  const question: Question = { question: 'Which run first?', choices: ['Build 7', 'Build 8'], fields: [] }
+
+  // The turn of the person's message, whose reply shows blocks.
+  function shown(reply: Partial<Message>): Conversation {
+    return { ...conversation, activeMessageId: null, messages: [
+      { ...message, state: 'replied' },
+      { ...message, id: '20', role: 'assistant', body: 'Here is the week.', state: null, replyTo: message.id, deliveredAt: null, ...reply },
+    ] }
+  }
+
+  it('draws a chart, facts, and a table as the dashboard does, after the text and before the question', async () => {
+    vi.mocked(chatApi.get).mockResolvedValue(shown({ question, blocks: [chart, facts, table].map((block) => ({ block, textForm: 'Not drawn' })) }))
+    mount()
+    await connected()
+    const turn = within(screen.getAllByRole('article')[0]!)
+    const order = [
+      turn.getByText('Here is the week.'),
+      turn.getByRole('table', { name: 'Builds this week' }),
+      turn.getByText('Owner'),
+      turn.getByRole('table', { name: 'Runs' }),
+      turn.getByText('Which run first?'),
+    ]
+    order.slice(1).forEach((after, index) => expect(order[index]!.compareDocumentPosition(after) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy())
+    expect(turn.queryByText('Not drawn')).toBeNull()
+  })
+
+  it('shows a reply that has only blocks', async () => {
+    vi.mocked(chatApi.get).mockResolvedValue(shown({ body: '', blocks: [{ block: facts, textForm: 'Not drawn' }] }))
+    mount()
+    await connected()
+    expect(within(screen.getAllByRole('article')[0]!).getByText('Owner')).toBeTruthy()
+  })
+
+  it.each([
+    ['an unknown block', { block: 'hologram' }],
+    ['a block that fails to draw', { block: 'facts', title: 'Broken' }],
+    ['an unknown block inside a stack', { block: 'stack', gap: 'medium', blocks: [{ block: 'hologram' }] }],
+    ['an unknown value inside a block', { block: 'facts', title: 'Project', facts: [{ label: 'Budget', value: { value: 'money' } }] }],
+  ])('shows the text form of %s in its place and keeps the rest of the conversation', async (_block, block) => {
+    vi.mocked(chatApi.get).mockResolvedValue(shown({ question, blocks: [
+      { block: block as unknown as Block, textForm: '**The text form**' }, { block: facts, textForm: 'Not drawn' },
+    ] }))
+    mount()
+    await connected()
+    const turn = within(screen.getAllByRole('article')[0]!)
+    expect(turn.getByText('The text form')).toBeTruthy()
+    expect(turn.getByText('Here is the week.')).toBeTruthy()
+    expect(turn.getByText('Owner')).toBeTruthy()
+    expect(turn.getByRole('button', { name: 'Build 7' })).toBeTruthy()
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 })

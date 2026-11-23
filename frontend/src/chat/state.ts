@@ -21,6 +21,8 @@ export interface Message {
   id: string
   role: 'user' | 'assistant'
   body: string
+  /** The blocks that the agent showed after the reply's text, in order. */
+  blocks: ReplyBlock[]
   state: 'pending' | 'deferred' | 'delivered' | 'replied' | 'interrupted' | 'cancelled' | 'failed' | null
   replyTo: string | null
   createdAt: string
@@ -28,18 +30,24 @@ export interface Message {
   toolCalls: Array<ToolCall & { textOffset: number }>
   /** The question that the agent asked with its reply in the web chat. */
   question: Question | null
-  /** Druks wrote this message for the agent. The person on WhatsApp never sees it. */
+  /** Druks wrote this message for the agent. It never reaches the source. */
   isInternal: boolean
   file: FileSummary | null
   /** What the person said in the message's voice note. */
   transcript: string
 }
 
-/** A question asks with its choices, or with its fields. */
+/** A question with its choices, or with its fields. */
 export interface Question {
   question: string
   choices: string[]
   fields: Field[]
+}
+
+/** A block of a reply, and its text form, which the page shows when it cannot draw the block. */
+export interface ReplyBlock {
+  block: Block
+  textForm: string
 }
 
 /** A run that the conversation started and that still works or waits. */
@@ -97,7 +105,7 @@ export type ConversationAction =
 
 export const initialConversation: ConversationState = { conversation: null, turns: {}, error: null }
 
-// A WhatsApp conversation has no title, so the person's name stands in.
+// A channel's conversation can have no title. Then the page shows the person's name.
 export function conversationTitle(conversation: ConversationSummary): string {
   return conversation.title ?? (conversation.userName || conversation.userId || 'New conversation')
 }
@@ -152,7 +160,7 @@ export function savedReplyRows(message: Message): ReplyRow[] {
   return rows
 }
 
-/** The turns and the run statuses in page order: a status follows each turn that started at or before its run. */
+/** The turns and the run statuses in page order. A status follows each turn that started at or before its run. */
 export function threadRows(messages: Message[], statuses: RunStatus[]): ThreadRow[] {
   const waiting = statuses.toSorted((left, right) =>
     Date.parse(left.startedAt) - Date.parse(right.startedAt) || left.id.localeCompare(right.id))
@@ -173,12 +181,12 @@ export function questionAnswer(messages: Message[], reply: Message): Message | u
   return messages.slice(index + 1).find((message) => message.role === 'user' && !message.isInternal)
 }
 
-// The lines of a Slack Submit, so the agent reads the answers of a web form the same way.
+// The lines of a Slack Submit, so that the agent reads the answers of a web form the same way.
 export function formAnswer(fields: Field[], values: Record<string, unknown>): string {
   return fields.map((field) => `${field.label}: ${fieldAnswer(field, values[field.name]) || '(no answer)'}`).join('\n')
 }
 
-// A radio group and a multi-select have no native required check, and blank text passes one.
+// A radio group and a multi-select have no native required check. Blank text passes one.
 export function formErrors(fields: Field[], values: Record<string, unknown>): Record<string, string> {
   const errors: Record<string, string> = {}
   for (const field of fields) {

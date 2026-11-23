@@ -145,7 +145,7 @@ async def sandbox(druks_db, conversation, monkeypatch):
     host.exec = AsyncMock(return_value=SimpleNamespace(returncode=0, stdout="Gate check\n"))
     monkeypatch.setattr(service, "get_sandbox", AsyncMock(return_value=(host, identity)))
     monkeypatch.setattr(service, "get_running_sandbox", AsyncMock(return_value=host))
-    # The box is not real, so it has no git to configure.
+    # The box is not real. It has no git to configure.
     monkeypatch.setattr(service_registry.get("github"), "prepare_sandbox", AsyncMock())
     config = SimpleNamespace(
         harness_class=ClaudeHarness,
@@ -354,7 +354,7 @@ async def test_conversations_share_the_account_sandbox_until_its_secrets_change(
         allowed_tools=Toolkit.ALL,
         secret_refs=[],
     )
-    # Druks binds a pasted key's entries when it creates the box, so another key needs a new box.
+    # Druks binds a pasted key's entries when it creates the box. Another key needs a new box.
     rekeyed_host, _identity = await service.get_sandbox(
         druks_db,
         second.account_id,
@@ -400,7 +400,7 @@ async def test_each_operator_turn_prepares_the_box_for_its_sign_ins(
 
     await service.deliver_pending(druks_db, conversation)
 
-    # The sandbox fixture hands back a box that already runs: Druks prepares a reused box too.
+    # The sandbox fixture hands back a box that already runs. Druks prepares a reused box too.
     assert [
         (args[0], args[1].service, args[1].id) for args, _ in prepare_sandbox.await_args_list
     ] == [(host, github, sign_in.id)] * prepares
@@ -607,7 +607,7 @@ QUESTION = {**CHOICES_CALL, "fields": []}
 FORM = {"question": "Where does it ship?", "choices": [], "fields": parse_fields(FORM_TEXT)}
 
 
-async def record_question(conversation, message, question=QUESTION):
+async def record_question(conversation, message, question):
     """What chat_ask leaves for the end of the turn of ``message``."""
     await get_client().set(service.question_key(conversation.id, message.id), json.dumps(question))
 
@@ -656,7 +656,7 @@ async def put_tool(tmp_path, path: str, body: dict, conversation_id: str):
 async def test_a_question_waits_on_the_newest_message_of_the_turn(druks_db, conversation, tmp_path):
     first = await conversation.get_unanswered_message(druks_db)
     newest = await conversation.create_message(druks_db, "And the cache?")
-    # One turn takes both messages, and its newest message names it.
+    # One turn takes both messages. Its newest message names the turn.
     for message in (first, newest):
         assert await message.mark_delivered(druks_db)
     await druks_db.commit()
@@ -683,7 +683,7 @@ async def test_a_question_needs_a_turn_that_runs(druks_db, conversation, tmp_pat
 
 
 async def start_turn(session, conversation):
-    """The conversation's message, delivered to the agent, so its turn runs."""
+    """The conversation's message, delivered to the agent so that its turn runs."""
     message = await conversation.get_unanswered_message(session)
     assert await message.mark_delivered(session)
     await session.commit()
@@ -730,7 +730,7 @@ async def test_a_question_takes_choices_or_fields_and_not_both(
     druks_db, conversation, tmp_path, body
 ):
     message = await start_turn(druks_db, conversation)
-    await record_question(conversation, message)
+    await record_question(conversation, message, question=QUESTION)
 
     response = await put_question(tmp_path, body, conversation.id)
 
@@ -744,7 +744,7 @@ async def test_a_question_takes_choices_or_fields_and_not_both(
 
 async def test_a_refused_field_keeps_the_question(druks_db, conversation, tmp_path):
     message = await start_turn(druks_db, conversation)
-    await record_question(conversation, message)
+    await record_question(conversation, message, question=QUESTION)
 
     response = await put_question(
         tmp_path,
@@ -816,7 +816,7 @@ async def test_a_question_goes_out_with_the_reply_as_one_message(
     monkeypatch.setattr(Bridge, "reply", AsyncMock(return_value=(body, tool_calls)))
     message = await slack_conversation.get_unanswered_message(druks_db)
     message.state = MessageState.DELIVERED
-    await record_question(slack_conversation, message, asked)
+    await record_question(slack_conversation, message, question=asked)
 
     await service.finish_turn(
         druks_db,
@@ -843,7 +843,7 @@ async def test_a_question_goes_out_with_the_reply_as_one_message(
         )
     )
     assert list(queued) == [f"{SEND_WORKFLOW}:{question.id}"]
-    # The question answers the person, so Druks does not ask the agent again.
+    # The question answers the person. Druks does not ask the agent again.
     assert not await slack_conversation.get_unanswered_message(druks_db)
 
 
@@ -860,7 +860,7 @@ async def test_a_web_reply_keeps_its_question_apart_from_the_agent_s_text(
     monkeypatch.setattr(Bridge, "reply", AsyncMock(return_value=(body, tool_calls)))
     message = await conversation.get_unanswered_message(druks_db)
     message.state = MessageState.DELIVERED
-    await record_question(conversation, message)
+    await record_question(conversation, message, question=QUESTION)
 
     await service.finish_turn(
         druks_db, conversation, message, Bridge(None), {"status": status, "archivePath": ""}
@@ -870,13 +870,13 @@ async def test_a_web_reply_keeps_its_question_apart_from_the_agent_s_text(
     assert (reply.body, reply.question) == (body, question)
 
 
-async def test_a_question_that_the_release_before_forms_staged_still_ends_its_turn(
+async def test_a_staged_question_with_no_fields_still_ends_its_turn(
     druks_db, conversation, monkeypatch
 ):
     monkeypatch.setattr(Bridge, "reply", AsyncMock(return_value=("Let me check.", [])))
     message = await conversation.get_unanswered_message(druks_db)
     message.state = MessageState.DELIVERED
-    await record_question(conversation, message, CHOICES_CALL)
+    await record_question(conversation, message, question=CHOICES_CALL)
 
     await service.finish_turn(
         druks_db, conversation, message, Bridge(None), {"status": "replied", "archivePath": ""}
@@ -949,7 +949,7 @@ async def test_a_reply_where_no_inputs_show_ends_with_the_numbered_fields(
         '[TextField(name="title", label="Title"), SelectField(name="where", label="Where", '
         'options=[Option("Staging", value="staging"), Option("Production", value="production")])]'
     )
-    await record_question(slack_conversation, message, {**FORM, "fields": fields})
+    await record_question(slack_conversation, message, question={**FORM, "fields": fields})
 
     await service.finish_turn(
         druks_db,
@@ -984,7 +984,7 @@ async def test_a_stopped_or_held_turn_sends_no_form(
     monkeypatch.setattr(Bridge, "reply", AsyncMock(return_value=reply))
     message = await slack_conversation.get_unanswered_message(druks_db)
     message.state = MessageState.DELIVERED
-    await record_question(slack_conversation, message, FORM)
+    await record_question(slack_conversation, message, question=FORM)
 
     await service.finish_turn(
         druks_db, slack_conversation, message, Bridge(None), {"status": status, "archivePath": ""}
@@ -1064,18 +1064,30 @@ async def test_a_person_s_message_closes_the_open_questions_of_its_conversation(
     assert list(queued) == [f"{CLOSE_QUESTION_WORKFLOW}:{closed_id}" for closed_id in closed]
 
 
+def dump_blocks(*blocks):
+    """The blocks as the API gives them."""
+    return [block.model_dump(mode="json", by_alias=True) for block in blocks]
+
+
 FACTS_TEXT = '[Facts([Fact("Owner", "Ana"), Fact("Builds", 12)], title="Project")]'
-FACTS = [
-    ui.Facts([ui.Fact("Owner", "Ana"), ui.Fact("Builds", 12)], title="Project").model_dump(
-        mode="json", by_alias=True
-    )
-]
+FACTS = dump_blocks(ui.Facts([ui.Fact("Owner", "Ana"), ui.Fact("Builds", 12)], title="Project"))
 FACTS_FORM = "### Project\n\n- **Owner**: Ana\n- **Builds**: 12"
+CHART = dump_blocks(
+    ui.Chart(
+        kind="bar",
+        title="Builds this week",
+        categories=["Mon", "Tue"],
+        series=[ui.ChartSeries(label="Builds", points=[4, 7])],
+    )
+)
+CHART_FORM = (
+    "### Builds this week\n\n| category | Builds |\n| --- | --- |\n| Mon | 4 |\n| Tue | 7 |"
+)
 
 
-async def record_blocks(conversation, message):
+async def record_blocks(conversation, message, blocks):
     """What chat_show leaves for the end of the turn of ``message``."""
-    await get_client().set(service.blocks_key(conversation.id, message.id), json.dumps(FACTS))
+    await get_client().set(service.blocks_key(conversation.id, message.id), json.dumps(blocks))
 
 
 async def test_blocks_need_a_turn_that_runs(druks_db, conversation, tmp_path):
@@ -1104,39 +1116,45 @@ async def test_a_refused_call_keeps_the_blocks_and_a_corrected_call_replaces_the
 
     assert (first.status_code, refused.status_code, corrected.status_code) == (204, 422, 204)
     assert refused.json()["detail"].startswith("A reply takes no Action.")
-    assert kept == [ui.Text("Builds: 12").model_dump(mode="json", by_alias=True)]
+    assert kept == dump_blocks(ui.Text("Builds: 12"))
     assert json.loads(await get_client().get(key)) == FACTS
 
 
 @pytest.mark.parametrize(
-    ("source", "blocks", "numbered_question"),
+    ("source", "body_end", "blocks"),
     [
-        (ConversationSource.WEB, FACTS, ""),
+        (
+            ConversationSource.WEB,
+            "",
+            [
+                {"block": FACTS[0], "textForm": FACTS_FORM},
+                {"block": CHART[0], "textForm": CHART_FORM},
+            ],
+        ),
         (
             ConversationSource.WHATSAPP,
-            None,
+            f"\n\n{FACTS_FORM}\n\n{CHART_FORM}"
             "\n\nWhich database?\n1. Postgres\n2. MySQL\n3. SQLite",
+            [],
         ),
     ],
     ids=["web", "whatsapp"],
 )
-async def test_a_reply_keeps_its_blocks_or_ends_with_their_text_form_and_reads_it_once(
-    druks_db, conversation, tmp_path, monkeypatch, source, blocks, numbered_question
+async def test_a_reply_reads_its_blocks_apart_or_ends_with_their_text_form(
+    druks_db, conversation, tmp_path, monkeypatch, source, body_end, blocks
 ):
     conversation.source = source
     body = "Let me look.Here are the facts."
     tool_calls = [{"toolCallId": "show-1", "textOffset": 12}]
     monkeypatch.setattr(Bridge, "reply", AsyncMock(return_value=(body, tool_calls)))
     message = await start_turn(druks_db, conversation)
-    await record_blocks(conversation, message)
-    await record_question(conversation, message)
+    await record_blocks(conversation, message, blocks=[*FACTS, *CHART])
+    await record_question(conversation, message, question=QUESTION)
 
     await service.finish_turn(
         druks_db, conversation, message, Bridge(None), {"status": "replied", "archivePath": ""}
     )
 
-    reply = (await list_messages(druks_db, conversation))[-1]
-    assert reply.blocks == blocks
     api = configure_app_for_test(
         settings=make_settings(tmp_path, identity={"mode": "header", "header": "X-User"}),
         authenticated=False,
@@ -1145,14 +1163,18 @@ async def test_a_reply_keeps_its_blocks_or_ends_with_their_text_form_and_reads_i
         response = await client.get(
             f"/api/chat/conversations/{conversation.id}", headers={"X-User": "owner@example.com"}
         )
+    assert response.status_code == 200
     answer = response.json()["messages"][-1]
-    read = f"{body}\n\n{FACTS_FORM}{numbered_question}"
-    assert (answer["body"], answer["toolCalls"]) == (read, tool_calls)
+    assert (answer["body"], answer["blocks"], answer["toolCalls"]) == (
+        body + body_end,
+        blocks,
+        tool_calls,
+    )
 
 
 async def test_a_stopped_turn_shows_no_blocks(druks_db, conversation, monkeypatch):
     message = await start_turn(druks_db, conversation)
-    await record_blocks(conversation, message)
+    await record_blocks(conversation, message, blocks=FACTS)
     monkeypatch.setattr(Bridge, "reply", AsyncMock(return_value=("Stopped.", [])))
 
     await service.finish_turn(
@@ -1173,8 +1195,8 @@ async def test_a_question_goes_out_after_the_reply_and_its_blocks_as_one_message
     )
     message = await slack_conversation.get_unanswered_message(druks_db)
     message.state = MessageState.DELIVERED
-    await record_question(slack_conversation, message)
-    await record_blocks(slack_conversation, message)
+    await record_question(slack_conversation, message, question=QUESTION)
+    await record_blocks(slack_conversation, message, blocks=FACTS)
 
     await service.finish_turn(
         druks_db,
@@ -1187,10 +1209,7 @@ async def test_a_question_goes_out_after_the_reply_and_its_blocks_as_one_message
     [question] = await druks_db.scalars(select(Notification))
     text = f"I read both.\n\n{FACTS_FORM}"
     assert (question.body, question.question_offset) == (f"{text}\n\nWhich database?", len(text))
-    assert question.blocks == [
-        ui.Markdown("I read both.").model_dump(mode="json", by_alias=True),
-        *FACTS,
-    ]
+    assert question.blocks == [*dump_blocks(ui.Markdown("I read both.")), *FACTS]
 
 
 def channel(answer: bytes) -> tuple[asyncio.StreamReader, MagicMock]:
@@ -1271,7 +1290,7 @@ async def test_bridge_start_retires_the_bridge_of_an_older_druks():
         exec=AsyncMock(return_value=SimpleNamespace(returncode=0)),
     )
 
-    # A busy bridge serves this turn; an idle one exits, and the launch carries the version.
+    # A busy bridge serves this turn. An idle one exits. The launch carries the version.
     await Bridge(host).start()
     host.upload_file.assert_not_awaited()
     await Bridge(host).start()
@@ -1788,11 +1807,6 @@ async def start_run(session, conversation_id, *, state="running", kind=Summarize
     return run
 
 
-def dump_blocks(*blocks):
-    """The blocks as the API gives them."""
-    return [block.model_dump(mode="json", by_alias=True) for block in blocks]
-
-
 async def read_statuses(conversation, tmp_path):
     """The statuses of the conversation, as its owner reads them."""
     api = configure_app_for_test(
@@ -2054,15 +2068,13 @@ async def test_pending_send_and_cancel_have_one_winner_in_postgres(druks_db, can
             stop_message = await stopper.get(Message, message.id)
             if cancel_first:
                 assert await stop_message.cancel_pending(stopper)
-                other_update = asyncio.create_task(send_message.mark_delivered(sender))
                 await stopper.commit()
-                assert not await other_update
+                assert not await send_message.mark_delivered(sender)
                 await sender.commit()
             else:
                 assert await send_message.mark_delivered(sender)
-                other_update = asyncio.create_task(stop_message.cancel_pending(stopper))
                 await sender.commit()
-                assert not await other_update
+                assert not await stop_message.cancel_pending(stopper)
                 await stopper.commit()
         async with get_session(engine) as session:
             saved = await session.get(Message, message.id)
@@ -2359,7 +2371,7 @@ async def test_a_parked_run_asks_its_chat_with_its_blocks_and_where_their_work_s
             "presentation": "in_app",
             "controls": [{"id": "approve", "note_required": False}],
             "questions": [],
-            "context": [block.model_dump(mode="json", by_alias=True) for block in context],
+            "context": dump_blocks(*context),
         },
         account_id=conversation.account_id,
     )
@@ -2543,14 +2555,14 @@ async def test_an_agent_box_holds_only_the_agents_enabled_skills(
     )
     assert removed == []
 
-    # Removing the collection deletes its rows, and the box still holds alpha.
+    # Removing the collection deletes its rows. The box still holds alpha.
     await collection.delete()
     host.upload_dir.reset_mock()
     second = await get_start_request(druks_db, agent_conversation, host, monkeypatch)
 
     host.upload_dir.assert_not_awaited()
     assert removed == [f"{folder}/alpha"]
-    # The bridge reopens the session, so the agent stops seeing the removed skill.
+    # The bridge reopens the session. The agent stops seeing the removed skill.
     assert first["setup"] != second["setup"]
 
 
