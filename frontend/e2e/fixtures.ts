@@ -73,9 +73,9 @@ export const test = base.extend<
   agentSettings: [async ({ request, agent }, provide) => {
     const response = await request.patch('/api/settings/apps', {
       data: {
-        agentHarnesses: { 'chat.bot': agent.harness },
-        agentModels: { 'chat.bot': agent.model },
-        agentBillings: { 'chat.bot': agent.billing },
+        instructionHarnesses: { 'chat.bot': agent.harness },
+        instructionModels: { 'chat.bot': agent.model },
+        instructionBillings: { 'chat.bot': agent.billing },
       },
     })
     expect(response.status(), await response.text()).toBe(200)

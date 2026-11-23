@@ -229,7 +229,7 @@ async def test_a_shared_agent_override_goes_to_the_installation_settings(tmp_pat
 
     with settings_client(tmp_path) as client:
         response = client.patch(
-            "/api/settings/apps", json={"agentHarnesses": {CONFIG_PROBE.id: "claude"}}
+            "/api/settings/apps", json={"instructionHarnesses": {CONFIG_PROBE.id: "claude"}}
         )
 
     assert response.status_code == 200

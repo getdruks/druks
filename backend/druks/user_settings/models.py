@@ -118,7 +118,7 @@ class SettingsOverride(Base):
     ) -> ResolvedChoice:
         override = await cls.read(session, f"agent_harness:{name}", overrides=overrides)
         if override:
-            return ResolvedChoice(override, "agent")
+            return ResolvedChoice(override, "override")
         return ResolvedChoice(settings.default_harness, "default")
 
     @classmethod
@@ -136,7 +136,7 @@ class SettingsOverride(Base):
     ) -> ResolvedChoice:
         override = await cls.read(session, f"agent_model:{name}", overrides=overrides)
         if override:
-            return ResolvedChoice(override, "agent")
+            return ResolvedChoice(override, "override")
         return ResolvedChoice(settings.default_model, "default")
 
     @classmethod
@@ -154,7 +154,7 @@ class SettingsOverride(Base):
     ) -> ResolvedChoice:
         override = await cls.read(session, f"agent_billing:{name}", overrides=overrides)
         if override:
-            return ResolvedChoice(override, "agent")
+            return ResolvedChoice(override, "override")
         return ResolvedChoice(settings.default_billing, "default")
 
     @classmethod
@@ -172,7 +172,7 @@ class SettingsOverride(Base):
     ) -> ResolvedChoice:
         override = await cls.read(session, f"agent_effort:{name}", overrides=overrides)
         if override:
-            return ResolvedChoice(override, "agent")
+            return ResolvedChoice(override, "override")
         return ResolvedChoice(settings.default_effort, "default")
 
     @classmethod
@@ -191,7 +191,7 @@ class SettingsOverride(Base):
     ) -> ResolvedTimeout:
         override = await cls.read(session, f"agent_timeout:{name}", overrides=overrides)
         if override:
-            return ResolvedTimeout(override, "agent")
+            return ResolvedTimeout(override, "override")
         if declared:
             return ResolvedTimeout(declared, "declared")
         return ResolvedTimeout(settings.default_timeout, "default")

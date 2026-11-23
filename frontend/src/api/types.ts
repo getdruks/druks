@@ -892,12 +892,12 @@ export interface BrowserSession {
   lastUsedAt: string | null
 }
 
-export type Source = 'agent' | 'default'
-/** A timeout can also be the declared value of the agent. */
-export type TimeoutSource = 'agent' | 'declared' | 'default'
+export type Source = 'override' | 'default'
+/** A timeout can also be the declared value of the instruction. */
+export type TimeoutSource = 'override' | 'declared' | 'default'
 
 export interface InstructionSetting {
-  /** The durable id of the agent, `<app>.<attribute>`. It is the key in the agent maps of an update. */
+  /** The durable id of the instruction, `<app>.<attribute>`. It is the key in the instruction maps of an update. */
   name: string
   /** The declared display name, else the attribute name. */
   label: string
@@ -977,11 +977,11 @@ export interface AppsSettingsResponse {
 export type AppSettingsProblems = Record<string, Record<string, string>>
 
 export interface UpdateAppsSettingsRequest {
-  agentHarnesses?: Record<string, string | null>
-  agentModels?: Record<string, string | null>
-  agentBillings?: Record<string, Billing | null>
-  agentEfforts?: Record<string, string | null>
-  agentTimeouts?: Record<string, number | null>
+  instructionHarnesses?: Record<string, string | null>
+  instructionModels?: Record<string, string | null>
+  instructionBillings?: Record<string, Billing | null>
+  instructionEfforts?: Record<string, string | null>
+  instructionTimeouts?: Record<string, number | null>
   /** Keyed by workflow kind. */
   workflowSettings?: Record<string, Record<string, unknown>>
   /** Keyed by app name. */
