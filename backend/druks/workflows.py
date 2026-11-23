@@ -614,22 +614,29 @@ async def _notify_failure(workflow_id: str, subject: dict | None, failure: str) 
         subject,
         failure,
     )
-    await DBOS.enqueue_workflow_async(NOTIFICATIONS_QUEUE, send_notification, notification_id)
+    if notification_id:
+        await DBOS.enqueue_workflow_async(NOTIFICATIONS_QUEUE, send_notification, notification_id)
 
 
-async def _create_failure_notification(workflow_id: str, subject: dict | None, failure: str) -> str:
+async def _create_failure_notification(
+    workflow_id: str, subject: dict | None, failure: str
+) -> str | None:
     async with step_session() as session:
         run = await session.get(Run, workflow_id)
-        notification = await Notification.create(
-            session,
-            account_id=run.account_id,
-            reason="run.failed",
-            body=RUN_FAILED_MESSAGE.format(run=run.subject_key or run.kind, failure=failure),
-            subject=subject,
-            run_id=run.id,
-            deep_link=run.get_link(),
-        )
-        return notification.id
+        # The conversation is read live, inside the step: a run that still has a chat
+        # reported its failure there, so the account is not told twice. A run whose
+        # chat was deleted, or that never had one, is told here.
+        if not run.conversation_id:
+            notification = await Notification.create(
+                session,
+                account_id=run.account_id,
+                reason="run.failed",
+                body=RUN_FAILED_MESSAGE.format(run=run.subject_key or run.kind, failure=failure),
+                subject=subject,
+                run_id=run.id,
+                deep_link=run.get_link(),
+            )
+            return notification.id
 
 
 async def _replace_status(workflow_id: str, subject: dict | None, stack: Stack) -> None:
@@ -994,8 +1001,7 @@ async def _execute_run(
         if conversation_id:
             post = partial(report_failure, failure=str(error))
             await _post_to_chat(workflow_id, name="chat.report_failure", post=post)
-        else:
-            await _notify_failure(workflow_id, subject=subject, failure=str(error))
+        await _notify_failure(workflow_id, subject=subject, failure=str(error))
 
     try:
         result = await body()
