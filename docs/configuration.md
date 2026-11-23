@@ -670,6 +670,21 @@ After each push, the build waits for CI on the head before the review, and red
 CI returns the work to the implementer. The pull request leaves draft when the review of
 a head with green CI requests no changes, or when a person approves it.
 
+A repository can also set the commands that the agent runs to check its work, in
+a `verification:` block:
+
+```yaml
+verification:
+  test_commands: ["make test"]
+  lint_commands: []
+```
+
+The repository profiler detects the lint, typecheck, and test commands of a
+repository. A list that `verification:` writes replaces the detected list, even
+an empty one. A list that it leaves out stays as detected. A command that the
+block writes keeps the CI check that the profiler found for it. A key that
+`config.yml` does not know fails the build with an error that names it.
+
 When Druks receives a push to the default branch that changes `config.yml`, the
 next build uses the new file. When a team lists Software Factory, this happens
 only for a push by a person who can use Software Factory. Druks refuses a push by

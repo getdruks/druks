@@ -162,7 +162,7 @@ class TestProfileRun:
 
         assert repo.profile["baseline"]["recommended_skills"] == ["django-patterns"]
 
-    async def test_pinned_verification_replaces_the_detected_one(self, druks_db, monkeypatch):
+    async def test_a_pinned_list_replaces_only_that_list(self, druks_db, monkeypatch):
         repo = await _seed_repo()
 
         async def _profiler(*, repo: str):
@@ -177,14 +177,37 @@ class TestProfileRun:
         await Profile().run(repo_id=repo.id)
         await db_session().refresh(repo)
 
-        # The pin replaces the whole verification section on the effective profile...
+        # The list that the operator wrote replaces its detected list...
         assert repo.effective_profile["verification"]["test_commands"] == [
             {"command": "make test", "ci_check": None}
         ]
-        assert repo.effective_profile["verification"]["lint_commands"] == []
-        # ...but the detected baseline is preserved underneath it.
-        assert repo.profile["baseline"]["verification"]["lint_commands"] == [
+        # ...and the lists that the operator left out stay as detected.
+        assert repo.effective_profile["verification"]["lint_commands"] == [
             {"command": "ruff check .", "ci_check": "Backend / lint"}
+        ]
+        # The detected baseline is preserved underneath.
+        assert repo.profile["baseline"]["verification"]["test_commands"] == [
+            {"command": "pytest", "ci_check": "Backend / tests"}
+        ]
+
+    async def test_an_empty_pinned_list_removes_the_detected_commands(self, druks_db, monkeypatch):
+        repo = await _seed_repo()
+
+        async def _profiler(*, repo: str):
+            return _profiled()
+
+        async def _pinning_policy(repo):
+            return RepoPolicy(verification=VerificationProfile(lint_commands=()))
+
+        monkeypatch.setattr(SoftwareFactory, "repo_profiler", _profiler)
+        monkeypatch.setattr(RepoPolicy, "resolve", staticmethod(_pinning_policy))
+
+        await Profile().run(repo_id=repo.id)
+        await db_session().refresh(repo)
+
+        assert repo.effective_profile["verification"]["lint_commands"] == []
+        assert repo.effective_profile["verification"]["test_commands"] == [
+            {"command": "pytest", "ci_check": "Backend / tests"}
         ]
 
     async def test_pinned_command_keeps_the_check_detected_for_it(self, druks_db, monkeypatch):
