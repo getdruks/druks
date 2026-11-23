@@ -5,7 +5,6 @@ from druks.accounts.dependencies import current_account, current_admin_account
 from druks.accounts.models import Account
 from druks.api.dependencies import SessionDep
 from druks.durable.engine import apply_schedules
-from druks.harnesses.base import Harness
 from druks.harnesses.config import check_config
 from druks.harnesses.exceptions import AgentConfigError
 from druks.harnesses.registry import get_harnesses
@@ -51,8 +50,8 @@ _EXECUTION_DEFAULTS = (
 
 
 @router.get("/harnesses", response_model=list[HarnessResponse], response_model_by_alias=True)
-async def list_harnesses() -> tuple[type[Harness], ...]:
-    return get_harnesses()
+async def list_harnesses() -> list[HarnessResponse]:
+    return [HarnessResponse.from_harness(harness) for harness in get_harnesses()]
 
 
 @instructions_router.get("", response_model=InstructionsResponse, response_model_by_alias=True)

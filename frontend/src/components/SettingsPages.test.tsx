@@ -29,10 +29,10 @@ vi.mock('../lib/useScreenWakeLock', () => ({
 }))
 
 const harnesses = [
-  { name: 'claude', provider: 'anthropic', billingOptions: ['api_key', 'subscription'] },
-  { name: 'codex', provider: 'openai', billingOptions: ['api_key', 'subscription'] },
-  { name: 'opencode', provider: null, billingOptions: ['api_key'] },
-  { name: 'pi', provider: null, billingOptions: ['api_key'] },
+  { name: 'claude', provider: 'anthropic', billingOptions: ['api_key', 'subscription'], hasChat: true },
+  { name: 'codex', provider: 'openai', billingOptions: ['api_key', 'subscription'], hasChat: true },
+  { name: 'opencode', provider: null, billingOptions: ['api_key'], hasChat: true },
+  { name: 'pi', provider: null, billingOptions: ['api_key'], hasChat: false },
 ]
 
 const userSettings = {

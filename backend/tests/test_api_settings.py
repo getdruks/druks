@@ -36,9 +36,16 @@ def test_get_harnesses_lists_the_registry(tmp_path: Path):
         "name": "claude",
         "provider": "anthropic",
         "billingOptions": ["api_key", "subscription"],
+        "hasChat": True,
     }
     assert harnesses["codex"]["provider"] == "openai"
-    assert harnesses["pi"] == {"name": "pi", "provider": None, "billingOptions": ["api_key"]}
+    # Pi ships no adapter_command, so Chat does not run on it.
+    assert harnesses["pi"] == {
+        "name": "pi",
+        "provider": None,
+        "billingOptions": ["api_key"],
+        "hasChat": False,
+    }
 
 
 def test_get_settings_carries_the_execution_defaults(tmp_path: Path):

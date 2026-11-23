@@ -52,8 +52,9 @@ beforeEach(() => {
     },
   ])
   vi.spyOn(api, 'harnesses').mockResolvedValue([
-    { name: 'claude', provider: 'anthropic', billingOptions: ['subscription', 'api_key'] },
-    { name: 'codex', provider: 'openai', billingOptions: ['subscription', 'api_key'] },
+    { name: 'claude', provider: 'anthropic', billingOptions: ['subscription', 'api_key'], hasChat: true },
+    { name: 'codex', provider: 'openai', billingOptions: ['subscription', 'api_key'], hasChat: true },
+    { name: 'pi', provider: null, billingOptions: ['api_key'], hasChat: false },
   ])
   vi.spyOn(api, 'providers').mockResolvedValue([
     { id: 'anthropic', label: 'Anthropic', billingOptions: ['subscription', 'api_key'], signIn: 'login' },
@@ -239,6 +240,21 @@ describe('AgentsPage', () => {
     fireEvent.change(screen.getByLabelText('Harness'), { target: { value: 'codex' } })
 
     expect((screen.getByRole('button', { name: 'Save agent' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('offers only the harnesses Chat runs on, not Pi', async () => {
+    vi.spyOn(api, 'agents').mockResolvedValue([])
+
+    renderPage(member)
+    const add = (await screen.findByRole('button', { name: 'Add agent' })) as HTMLButtonElement
+    await waitFor(() => expect(add.disabled).toBe(false))
+    fireEvent.click(add)
+
+    const harness = (await screen.findByLabelText('Harness')) as HTMLSelectElement
+    const offered = within(harness)
+      .getAllByRole('option')
+      .map((option) => option.textContent)
+    expect(offered).toEqual(['claude', 'codex'])
   })
 
   it('points only an admin to Settings → Skills', async () => {

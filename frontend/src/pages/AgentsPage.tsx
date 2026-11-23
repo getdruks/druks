@@ -44,6 +44,8 @@ export function AgentsPage({ account }: { account: Account }) {
     .flatMap((collection) => collection.skills)
     .filter((skill) => skill.enabled)
   const harnesses = harnessesQuery.data ?? []
+  // An agent answers in Chat, so the form offers only the harnesses Chat runs on.
+  const chatHarnesses = harnesses.filter((harness) => harness.hasChat)
   const catalogs = catalogsQuery.data ?? []
   const catalog = buildCatalog(
     harnesses,
@@ -69,7 +71,7 @@ export function AgentsPage({ account }: { account: Account }) {
       description: '',
       instructions: '',
       skills: [],
-      harness: harnesses.find((harness) => harness.billingOptions.includes('subscription'))?.name ?? '',
+      harness: chatHarnesses.find((harness) => harness.billingOptions.includes('subscription'))?.name ?? '',
       model: '',
       isPrivate: true,
       ownerId: account.id,
@@ -252,7 +254,7 @@ export function AgentsPage({ account }: { account: Account }) {
               onChange={(event) => setDraft({ ...draft, harness: event.target.value, model: '' })}
               disabled={busy}
             >
-              {harnesses.map((harness) => (
+              {chatHarnesses.map((harness) => (
                 <option
                   key={harness.name}
                   value={harness.name}
