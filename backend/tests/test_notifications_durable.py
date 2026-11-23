@@ -1432,6 +1432,8 @@ async def test_an_approval_is_a_message_of_its_own_and_its_answer_leaves_the_sta
         if notification.reason == "gate.parked"
     ]
     await _wait_for(rt, approval.id, lambda snapshot: snapshot["state"] == "delivered")
+    # A send shows the newest status. The status posts before the answer ends the run.
+    await _wait_status(rt, workflow_id, lambda status: status.state == "delivered")
 
     answered = await _respond_in_own_session(rt, approval.correlation_token, {"control": "approve"})
     assert answered == "ok"

@@ -368,7 +368,7 @@ def test_split_columns_are_exactly_two_panes():
     (columns,) = wire(Columns([Text("threads"), Text("reading")], layout="split"))
 
     assert columns["layout"] == "split"
-    with pytest.raises(ValueError, match="two panes"):
+    with pytest.raises(ValueError, match="takes two blocks, not 1"):
         Columns([Text("only")], layout="split")
 
 
