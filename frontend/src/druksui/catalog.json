@@ -134,6 +134,26 @@
       "valueLabel": "Notes"
     },
     {
+      "block": "chart",
+      "kind": "pie",
+      "title": "Pie",
+      "categories": [
+        "Open",
+        "Done"
+      ],
+      "series": [
+        {
+          "label": "notes",
+          "points": [
+            1.0,
+            2.0
+          ]
+        }
+      ],
+      "categoryLabel": "State",
+      "valueLabel": "Notes"
+    },
+    {
       "block": "metrics",
       "title": "",
       "metrics": [

@@ -94,10 +94,10 @@ def _get_status(subject: Follows, info: SerializationInfo) -> dict[str, Any]:
 
 def _check_field_names(*, owner: str, fields: list[FormField], arguments: dict[str, Any]) -> None:
     names = [field.name for field in fields]
-    repeated = sorted({name for name in names if names.count(name) > 1})
-    if repeated:
+    repeated_names = sorted({name for name in names if names.count(name) > 1})
+    if repeated_names:
         raise ValueError(
-            f"{owner} has two fields named {repeated}; one would take the other's value. "
+            f"{owner} has two fields named {repeated_names}; one would take the other's value. "
             "Give each field its own name."
         )
     taken = sorted(set(names) & set(arguments))
@@ -345,14 +345,14 @@ class Action(PageBlock):
 
     def check_operation(self, app_name: str, operations) -> None:
         """The operation must be one of the app's own writes."""
-        found = operations.get(self.operation)
-        if not found:
+        operation = operations.get(self.operation)
+        if not operation:
             raise ValueError(
                 f"app {app_name!r} action {self.label!r} names operation "
                 f"{self.operation!r}, which none of its routes declares. This app declares "
                 f"{sorted(operations)}."
             )
-        if found.method == "GET":
+        if operation.method == "GET":
             raise ValueError(
                 f"app {app_name!r} action {self.label!r} names {self.operation!r}, a GET "
                 "route. A GET is a read, so it can never be an action."
@@ -811,10 +811,12 @@ class ChartSeries(Schema):
 
 class Chart(PageBlock):
     """Numbers over categories. Every series carries one point for each
-    category, so the shell can read the same table a chart draws."""
+    category. The shell then reads the same table that the chart draws. A pie
+    draws each point of its one series as a share of the whole. Each point of a
+    pie is above zero."""
 
     block: Literal["chart"] = "chart"
-    kind: Literal["line", "bar", "area"] = "line"
+    kind: Literal["line", "bar", "area", "pie"] = "line"
     title: str = ""
     categories: list[str] = Field(default_factory=list)
     series: list[ChartSeries] = Field(default_factory=list)
@@ -823,12 +825,31 @@ class Chart(PageBlock):
 
     @model_validator(mode="after")
     def _series_match_the_categories(self) -> "Chart":
-        wrong = [one.label for one in self.series if len(one.points) != len(self.categories)]
-        if wrong:
+        wrong_series = [one.label for one in self.series if len(one.points) != len(self.categories)]
+        if wrong_series:
             raise ValueError(
-                f"chart series {wrong} do not carry one point for each of the "
+                f"chart series {wrong_series} do not carry one point for each of the "
                 f"{len(self.categories)} categories."
             )
+        return self
+
+    @model_validator(mode="after")
+    def _pie_is_one_series_above_zero(self) -> "Chart":
+        if self.kind == "pie":
+            name = repr(self.title) if self.title else f"of categories {self.categories}"
+            if len(self.series) != 1:
+                raise ValueError(
+                    f"pie chart {name} has {len(self.series)} series. A pie draws one "
+                    "series. Give it one series."
+                )
+            points = zip(self.categories, self.series[0].points, strict=True)
+            categories_at_or_below_zero = [category for category, point in points if point <= 0]
+            if categories_at_or_below_zero:
+                raise ValueError(
+                    f"pie chart {name} has a point of zero or less for the categories "
+                    f"{categories_at_or_below_zero}. A pie draws each point as a share of "
+                    "the whole. Give each point a number above zero."
+                )
         return self
 
     def to_markdown(self) -> str:
@@ -942,10 +963,10 @@ class Table(PageBlock):
 
     @model_validator(mode="after")
     def _rows_match_the_columns(self) -> "Table":
-        wrong = [len(row.cells) for row in self.rows if len(row.cells) != len(self.columns)]
-        if wrong:
+        wrong_counts = [len(row.cells) for row in self.rows if len(row.cells) != len(self.columns)]
+        if wrong_counts:
             raise ValueError(
-                f"table {self.title!r} has rows of {sorted(set(wrong))} cells under "
+                f"table {self.title!r} has rows of {sorted(set(wrong_counts))} cells under "
                 f"{len(self.columns)} columns."
             )
         return self
@@ -969,10 +990,10 @@ class Table(PageBlock):
                 f"table {self.title!r} can select rows, and a row has no key. Give each row a key."
             )
         keys = [row.key for row in self.rows]
-        repeated = sorted({key for key in keys if keys.count(key) > 1})
-        if repeated:
+        repeated_keys = sorted({key for key in keys if keys.count(key) > 1})
+        if repeated_keys:
             raise ValueError(
-                f"table {self.title!r} has two rows keyed {repeated}; the shell "
+                f"table {self.title!r} has two rows keyed {repeated_keys}; the shell "
                 "would not know which one the operator picked. Give each row its "
                 "own key."
             )
@@ -1161,17 +1182,17 @@ class Section(BlockParent):
             )
         if self.name:
             regions.add(self.name)
-        inside = self.name or region
+        nearest_region = self.name or region
         for control in self.controls:
             control.check_placement(
                 followed=followed or bool(self.follows),
                 regions=regions,
-                region=inside,
+                region=nearest_region,
             )
         super().check_placement(
             followed=followed or bool(self.follows),
             regions=regions,
-            region=inside,
+            region=nearest_region,
         )
 
     @model_validator(mode="after")
