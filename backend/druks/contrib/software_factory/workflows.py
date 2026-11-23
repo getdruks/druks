@@ -19,6 +19,7 @@ from druks.contrib.software_factory.contracts import (
 )
 from druks.contrib.software_factory.enums import HumanFeedbackAction, Resolution, ReviewDecision
 from druks.contrib.software_factory.models import ProjectRepo, WorkItem
+from druks.contrib.software_factory.ticketing.base import Tracker
 from druks.contrib.software_factory.ticketing.enums import TicketStatus
 from druks.core.apis.exceptions import GitHubRerunRefusedError
 from druks.core.services import Github
@@ -31,11 +32,12 @@ from druks.sandbox.layout import get_related_root, get_work_root
 from druks.services.exceptions import ServiceNotConnectedError
 from druks.settings import get_settings
 from druks.skills.models import Skill
-from druks.workflows import FatalError, WaitTimeout, Workflow, step
+from druks.workflows import GATE_TTL_SECONDS, FatalError, WaitTimeout, Workflow, step
 from druks.workspaces import RepoWorkspace
 
 from .app import SoftwareFactory
 from .constants import (
+    BLOCKER_POLL_SECONDS,
     CHECK_LINE_CHARS,
     CHECK_LOG_PATH,
     CHECK_TAIL_LINES,
@@ -212,7 +214,10 @@ class Build(Workflow):
         if tracker := await SoftwareFactory.get_tracker():
             async with tracker:
                 blockers = await tracker.get_blocked_by(ticket["identifier"])
-                if open_blockers := [key for key, is_open in blockers.items() if is_open]:
+                open_blockers = [key for key, is_open in blockers.items() if is_open]
+                if open_blockers and await cls._can_build_on_open_pr(item, blockers, tracker):
+                    open_blockers = []
+                if open_blockers:
                     await item.announce("build.waiting", blockers=open_blockers)
                     raise TicketBlocked(ticket["identifier"], open_blockers)
                 account_id = await tracker.get_account_id(ticket["assignee_id"])
@@ -223,6 +228,42 @@ class Build(Workflow):
             assignee_name=ticket["assignee_name"],
             blockers=list(blockers),
         )
+
+    @classmethod
+    async def _can_build_on_open_pr(
+        cls, item: WorkItem, blockers: dict[str, bool], tracker: Tracker
+    ) -> bool:
+        """Whether the ticket starts on the branch of its one open blocker. That blocker's PR
+        is out of draft, and no other blocker has work in this repo: a branch holds the
+        change of one blocker, and a blocker that merged is not on another's branch. The
+        ticket is also the only one in this repo that the blocker blocks: a stack is a line,
+        so one dependent builds on the blocker's branch."""
+        in_repo = []
+        for key in blockers:
+            blocker = await WorkItem.get_for_ticket_key(source=item.source, ticket_key=key)
+            if blocker and blocker.repo == item.repo:
+                in_repo.append(blocker)
+        open_keys = [key for key, is_open in blockers.items() if is_open]
+        if len(in_repo) == 1 and in_repo[0].has_open_pr and open_keys == [in_repo[0].ticket_key]:
+            for ticket in await tracker.get_blocking(in_repo[0].ticket_key):
+                if ticket["identifier"] == item.ticket_key:
+                    continue
+                dependent = await WorkItem.get_for_ticket_key(
+                    source=ticket["source"], ticket_key=ticket["identifier"]
+                )
+                if dependent:
+                    dependent_repo = dependent.repo
+                else:
+                    project_repo = await ProjectRepo.lookup(
+                        project_name=ticket["project_name"], labels=ticket["labels"]
+                    )
+                    dependent_repo = project_repo.full_name if project_repo else None
+                if dependent_repo == item.repo:
+                    return False
+            github = await Github.get_client(item.repo)
+            pull_request = await github.get_pull_request(item.repo, in_repo[0].pr_number)
+            return pull_request["state"] == "open" and not pull_request["draft"]
+        return False
 
     async def run_multistep(
         self,
@@ -263,6 +304,7 @@ class Build(Workflow):
                 db_session(), self._profile.get("recommended_skills", [])
             ),
             blockers=self._blockers,
+            base_branch=self._base_branch,
             journal=self.journal,
         )
         return {
@@ -290,15 +332,17 @@ class Build(Workflow):
 
     @step
     async def _load_blockers(self) -> list[dict]:
-        """Each blocker's ticket key, or its merged PR when Druks built it."""
-        source = (await self.subject).source
+        """Each blocker's ticket key, or its PR when Druks built it. The open PR in this
+        repo carries its branch."""
+        subject = await self.subject
         blockers = []
         for key in self.input.blockers:
-            item = await WorkItem.get_for_ticket_key(source=source, ticket_key=key)
-            if item and item.resolution == Resolution.MERGED:
-                blockers.append(
-                    {"repo": item.repo, "pr_number": item.pr_number, "title": item.title}
-                )
+            item = await WorkItem.get_for_ticket_key(source=subject.source, ticket_key=key)
+            if item and (item.resolution == Resolution.MERGED or item.has_open_pr):
+                blocker = {"repo": item.repo, "pr_number": item.pr_number, "title": item.title}
+                if item.has_open_pr and item.repo == subject.repo:
+                    blocker["branch"] = item.branch
+                blockers.append(blocker)
             else:
                 blockers.append({"ticket_key": key, "pr_number": None})
         return blockers
@@ -529,6 +573,8 @@ class Build(Workflow):
     async def _approved_work(self) -> bool:
         # GitHub announces the merge. The pr.closed reaction stores the result.
         if self._policy.on_approval == "merge":
+            if await self._wait_for_blocker_merge():
+                return await self._triage()
             if await self.declare_merge_intent():
                 return True
             logger.warning(
@@ -539,6 +585,42 @@ class Build(Workflow):
             return await self._work_gate()
         await self._clear_draft()
         return True
+
+    async def _wait_for_blocker_merge(self) -> bool:
+        """Wait until the PR no longer targets a blocker's branch. GitHub merges a stacked PR
+        together with every open PR below it, so a merge now would merge the blocker without
+        its own approval, or put the ticket's code on the blocker's branch and not on the
+        default branch. GitHub moves the PR to the base the blocker merged into. Return True
+        when a person asked for changes meanwhile: that review goes to triage, as at the
+        gate."""
+        if self._base_branch:
+            started_at = await self._now()
+            while await self._targets_blocker_branch():
+                if await self._now() - started_at > GATE_TTL_SECONDS:
+                    raise FatalError(f"{self._base_branch} did not merge in time")
+                with suppress(WaitTimeout):
+                    answer = await self.wait(
+                        "pr.changed",
+                        label="Waiting for its blocker to merge",
+                        ttl_seconds=BLOCKER_POLL_SECONDS,
+                    )
+                    if answer.get("action") == "request_changes":
+                        self.journal.add(
+                            ReviewWork(
+                                action="request_changes",
+                                reviewer=answer["reviewer"],
+                                body=answer["body"],
+                            )
+                        )
+                        return True
+        return False
+
+    @step(retries=3)
+    async def _targets_blocker_branch(self) -> bool:
+        repo = (await self.subject).repo
+        github = await Github.get_client(repo)
+        pull_request = await github.get_pull_request(repo, self.pr_number)
+        return pull_request["base"]["ref"] == self._base_branch
 
     async def _triage(self) -> bool:
         feedback = await SoftwareFactory.triage_human_feedback()
@@ -640,7 +722,11 @@ class Build(Workflow):
     async def _create_branch(self) -> None:
         # Replay keeps the branch: GitHub holds it, and a second pass would create the
         # next number.
-        await (await self.subject).create_branch()
+        await (await self.subject).create_branch(base=self._base_branch)
+
+    @property
+    def _base_branch(self) -> str | None:
+        return next((blocker["branch"] for blocker in self._blockers if "branch" in blocker), None)
 
     @step
     async def declare_merge_intent(self) -> bool:

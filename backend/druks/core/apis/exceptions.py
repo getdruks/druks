@@ -15,6 +15,15 @@ class GitHubAppNotInstalledError(DruksError):
         self.repo = repo
 
 
+class GitHubMergeConflictError(DruksError):
+    """GitHub could not merge one branch into another."""
+
+
+class GitHubStackError(DruksError):
+    """GitHub refused to put a pull request in a stack, for example because the repo has no
+    stacked pull requests, or because the pull request below it already has one above it."""
+
+
 class GitHubRerunRefusedError(DruksError):
     """GitHub would not rerun an Actions run: the App may not, or the run is gone."""
 

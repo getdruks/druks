@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import logging
 import time
@@ -13,11 +14,7 @@ from githubkit.exception import GraphQLFailed, RequestFailed
 from githubkit.retry import RETRY_SERVER_ERROR
 from githubkit.utils import UNSET
 
-from druks.core.apis.exceptions import (
-    GitHubAppNotActiveError,
-    GitHubAppNotInstalledError,
-    GitHubRerunRefusedError,
-)
+from druks.core.apis import exceptions
 from druks.core.utils.time import ensure_utc
 
 logger = logging.getLogger(__name__)
@@ -40,6 +37,11 @@ class ReviewComment:
 
 
 _ANNOTATIONS_PER_REQUEST = 50
+
+# GitHub runs the merge of a stacked pull request in the background, and a merge takes
+# seconds.
+MERGE_POLL_SECONDS = 2.0
+MERGE_POLL_ATTEMPTS = 15
 
 
 # Where-druks-may-act is derived from the App's installations. Module-level
@@ -88,7 +90,7 @@ class GitHubAppClient:
             except RequestFailed as error:
                 if error.response.status_code != 404:
                     raise
-        raise GitHubAppNotInstalledError(owner_or_repo, app=self._slug)
+        raise exceptions.GitHubAppNotInstalledError(owner_or_repo, app=self._slug)
 
     async def create_installation_token(
         self, installation_id: int, repositories: Sequence[str] = ()
@@ -108,7 +110,7 @@ class GitHubAppClient:
         response = await self._app.rest.apps.async_list_installations(per_page=100)
         installation_ids = [item.id for item in response.parsed_data if not item.suspended_at]
         if not installation_ids:
-            raise GitHubAppNotActiveError(self._slug)
+            raise exceptions.GitHubAppNotActiveError(self._slug)
         token, _ = await self.create_installation_token(installation_ids[0])
         async with GitHub(
             TokenAuthStrategy(token),
@@ -383,11 +385,24 @@ class GitHubClient:
                 return
             raise
 
+    async def merge_branch(self, repo: str, base: str, head: str) -> None:
+        """Merge the branch ``head`` into the branch ``base``. GitHub answers a conflict with
+        409."""
+        owner, name = repo.split("/", 1)
+        try:
+            await self._github.rest.repos.async_merge(owner, name, base=base, head=head)
+        except RequestFailed as error:
+            if error.response.status_code == 409:
+                raise exceptions.GitHubMergeConflictError(f"{repo}: {head} into {base}") from error
+            raise
+
     async def merge_when_ready(self, repo: str, pr_number: int) -> bool:
         """Whether GitHub accepted ownership of the merge."""
         pull_request = await self.get_pull_request(repo, pr_number)
         if pull_request["state"] == "closed":
             return True
+        if await self._get_stack(repo, pr_number):
+            return await self.merge_stacked_pull_request(repo, pr_number)
 
         # A clean pull request merges directly: GitHub refuses to arm auto-merge
         # on one, and updating its branch first moves the head asynchronously,
@@ -398,6 +413,67 @@ class GitHubClient:
             await self.update_pull_request_branch(repo, pr_number)
             return True
         return False
+
+    async def _get_stack(self, repo: str, pr_number: int) -> dict[str, object] | None:
+        """The stack that holds the pull request, as GitHub gives it on the pull request.
+        githubkit's model of a pull request drops this field, so the request is raw."""
+        owner, name = repo.split("/", 1)
+        response = await self._github.arequest("GET", f"/repos/{owner}/{name}/pulls/{pr_number}")
+        return response.json().get("stack")
+
+    async def stack_on(self, repo: str, pr_number: int, *, below: int) -> None:
+        """Put the pull request in the stack of ``below``, the pull request whose branch it
+        targets. ``below`` starts a stack when it has none. GitHub accepts only a pull
+        request that targets the top of a stack."""
+        owner, name = repo.split("/", 1)
+        stack = await self._get_stack(repo, below)
+        try:
+            if stack:
+                await self._github.arequest(
+                    "POST",
+                    f"/repos/{owner}/{name}/stacks/{stack['number']}/add",
+                    json={"pull_requests": [pr_number]},
+                )
+            else:
+                await self._github.arequest(
+                    "POST",
+                    f"/repos/{owner}/{name}/stacks",
+                    json={"pull_requests": [below, pr_number]},
+                )
+        except RequestFailed as error:
+            raise exceptions.GitHubStackError(
+                f"{repo}#{pr_number} on #{below}: {error.response.status_code} "
+                f"{error.response.text}"
+            ) from error
+
+    async def merge_stacked_pull_request(self, repo: str, pr_number: int) -> bool:
+        """Whether GitHub merged a stacked pull request. GitHub merges it only through the
+        asynchronous endpoint, and that merge takes every open pull request below it too."""
+        owner, name = repo.split("/", 1)
+        url = f"/repos/{owner}/{name}/pulls/{pr_number}/merge-async"
+        try:
+            result = (
+                await self._github.arequest("PUT", url, json={"merge_method": "squash"})
+            ).json()
+        except RequestFailed as error:
+            # 409: a merge of this pull request is already running, and the answer is its.
+            # 400: the pull request is closed or still a draft. Both answer as a result.
+            if error.response.status_code not in {400, 409}:
+                raise
+            result = error.response.json()
+        for _ in range(MERGE_POLL_ATTEMPTS):
+            if result["status"] != "pending":
+                break
+            await asyncio.sleep(MERGE_POLL_SECONDS)
+            response = await self._github.arequest("GET", f"{url}/{result['details']['uuid']}")
+            result = response.json()
+        if result["status"] == "failed":
+            logger.warning(
+                "GitHub did not merge %s#%s: %s", repo, pr_number, result["details"]["message"]
+            )
+            return False
+        # Merged, in a merge queue, or still running: GitHub announces the merge.
+        return True
 
     async def update_pull_request_body(
         self,
@@ -456,13 +532,13 @@ class GitHubClient:
 
         return True
 
-    async def create_branch(self, repo: str, branch: str) -> None:
-        """Create ``branch`` at the head of the default branch."""
+    async def create_branch(self, repo: str, branch: str, *, base: str | None = None) -> None:
+        """Create ``branch`` at the head of ``base``, or of the default branch."""
         owner, name = repo.split("/", 1)
-        repository = await self._github.rest.repos.async_get(owner, name)
-        head = await self._github.rest.git.async_get_ref(
-            owner, name, f"heads/{repository.parsed_data.default_branch}"
-        )
+        if not base:
+            repository = await self._github.rest.repos.async_get(owner, name)
+            base = repository.parsed_data.default_branch
+        head = await self._github.rest.git.async_get_ref(owner, name, f"heads/{base}")
         await self._github.rest.git.async_create_ref(
             owner, name, ref=f"refs/heads/{branch}", sha=head.parsed_data.object_.sha
         )
@@ -631,7 +707,7 @@ class GitHubClient:
             await self._github.rest.actions.async_re_run_workflow_failed_jobs(owner, name, run_id)
         except RequestFailed as error:
             if error.response.status_code in (403, 404):
-                raise GitHubRerunRefusedError(f"{repo} run {run_id}") from error
+                raise exceptions.GitHubRerunRefusedError(f"{repo} run {run_id}") from error
             raise
 
     async def get_file_content(

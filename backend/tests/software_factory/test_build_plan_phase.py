@@ -1,7 +1,9 @@
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from druks.contrib.software_factory.app import SoftwareFactory
+from druks.contrib.software_factory.constants import BLOCKER_POLL_SECONDS
 from druks.contrib.software_factory.contracts import (
     AcceptanceCriterionOutput,
     CiReport,
@@ -20,7 +22,7 @@ from druks.contrib.software_factory.policy import PlanGate, RepoPolicy
 from druks.contrib.software_factory.ticketing.base import Tracker
 from druks.contrib.software_factory.workflows import Build, PullRequestReview
 from druks.notifications.services import get_rendered_ask
-from druks.workflows import FatalError, OperatorReply, Run
+from druks.workflows import GATE_TTL_SECONDS, FatalError, OperatorReply, Run, WaitTimeout
 
 from software_factory.factories import make_test_work_item
 
@@ -835,6 +837,7 @@ async def test_a_round_without_green_ci_parks_saying_so(monkeypatch, conclusion,
 async def test_only_a_person_s_approval_clears_the_draft_before_a_merge(monkeypatch, gate, calls):
     flow = Build()
     flow._policy = RepoPolicy(on_approval="merge", gates={"implementation_approval": gate})
+    flow._blockers = []
     flow.subject = SimpleNamespace(repo="org/repo")
     flow.journal = BuildJournal()
     flow.journal.add(CiReport(head_sha="0f3a2c1d", conclusion="red"))
@@ -900,6 +903,7 @@ async def test_a_rejected_merge_intent_reparks_the_work_gate(monkeypatch):
     rather than finishing a run whose PR never merged."""
     flow = Build()
     flow._policy = RepoPolicy(on_approval="merge")
+    flow._blockers = []
     flow.subject = SimpleNamespace(repo="clawhaven/example")
     flow.journal = SimpleNamespace(implementations=[])
     reparked = []
@@ -916,6 +920,130 @@ async def test_a_rejected_merge_intent_reparks_the_work_gate(monkeypatch):
 
     assert await flow._approved_work() is True
     assert reparked == [True]
+
+
+def _flow_on_a_blockers_branch(monkeypatch, *bases: str, answers=()) -> SimpleNamespace:
+    """A build whose PR targets each of ``bases`` as it reads it, one after another. Each
+    wait for the blocker answers with the next of ``answers``: facts, or a timeout."""
+    flow = Build()
+    flow._policy = RepoPolicy(on_approval="merge")
+    flow._blockers = [{"repo": "org/repo", "pr_number": 7, "title": "t", "branch": "agent/ACME-1"}]
+    flow.subject = SimpleNamespace(repo="org/repo")
+    flow.journal = BuildJournal()
+    monkeypatch.setattr(Build, "pr_number", property(lambda self: 42))
+    reads = iter(bases)
+    github = SimpleNamespace(
+        get_pull_request=AsyncMock(side_effect=lambda repo, number: {"base": {"ref": next(reads)}})
+    )
+    monkeypatch.setattr(
+        "druks.contrib.software_factory.workflows.Github.get_client",
+        AsyncMock(return_value=github),
+    )
+    replies = iter(answers)
+    waits: list[tuple] = []
+    merges: list[int] = []
+    triages: list[bool] = []
+
+    async def wait(topic, *, label, ttl_seconds):
+        waits.append((topic, label, ttl_seconds))
+        reply = next(replies)
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+
+    async def merge():
+        merges.append(len(waits))
+        return True
+
+    async def triage():
+        triages.append(True)
+        return False
+
+    async def now():
+        return 0.0
+
+    async def targets_blocker_branch():
+        return await Build._targets_blocker_branch.__wrapped__(flow)
+
+    monkeypatch.setattr(flow, "wait", wait)
+    monkeypatch.setattr(flow, "declare_merge_intent", merge)
+    monkeypatch.setattr(flow, "_triage", triage)
+    monkeypatch.setattr(flow, "_now", now)
+    monkeypatch.setattr(flow, "_targets_blocker_branch", targets_blocker_branch)
+    return SimpleNamespace(flow=flow, waits=waits, merges=merges, triages=triages)
+
+
+_WAIT = ("pr.changed", "Waiting for its blocker to merge", BLOCKER_POLL_SECONDS)
+
+
+async def test_approval_waits_to_merge_while_the_pr_targets_a_blockers_branch(monkeypatch):
+    """GitHub merges a stacked PR with every open PR below it, so a PR on a blocker's
+    branch merges only after GitHub moves it to the base the blocker merged into. A wake
+    from GitHub and a poll both read the base again."""
+    build = _flow_on_a_blockers_branch(
+        monkeypatch,
+        "agent/ACME-1",
+        "agent/ACME-1",
+        "main",
+        answers=[{}, WaitTimeout("pr.changed")],
+    )
+
+    assert await build.flow._approved_work() is True
+
+    assert build.waits == [_WAIT, _WAIT]
+    assert build.merges == [2]
+
+
+async def test_approval_merges_at_once_when_the_pr_no_longer_targets_a_blockers_branch(
+    monkeypatch,
+):
+    build = _flow_on_a_blockers_branch(monkeypatch, "main")
+
+    assert await build.flow._approved_work() is True
+
+    assert (build.waits, build.merges) == ([], [0])
+
+
+async def test_a_build_that_waits_too_long_for_its_blocker_fails(monkeypatch):
+    build = _flow_on_a_blockers_branch(monkeypatch, "agent/ACME-1")
+    clock = iter([0.0, GATE_TTL_SECONDS + 1.0])
+
+    async def now():
+        return next(clock)
+
+    monkeypatch.setattr(build.flow, "_now", now)
+
+    with pytest.raises(FatalError, match="agent/ACME-1 did not merge in time"):
+        await build.flow._approved_work()
+
+    assert (build.waits, build.merges) == ([], [])
+
+
+async def test_a_change_request_while_the_build_waits_goes_to_triage(monkeypatch):
+    """The wait is not the review gate, so a review that asks for changes has to reach the
+    build through the wait, and not merge with the blocker."""
+    review = {"action": "request_changes", "reviewer": "paulo", "body": "Rename it."}
+    build = _flow_on_a_blockers_branch(
+        monkeypatch, "agent/ACME-1", "agent/ACME-1", answers=[review]
+    )
+
+    assert await build.flow._approved_work() is False
+
+    assert (build.merges, build.triages) == ([], [True])
+    assert [(entry["reviewer"], entry["body"]) for entry in build.flow.journal.human_feedback] == [
+        ("paulo", "Rename it.")
+    ]
+
+
+async def test_an_approval_while_the_build_waits_changes_nothing(monkeypatch):
+    approval = {"action": "approve", "reviewer": "paulo", "body": ""}
+    build = _flow_on_a_blockers_branch(
+        monkeypatch, "agent/ACME-1", "agent/ACME-1", "main", answers=[approval, {}]
+    )
+
+    assert await build.flow._approved_work() is True
+
+    assert (build.merges, build.triages) == ([2], [])
 
 
 def _reviewing_flow(monkeypatch, facts: dict) -> tuple[Build, list[dict]]:

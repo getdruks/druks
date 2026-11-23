@@ -13,6 +13,8 @@ from druks.contrib.software_factory.models import ProjectRepo, WorkItem
 from druks.contrib.software_factory.policy import SETUP_FOLDER
 from druks.contrib.software_factory.ticketing.enums import TicketStatus
 from druks.contrib.software_factory.workflows import Build, Profile, PullRequestReview
+from druks.core.apis.exceptions import GitHubMergeConflictError, GitHubStackError
+from druks.core.services import Github
 from druks.db import atomic
 from druks.models import Base
 from druks.services.exceptions import ServiceNotConnectedError
@@ -44,6 +46,114 @@ async def pr_open_fills_the_item(*, repo: str, pr_number: int, payload: dict) ->
         async with atomic():
             await item.update(pr_number=pr_number)
             await item.announce("build.pr_opened", repo=item.repo, pr_number=pr_number)
+
+
+@subscribe("pr.opened", payload__is_fork=False)
+async def pr_on_a_blockers_branch_joins_its_stack(
+    *, repo: str, pr_number: int, payload: dict
+) -> None:
+    """A build's PR that opens against the branch of a blocker's PR joins that PR's stack,
+    so that GitHub runs its checks, merges the stack from the bottom, and moves each PR to
+    the base the one below it merged into. A refusal leaves the PR as it is."""
+    blocker = await WorkItem.get_for_branch(repo=repo, branch=payload["base_branch"])
+    if (
+        blocker
+        and blocker.pr_number
+        and await WorkItem.get_for_branch(repo=repo, branch=payload["branch"])
+    ):
+        github = await Github.get_client(repo)
+        try:
+            await github.stack_on(repo, pr_number, below=blocker.pr_number)
+        except GitHubStackError as error:
+            logger.warning("The PR is not in a stack: %s", error)
+
+
+@subscribe("pr.ready_for_review", payload__is_fork=False)
+async def ready_pr_starts_the_tickets_it_blocks(*, repo: str, pr_number: int, **_: object) -> None:
+    """A PR out of draft is ready for a person to review: the build of each ticket that it
+    blocks starts on its branch. The build parks for review only with green CI and an agent
+    review that asked for no changes, so a dependent never starts on a draft."""
+    if item := await WorkItem.get_for_pr(repo=repo, pr_number=pr_number):
+        await _start_tickets_blocked_by(item.source, item.ticket_key)
+
+
+async def _list_blocked_items(blocker: WorkItem) -> list[WorkItem]:
+    items = []
+    if tracker := await SoftwareFactory.get_tracker(blocker.source):
+        async with tracker:
+            tickets = await tracker.get_blocking(blocker.ticket_key)
+        for ticket in tickets:
+            if item := await WorkItem.get_for_ticket_key(
+                source=ticket["source"], ticket_key=ticket["identifier"]
+            ):
+                items.append(item)
+    return items
+
+
+async def _list_dependents(blocker: WorkItem, branch: str) -> list[WorkItem]:
+    """The tickets that the blocker blocks whose open PR targets ``branch``."""
+    items = [
+        item
+        for item in await _list_blocked_items(blocker)
+        if item.has_open_pr and item.repo == blocker.repo
+    ]
+    dependents = []
+    if items:
+        github = await Github.get_client(blocker.repo)
+        for item in items:
+            pull_request = await github.get_pull_request(blocker.repo, item.pr_number)
+            if pull_request["base"]["ref"] == branch:
+                dependents.append(item)
+    return dependents
+
+
+@subscribe("pr.synchronized", payload__is_fork=False)
+async def blocker_push_updates_the_prs_built_on_it(
+    *, repo: str, pr_number: int, payload: dict
+) -> None:
+    """New commits on a blocker's branch go into each PR that targets that branch. A
+    conflict stops that ticket's build and leaves its PR as it is."""
+    blocker = await WorkItem.get_for_pr(repo=repo, pr_number=pr_number)
+    if blocker and blocker.has_open_pr:
+        dependents = await _list_dependents(blocker, payload["branch"])
+        if dependents:
+            github = await Github.get_client(repo)
+            for item in dependents:
+                try:
+                    await github.merge_branch(repo, base=item.branch, head=payload["branch"])
+                except GitHubMergeConflictError:
+                    await Build.cancel(
+                        item,
+                        failure=(
+                            f"merge conflict with {blocker.ticket_key} (#{blocker.pr_number}), "
+                            f"whose branch {payload['branch']} has new commits"
+                        ),
+                    )
+                else:
+                    await item.announce("build.base_updated", blocker=blocker.ticket_key)
+
+
+@subscribe("pr.closed", payload__merged=False)
+async def closed_blocker_stops_the_builds_on_it(*, repo: str, pr_number: int, **_: object) -> None:
+    """The build of each ticket that a blocker blocks stops when the blocker's PR closes
+    without a merge."""
+    blocker = await WorkItem.get_for_pr(repo=repo, pr_number=pr_number)
+    if blocker:
+        for item in await _list_blocked_items(blocker):
+            await Build.cancel(
+                item,
+                failure=f"{blocker.ticket_key} (#{blocker.pr_number}) closed without a merge",
+            )
+
+
+@subscribe("pr.edited", payload__is_fork=False)
+async def edited_pr_wakes_the_build_waiting_on_its_base(
+    *, repo: str, pr_number: int, **_: object
+) -> None:
+    """GitHub sends an edit when it moves a PR to another base, which is what a build that
+    waits for its blocker's merge waits for."""
+    if item := await WorkItem.get_for_pr(repo=repo, pr_number=pr_number):
+        await Build.answer(item, "pr.changed")
 
 
 @subscribe(WorkflowEvent.RUNNING, workflow=Build)
@@ -105,6 +215,15 @@ async def pr_review_answers_the_gate(*, repo: str, pr_number: int, payload: dict
             await ReviewWork.answer(
                 item,
                 workflow=Build,
+                action=payload["action"],
+                reviewer=payload["reviewer"],
+                body=payload["body"],
+            )
+        else:
+            # A build that waits for its blocker's merge reads the review too.
+            await Build.answer(
+                item,
+                "pr.changed",
                 action=payload["action"],
                 reviewer=payload["reviewer"],
                 body=payload["body"],
@@ -188,10 +307,14 @@ async def done_ticket_starts_the_tickets_it_blocks(*, payload: dict) -> None:
     # The board has a fixed done status. The hidden setting can keep a value of another tracker.
     if settings.tracker == "druks":
         done_status = Status.DONE.label
-    if payload["status"] == done_status and (
-        tracker := await SoftwareFactory.get_tracker(payload["source"])
-    ):
+    if payload["status"] == done_status:
+        await _start_tickets_blocked_by(payload["source"], payload["identifier"])
+
+
+async def _start_tickets_blocked_by(source: str, key: str) -> None:
+    """Send each ticket that this one blocks through the funnel again."""
+    if tracker := await SoftwareFactory.get_tracker(source):
         async with tracker:
-            tickets = await tracker.get_blocking(payload["identifier"])
+            tickets = await tracker.get_blocking(key)
         for ticket in tickets:
             await ticket_transition_drives_the_funnel(payload=ticket)

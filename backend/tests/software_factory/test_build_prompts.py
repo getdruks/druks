@@ -48,6 +48,7 @@ def _build() -> SimpleNamespace:
         assignee_email=None,
         related_repos=[],
         blockers=[],
+        base_branch=None,
         skills=[
             SimpleNamespace(
                 name="python-house-rules",

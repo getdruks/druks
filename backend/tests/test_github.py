@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 from contextlib import asynccontextmanager
@@ -11,7 +12,9 @@ from conftest import connect_service
 from druks.core.apis.exceptions import (
     GitHubAppNotActiveError,
     GitHubAppNotInstalledError,
+    GitHubMergeConflictError,
     GitHubRerunRefusedError,
+    GitHubStackError,
 )
 from druks.core.apis.github import GitHubAppClient, GitHubClient
 from druks.core.services import Github
@@ -97,13 +100,18 @@ async def test_enable_auto_merge_uses_squash_mutation() -> None:
 
 
 class _FakeResponse:
-    def __init__(self, status_code: int) -> None:
+    def __init__(self, status_code: int, body: dict[str, object] | None = None) -> None:
         self.status_code = status_code
+        self._body = body or {}
+        self.text = json.dumps(self._body)
+
+    def json(self) -> dict[str, object]:
+        return self._body
 
 
-def _make_request_failed(status_code: int) -> RequestFailed:
+def _make_request_failed(status_code: int, body: dict[str, object] | None = None) -> RequestFailed:
     exc = RequestFailed.__new__(RequestFailed)
-    exc.response = _FakeResponse(status_code)  # type: ignore[assignment]
+    exc.response = _FakeResponse(status_code, body)  # type: ignore[assignment]
     return exc
 
 
@@ -192,6 +200,21 @@ async def test_create_branch_starts_at_the_head_of_the_default_branch() -> None:
     )
 
 
+async def test_create_branch_starts_at_the_head_of_a_given_base() -> None:
+    head = SimpleNamespace(parsed_data=SimpleNamespace(object_=SimpleNamespace(sha="def456")))
+    git = SimpleNamespace(async_get_ref=AsyncMock(return_value=head), async_create_ref=AsyncMock())
+    repos = SimpleNamespace(async_get=AsyncMock())
+    client = _TestGitHubClient(SimpleNamespace(rest=SimpleNamespace(repos=repos, git=git)))
+
+    await client.create_branch("ClawHaven/example", "agent/ACME-6", base="agent/ACME-5")
+
+    repos.async_get.assert_not_awaited()
+    git.async_get_ref.assert_awaited_once_with("ClawHaven", "example", "heads/agent/ACME-5")
+    git.async_create_ref.assert_awaited_once_with(
+        "ClawHaven", "example", ref="refs/heads/agent/ACME-6", sha="def456"
+    )
+
+
 def _merge_when_ready_client(
     *,
     state: str = "open",
@@ -212,6 +235,7 @@ def _merge_when_ready_client(
     client.update_pull_request_branch = update_pull_request_branch
     client.enable_auto_merge = enable_auto_merge
     client.squash_merge_pull_request = squash_merge_pull_request
+    client._get_stack = AsyncMock(return_value=None)
     return client, operations
 
 
@@ -242,6 +266,158 @@ async def test_merge_when_ready_arms_auto_merge_before_updating_branch() -> None
         call.enable_auto_merge("ClawHaven/example", "PR_node"),
         call.update_pull_request_branch("ClawHaven/example", 7),
     ]
+
+
+async def test_merge_when_ready_merges_a_stacked_pull_request_asynchronously() -> None:
+    client, operations = _merge_when_ready_client()
+    client._get_stack.return_value = {"number": 16}
+    client.merge_stacked_pull_request = AsyncMock(return_value=True)
+
+    assert await client.merge_when_ready("ClawHaven/example", 7)
+
+    client.merge_stacked_pull_request.assert_awaited_once_with("ClawHaven/example", 7)
+    assert operations.mock_calls == [call.get_pull_request("ClawHaven/example", 7)]
+
+
+def _json(body: dict[str, object]) -> SimpleNamespace:
+    return SimpleNamespace(json=lambda: body)
+
+
+def _pending(uuid: str) -> dict[str, object]:
+    return {"status": "pending", "details": {"uuid": uuid, "message": "Merge request enqueued."}}
+
+
+_MERGE_ASYNC = "/repos/ClawHaven/example/pulls/7/merge-async"
+
+
+async def test_a_stacked_merge_waits_until_github_has_finished_it(monkeypatch) -> None:
+    monkeypatch.setattr(github_api.asyncio, "sleep", AsyncMock())
+    merged = {"status": "merged", "details": {"message": "Merged", "sha": "abc"}}
+    arequest = AsyncMock(side_effect=[_json(_pending("u1")), _json(_pending("u1")), _json(merged)])
+    client = _TestGitHubClient(SimpleNamespace(arequest=arequest))
+
+    assert await client.merge_stacked_pull_request("ClawHaven/example", 7)
+
+    assert arequest.await_args_list == [
+        call("PUT", _MERGE_ASYNC, json={"merge_method": "squash"}),
+        call("GET", f"{_MERGE_ASYNC}/u1"),
+        call("GET", f"{_MERGE_ASYNC}/u1"),
+    ]
+
+
+async def test_a_stacked_merge_that_is_still_running_after_the_wait_is_accepted(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(github_api.asyncio, "sleep", AsyncMock())
+    arequest = AsyncMock(return_value=_json(_pending("u1")))
+    client = _TestGitHubClient(SimpleNamespace(arequest=arequest))
+
+    assert await client.merge_stacked_pull_request("ClawHaven/example", 7)
+
+    assert arequest.await_count == 1 + github_api.MERGE_POLL_ATTEMPTS
+
+
+async def test_a_stacked_merge_that_github_failed_is_not_accepted(monkeypatch) -> None:
+    monkeypatch.setattr(github_api.asyncio, "sleep", AsyncMock())
+    failed = {"status": "failed", "details": {"message": "Required status check is failing"}}
+    arequest = AsyncMock(side_effect=[_json(_pending("u1")), _json(failed)])
+    client = _TestGitHubClient(SimpleNamespace(arequest=arequest))
+
+    assert not await client.merge_stacked_pull_request("ClawHaven/example", 7)
+
+
+async def test_a_stacked_merge_of_a_pull_request_that_cannot_merge_is_not_accepted() -> None:
+    refusal = {"status": "failed", "details": {"message": "The pull request is a draft"}}
+    arequest = AsyncMock(side_effect=_make_request_failed(400, refusal))
+    client = _TestGitHubClient(SimpleNamespace(arequest=arequest))
+
+    assert not await client.merge_stacked_pull_request("ClawHaven/example", 7)
+
+
+async def test_a_stacked_merge_that_is_already_running_is_followed(monkeypatch) -> None:
+    monkeypatch.setattr(github_api.asyncio, "sleep", AsyncMock())
+    merged = {"status": "merged", "details": {"message": "Merged", "sha": "abc"}}
+    arequest = AsyncMock(
+        side_effect=[_make_request_failed(409, _pending("u1")), _json(merged)],
+    )
+    client = _TestGitHubClient(SimpleNamespace(arequest=arequest))
+
+    assert await client.merge_stacked_pull_request("ClawHaven/example", 7)
+
+    assert arequest.await_args_list[1] == call("GET", f"{_MERGE_ASYNC}/u1")
+
+
+async def test_a_stacked_merge_raises_other_failures() -> None:
+    error = _make_request_failed(403)
+    client = _TestGitHubClient(SimpleNamespace(arequest=AsyncMock(side_effect=error)))
+
+    with pytest.raises(RequestFailed) as raised:
+        await client.merge_stacked_pull_request("ClawHaven/example", 7)
+
+    assert raised.value is error
+
+
+async def test_stack_on_starts_a_stack_of_the_two_pull_requests() -> None:
+    arequest = AsyncMock(side_effect=[_json({"number": 5}), _json({})])
+    client = _TestGitHubClient(SimpleNamespace(arequest=arequest))
+
+    await client.stack_on("ClawHaven/example", 9, below=5)
+
+    assert arequest.await_args_list == [
+        call("GET", "/repos/ClawHaven/example/pulls/5"),
+        call("POST", "/repos/ClawHaven/example/stacks", json={"pull_requests": [5, 9]}),
+    ]
+
+
+async def test_stack_on_adds_the_pull_request_to_the_stack_that_holds_the_one_below() -> None:
+    below = {"number": 5, "stack": {"number": 16, "position": 2, "size": 2}}
+    arequest = AsyncMock(side_effect=[_json(below), _json({})])
+    client = _TestGitHubClient(SimpleNamespace(arequest=arequest))
+
+    await client.stack_on("ClawHaven/example", 9, below=5)
+
+    assert arequest.await_args_list[1] == call(
+        "POST", "/repos/ClawHaven/example/stacks/16/add", json={"pull_requests": [9]}
+    )
+
+
+async def test_stack_on_names_why_github_refused() -> None:
+    refusal = {"message": "Pull request #5 is already part of a stack"}
+    arequest = AsyncMock(side_effect=[_json({}), _make_request_failed(422, refusal)])
+    client = _TestGitHubClient(SimpleNamespace(arequest=arequest))
+
+    with pytest.raises(GitHubStackError, match="already part of a stack"):
+        await client.stack_on("ClawHaven/example", 9, below=5)
+
+
+async def test_merge_branch_merges_the_head_into_the_base() -> None:
+    repos = SimpleNamespace(async_merge=AsyncMock())
+    client = _TestGitHubClient(SimpleNamespace(rest=SimpleNamespace(repos=repos)))
+
+    await client.merge_branch("ClawHaven/example", base="agent/ACME-2", head="agent/ACME-1")
+
+    repos.async_merge.assert_awaited_once_with(
+        "ClawHaven", "example", base="agent/ACME-2", head="agent/ACME-1"
+    )
+
+
+async def test_merge_branch_raises_a_conflict() -> None:
+    repos = SimpleNamespace(async_merge=AsyncMock(side_effect=_make_request_failed(409)))
+    client = _TestGitHubClient(SimpleNamespace(rest=SimpleNamespace(repos=repos)))
+
+    with pytest.raises(GitHubMergeConflictError):
+        await client.merge_branch("ClawHaven/example", base="agent/ACME-2", head="agent/ACME-1")
+
+
+async def test_merge_branch_raises_other_failures() -> None:
+    error = _make_request_failed(404)
+    repos = SimpleNamespace(async_merge=AsyncMock(side_effect=error))
+    client = _TestGitHubClient(SimpleNamespace(rest=SimpleNamespace(repos=repos)))
+
+    with pytest.raises(RequestFailed) as raised:
+        await client.merge_branch("ClawHaven/example", base="agent/ACME-2", head="agent/ACME-1")
+
+    assert raised.value is error
 
 
 async def test_merge_when_ready_reports_unsettled_merge() -> None:

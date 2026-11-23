@@ -34,6 +34,10 @@ LOCKFILES = (
     "Cargo.lock",
     "composer.lock",
 )
+
+# A webhook wakes the wait for a blocker's merge early. The poll catches a move that came
+# with no delivery.
+BLOCKER_POLL_SECONDS = 5 * 60
 # A suite that passed or did not apply.
 CI_GREEN_CONCLUSIONS = frozenset({"success", "neutral", "skipped"})
 # Actions run conclusions a rerun can clear. A flake lands here, so the build reruns
