@@ -44,5 +44,11 @@ SECTION_FIELDS_LIMIT = 10
 FIELD_TEXT_LIMIT = 2000
 BUTTON_TEXT_LIMIT = 75
 BUTTON_URL_LIMIT = 3000
+# Slack's limits for a data table, from the Block Kit reference.
+TABLE_ROWS_LIMIT = 200
+TABLE_COLUMNS_LIMIT = 20
+MESSAGE_CELL_TEXT_LIMIT = 20_000
+# Slack takes no empty cell. An empty cell or column label of a data table shows this.
+EMPTY_CELL_TEXT = "—"
 # What a button that opens a link sends as its action, so that a click on it answers nothing.
 LINK_BUTTON_ACTION_ID = "link"

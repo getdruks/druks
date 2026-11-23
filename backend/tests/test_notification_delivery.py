@@ -12,7 +12,14 @@ from druks.chat.channels.slack.constants import (
     MESSAGE_BLOCKS_LIMIT,
     SECTION_TEXT_LIMIT,
 )
-from druks.chat.channels.slack.delivery import OMISSION_MESSAGE, cut_markdown, deliver, get_blocks
+from druks.chat.channels.slack.delivery import (
+    OMISSION_LINK,
+    OMISSION_MESSAGE,
+    TABLE_OMISSION_MESSAGE,
+    cut_markdown,
+    deliver,
+    get_blocks,
+)
 from druks.chat.enums import ConversationSource
 from druks.chat.exceptions import FormError
 from druks.chat.forms import parse_fields
@@ -738,7 +745,7 @@ async def test_facts_metrics_a_divider_and_a_link_go_out_as_slack_s_own_blocks(s
         ui.Divider(),
         ui.Metrics([ui.Metric("Noise", ui.NumberValue(72, unit="dB"))]),
         ui.Link("Pull request", url="https://github.com/acme/app/pull/7"),
-        ui.Table(columns=[ui.TableColumn("Fan")], rows=[ui.TableRow(["front"])]),
+        ui.List(["front"]),
     )
 
     await deliver(SlackClient(token=_BOT_TOKEN), "C1", "the text form", blocks=blocks)
@@ -757,7 +764,7 @@ async def test_facts_metrics_a_divider_and_a_link_go_out_as_slack_s_own_blocks(s
         {"type": "divider"},
         {"type": "section", "fields": [_mrkdwn("*Noise*\n72 dB")]},
         _link_button("Pull request", "https://github.com/acme/app/pull/7"),
-        {"type": "markdown", "text": "| Fan |\n| --- |\n| front |"},
+        {"type": "markdown", "text": "- front"},
     ]
 
 
@@ -770,8 +777,15 @@ async def test_facts_metrics_a_divider_and_a_link_go_out_as_slack_s_own_blocks(s
         (lambda size: ui.Facts([ui.Fact("Log", "x")], title="T" * (size - 2)), 3000),
         (lambda size: ui.Link("L" * size, url="https://docs.example/a"), 75),
         (lambda size: ui.Link("Docs", url="https://docs.example/" + "a" * (size - 21)), 3000),
+        (
+            lambda size: ui.Table(
+                columns=[ui.TableColumn(f"Fan {number}") for number in range(size)],
+                rows=[ui.TableRow(["front"] * size)],
+            ),
+            20,
+        ),
     ],
-    ids=["field", "section-text", "button-text", "button-address"],
+    ids=["field", "section-text", "button-text", "button-address", "table-columns"],
 )
 async def test_a_block_takes_slack_s_blocks_up_to_a_limit_and_its_text_form_past_it(
     slack, make, limit
@@ -783,7 +797,7 @@ async def test_a_block_takes_slack_s_blocks_up_to_a_limit_and_its_text_form_past
     await deliver(client, "C1", "text", blocks=_stored(past))
 
     drawn, written = slack.posts
-    assert drawn["blocks"][0]["type"] in ("section", "actions")
+    assert drawn["blocks"][0]["type"] in ("section", "actions", "data_table")
     assert written["blocks"] == [{"type": "markdown", "text": past.to_markdown()}]
 
 
@@ -1228,3 +1242,93 @@ def test_an_approval_with_more_inputs_than_a_message_holds_keeps_its_note():
 
     assert len(blocks) == 50
     assert [block["block_id"] for block in blocks[-3:-1]] == ["question:46", "note"]
+
+
+def _data_table(caption: str, *rows: list[str]) -> dict:
+    """The data table of ``rows`` of text cells, the header first."""
+    cell_rows = []
+
+    for row in rows:
+        cell_rows.append([{"type": "raw_text", "text": text} for text in row])
+    return {"type": "data_table", "caption": caption, "rows": cell_rows}
+
+
+def test_a_table_goes_out_under_its_title_with_a_number_a_link_text_or_a_dash_in_each_cell():
+    table = ui.Table(
+        title="Fans",
+        columns=[ui.TableColumn(label) for label in ("Fan", "Speed", "Seen", "")],
+        rows=[
+            ui.TableRow(
+                [
+                    "front",
+                    ui.NumberValue(1200, unit="rpm"),
+                    ui.TimeValue(None),
+                    ui.ControlsValue(
+                        [
+                            ui.Link("Rack [3]", url="https://racks.example/3"),
+                            ui.Link("Log", page="logs"),
+                        ]
+                    ),
+                ]
+            )
+        ],
+    )
+
+    (drawn,) = get_blocks("text", blocks=[table])
+
+    rack = {"type": "link", "url": "https://racks.example/3", "text": "Rack [3]"}
+    # Each cell of Speed is a number, so Slack sorts the column as numbers.
+    assert drawn == {
+        "type": "data_table",
+        "caption": "Fans",
+        "rows": [
+            [{"type": "raw_text", "text": label} for label in ("Fan", "Speed", "Seen", "—")],
+            [
+                {"type": "raw_text", "text": "front"},
+                {"type": "raw_number", "value": 1200, "text": "1,200 rpm"},
+                {"type": "raw_text", "text": "—"},
+                {
+                    "type": "rich_text",
+                    "elements": [
+                        {
+                            "type": "rich_text_section",
+                            "elements": [rack, {"type": "text", "text": " · Log"}],
+                        }
+                    ],
+                },
+            ],
+        ],
+    }
+
+
+def test_a_table_of_300_rows_shows_200_and_a_line_that_says_how_many_it_left_out():
+    page = "https://druks.example/runs/run-1"
+    table = ui.Table(
+        columns=[ui.TableColumn("Fan")],
+        rows=[ui.TableRow([f"Fan {number}"]) for number in range(300)],
+    )
+
+    line, drawn, link = get_blocks("text", blocks=[table], deep_link=page)
+
+    left_out = TABLE_OMISSION_MESSAGE.format(left=100, total=300) + OMISSION_LINK.format(link=page)
+    assert line == {"type": "markdown", "text": left_out}
+    assert drawn == _data_table("Fan", ["Fan"], *([f"Fan {number}"] for number in range(200)))
+    assert link == {"type": "markdown", "text": page}
+
+
+def test_the_tables_of_a_message_share_slack_s_limit_for_the_text_of_their_cells():
+    # With their headers, the first table and two rows of the second take all 20,000.
+    first = ui.Table(columns=[ui.TableColumn("Log")], rows=[ui.TableRow(["x" * 15_997])])
+    second = ui.Table(
+        columns=[ui.TableColumn("Log")],
+        rows=[ui.TableRow(["y" * 1_998]), ui.TableRow(["y" * 1_999]), ui.TableRow(["z"])],
+    )
+    third = ui.Table(columns=[ui.TableColumn("Log")], rows=[ui.TableRow(["z"])])
+
+    # No room is left for a row of the third table, so it goes out as its text form.
+    assert get_blocks("text", blocks=[first, second, third]) == [
+        _data_table("Log", ["Log"], ["x" * 15_997]),
+        {"type": "markdown", "text": TABLE_OMISSION_MESSAGE.format(left=1, total=3)},
+        _data_table("Log", ["Log"], ["y" * 1_998], ["y" * 1_999]),
+        {"type": "markdown", "text": third.to_markdown()},
+    ]
