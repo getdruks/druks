@@ -672,6 +672,9 @@ one, and it is the last word where it and a prompt disagree. A section heading
 that is a path glob, for example `## frontend/**`, marks the rules for that part
 of the repository.
 
+[Steer Software Factory for a repository](repository-guidance.md) covers the
+other files and settings that guide builds, and when each one takes effect.
+
 ### Review identity (optional)
 
 The bundled `software_factory` app declares an optional service, **Github
@@ -1346,6 +1349,9 @@ into the agent's sandbox. An agent on OpenCode gets none. Druks
 removes from the sandbox each skill it copied earlier that the agent no longer
 gets, including a skill removed from Druks. A chat without an agent gets no
 skills.
+
+After you change the skills, profile the repository again. See
+[change the profile or the skills](repository-guidance.md#change-the-profile-or-the-skills).
 
 ## Credential custody and secrets at rest
 
