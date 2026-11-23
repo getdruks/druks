@@ -283,6 +283,23 @@ authenticated account. It returns `timezone`, `theme`, `notificationChannelId`, 
 | `DRUKS_HARNESS_CONFIG_ROOT` | `~/.config/druks/harnesses` | Optional harness configuration copied into sandboxes |
 | `DRUKS_LOG_LEVEL` | `INFO` | Python and DBOS log level |
 
+`log_format` sets the format of the log. It is a top-level key of `druks.toml`,
+before any table, and it has no environment variable:
+
+```toml
+log_format = "json"
+```
+
+With the default `text`, each record is one line of text:
+`<time> <level> <logger> <message>`, and a traceback continues on the lines
+below. DBOS, FastMCP, and uvicorn write in their own text formats. With
+`json`, each record is one JSON object on one line, with `time` in UTC,
+`level`, `logger`, `message`, and `exception`. `exception` holds the
+traceback, or `null` when the record has none. A record written inside a span
+that Druks sends also holds `trace_id` and `span_id` in hex. The records of
+DBOS, FastMCP, and uvicorn, and the migration lines of `druks init-db`, take the
+same form, on standard error. Restart Druks after a change.
+
 Each Druks process can open up to `DRUKS_DATABASE_POOL_SIZE` +
 `DRUKS_DATABASE_MAX_OVERFLOW` + `DRUKS_DBOS_POOL_SIZE` + 1 Postgres connections.
 The extra connection is the DBOS notification listener. With the defaults, this
@@ -357,6 +374,10 @@ traces of the runs:
 
 Any caller can mark its own request this way, and Druks then sends no span
 for that request. A run always keeps its trace.
+
+With [`log_format = "json"`](#core-process-settings), a log record written
+inside a span that Druks sends carries the `trace_id` of the span's trace, so a
+JSON line opens its trace in the collector.
 
 A span leaves the process with identifiers, route templates, and the attributes
 above only. Druks removes the rest before the export:

@@ -1,3 +1,4 @@
+import logging
 from logging.config import fileConfig
 
 import druks.accounts.models  # noqa: F401
@@ -18,9 +19,11 @@ import druks.user_settings.models  # noqa: F401
 from alembic import context
 from druks.alembic_support import run_alembic_env
 
-if context.config.config_file_name is not None:
-    # In-process upgrades (init-db, the migration tests) must not mute the
-    # app's already-created loggers.
+# A process that set up its log before it migrates, as druks init-db does, keeps
+# that log, so with log_format = "json" the migration's lines are JSON too. A plain
+# alembic command takes the logging of alembic.ini, which must not mute the loggers
+# that already exist.
+if context.config.config_file_name and not logging.getLogger().handlers:
     fileConfig(context.config.config_file_name, disable_existing_loggers=False)
 
 run_alembic_env()

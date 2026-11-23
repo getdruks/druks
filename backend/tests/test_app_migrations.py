@@ -1,4 +1,5 @@
 import enum
+import logging
 from pathlib import Path
 from typing import Literal
 from unittest.mock import MagicMock
@@ -108,6 +109,24 @@ def test_app_upgrade_runs_through_platform_env_with_its_own_version_table(tmp_pa
                 conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar()
                 == "b7e4f0a1c2d3"
             )
+    finally:
+        with engine.connect() as conn:
+            _drop(conn)
+        engine.dispose()
+
+
+def test_an_in_process_upgrade_keeps_the_log_that_the_process_set_up(tmp_path, caplog):
+    """druks init-db sets up its log before it migrates, so the shared env leaves that
+    log alone: with log_format = "json", the migration's lines come out as JSON too."""
+    caplog.set_level(logging.INFO)
+    versions = _versions_dir(tmp_path)
+    engine = create_engine(TEST_DATABASE_URL, isolation_level="AUTOCOMMIT")
+    with engine.connect() as conn:
+        _drop(conn)
+    try:
+        command.upgrade(_config(versions, version_table="alembic_version_ext"), "head")
+
+        assert "Running upgrade  -> ext0001" in caplog.text
     finally:
         with engine.connect() as conn:
             _drop(conn)

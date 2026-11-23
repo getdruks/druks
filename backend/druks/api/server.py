@@ -95,10 +95,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings = get_settings()
         configure_state(app, settings)
         created_engine = app.state.engine
-        # uvicorn runs this module directly and never calls setup_logging, so
-        # app loggers default to WARNING-only and INFO is dropped; the web
-        # process configures it here.
-        setup_logging(settings)
         # The default-server catalog mounts before DBOS launches — recovered
         # workflows may deliver MCP servers immediately. A bad catalog stops
         # boot here, loudly. (The suite loads it from a conftest fixture.)
@@ -145,6 +141,9 @@ def _mcp_lifespan(app: FastAPI) -> AbstractAsyncContextManager[Mapping[str, Any]
 
 settings = load_settings()
 configure_settings(settings)
+# uvicorn configures its loggers before it imports this module and logs the start of
+# the server after, so the web process takes them over here.
+setup_logging(settings)
 # Before DBOS launches: DBOS spans its workflows on the provider that this sets.
 init_tracing(settings)
 load_installed_apps()

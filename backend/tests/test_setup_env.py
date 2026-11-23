@@ -738,6 +738,20 @@ def test_setup_writes_and_preserves_installation_timezone(tmp_path, monkeypatch)
     assert Settings().timezone == "Europe/Madrid"
 
 
+def test_setup_writes_and_preserves_the_log_format(tmp_path, monkeypatch):
+    env_path = tmp_path / ".env"
+    _run(env_path, set_values=("log_format=json",))
+    _run(env_path)
+    assert _read_toml(tmp_path / "druks.toml")["log_format"] == "json"
+    monkeypatch.setenv("DRUKS_CONFIG", str(tmp_path / "druks.toml"))
+    assert Settings().log_format == "json"
+
+
+def test_setup_rejects_an_unknown_log_format(tmp_path):
+    with pytest.raises(ValueError, match="log_format must be one of 'text', 'json'"):
+        _run(tmp_path / ".env", set_values=("log_format=yaml",))
+
+
 @pytest.mark.parametrize("timezone", ["Not/A/Zone", "/etc/passwd", ""])
 def test_setup_rejects_invalid_installation_timezone(tmp_path, timezone):
     with pytest.raises(ValueError, match="Unknown IANA timezone"):

@@ -1,16 +1,25 @@
+import json
 import logging
 import re
+from collections.abc import Iterator
+from contextlib import contextmanager
+from logging.config import dictConfig
 from pathlib import Path
 
 import pytest
+from dbos._logger import init_logger
 from druks import database
 from druks.apps import loader
 from druks.durable import engine as durable_engine
 from druks.exceptions import SessionNotBoundError
 from druks.harnesses.exceptions import HarnessNotConnectedError
-from druks.settings import Settings, ensure_data_dirs
+from druks.settings import Settings, ensure_data_dirs, setup_logging
 from druks.testing import TEST_DATABASE_URL, make_settings
+from fastmcp.utilities.logging import configure_logging as configure_fastmcp_logging
+from opentelemetry import trace
+from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags
 from pydantic import ValidationError
+from uvicorn.config import LOGGING_CONFIG
 
 _SECRETS_KEY = "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="
 
@@ -297,3 +306,104 @@ def test_dbos_logging_hides_only_expected_workflow_failures(tmp_path, monkeypatc
         logger.error("workflow failed", exc_info=SessionNotBoundError())
 
     assert [type(record.exc_info[1]) for record in caplog.records] == [SessionNotBoundError]
+
+
+@contextmanager
+def _logging_as_found() -> Iterator[None]:
+    """Start from a process that has not set up logging, and leave logging as the test
+    found it."""
+    loggers = [
+        logging.getLogger(name)
+        for name in ("", "dbos", "fastmcp", "uvicorn", "uvicorn.error", "uvicorn.access")
+    ]
+    saved = [(logger.handlers, logger.propagate, logger.level) for logger in loggers]
+    for logger in loggers:
+        logger.handlers = []
+        logger.setLevel(logging.NOTSET)
+    try:
+        yield
+    finally:
+        for logger, (handlers, propagate, level) in zip(loggers, saved, strict=True):
+            logger.handlers = handlers
+            logger.propagate = propagate
+            logger.setLevel(level)
+
+
+def test_json_log_format_writes_an_exception_in_a_span_as_one_line(tmp_path, capsys):
+    context = SpanContext(
+        trace_id=0xABC, span_id=0xDEF, is_remote=False, trace_flags=TraceFlags(TraceFlags.SAMPLED)
+    )
+    with _logging_as_found(), trace.use_span(NonRecordingSpan(context)):
+        setup_logging(make_settings(tmp_path, log_level="INFO", log_format="json"))
+        try:
+            raise ValueError("boom")
+        except ValueError:
+            logging.getLogger("druks.probe").exception("failed %s", "here")
+
+    [line] = capsys.readouterr().err.splitlines()
+    record = json.loads(line)
+    assert record.keys() == {
+        "time",
+        "level",
+        "logger",
+        "message",
+        "exception",
+        "trace_id",
+        "span_id",
+    }
+    assert (record["level"], record["logger"], record["message"]) == (
+        "ERROR",
+        "druks.probe",
+        "failed here",
+    )
+    assert record["exception"].startswith("Traceback (most recent call last):")
+    assert record["exception"].endswith("ValueError: boom")
+    assert record["trace_id"] == "00000000000000000000000000000abc"
+    assert record["span_id"] == "0000000000000def"
+
+
+def test_json_log_format_names_no_trace_outside_a_span(tmp_path, capsys):
+    with _logging_as_found():
+        setup_logging(make_settings(tmp_path, log_level="INFO", log_format="json"))
+        logging.getLogger("druks.probe").info("hello")
+
+    record = json.loads(capsys.readouterr().err)
+    assert record.keys() == {"time", "level", "logger", "message", "exception"}
+    assert record["exception"] is None
+
+
+def test_json_log_format_names_no_trace_in_a_span_that_druks_does_not_send(tmp_path, capsys):
+    # The sampler drops the request of a repeated dashboard read, whose span stays valid.
+    context = SpanContext(trace_id=0xABC, span_id=0xDEF, is_remote=False)
+    with _logging_as_found(), trace.use_span(NonRecordingSpan(context)):
+        setup_logging(make_settings(tmp_path, log_level="INFO", log_format="json"))
+        logging.getLogger("uvicorn.access").info("GET /api/runs 200")
+
+    record = json.loads(capsys.readouterr().err)
+    assert record.keys() == {"time", "level", "logger", "message", "exception"}
+
+
+def test_json_log_format_takes_over_the_loggers_of_dbos_fastmcp_and_uvicorn(tmp_path, capsys):
+    with _logging_as_found():
+        # uvicorn configures its loggers before it imports the app, FastMCP when it is
+        # imported, and DBOS adds its handler when it starts, after setup_logging.
+        dictConfig(LOGGING_CONFIG)
+        configure_fastmcp_logging()
+        setup_logging(make_settings(tmp_path, log_level="INFO", log_format="json"))
+        init_logger()
+        logging.getLogger("dbos").info("workflow recovered")
+        logging.getLogger("fastmcp.server.server").info("Error calling tool 'x'")
+        logging.getLogger("uvicorn.error").info("Started server process [%d]", 7)
+        logging.getLogger("uvicorn.access").info(
+            '%s - "%s %s HTTP/%s" %d', "127.0.0.1:5000", "GET", "/health", "1.1", 200
+        )
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    records = [json.loads(line) for line in captured.err.splitlines()]
+    assert [(record["logger"], record["message"]) for record in records] == [
+        ("dbos", "workflow recovered"),
+        ("fastmcp.server.server", "Error calling tool 'x'"),
+        ("uvicorn.error", "Started server process [7]"),
+        ("uvicorn.access", '127.0.0.1:5000 - "GET /health HTTP/1.1" 200'),
+    ]

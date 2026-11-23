@@ -7,7 +7,7 @@ import secrets
 import tomllib
 from collections.abc import Callable, Mapping, MutableMapping
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 from urllib.parse import urlsplit
 
 import tomlkit
@@ -89,7 +89,7 @@ _OWNED_ENV_KEYS = frozenset(
     }
     | _KNOWN_SECRETS
 )
-_KNOWN_TOP_LEVEL_KEYS = frozenset({"timezone"})
+_KNOWN_TOP_LEVEL_KEYS = frozenset({"timezone", "log_format"})
 _KNOWN_TOML_KEYS = {
     "identity": (
         "mode",
@@ -330,6 +330,11 @@ def _canonical_config(raw: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(timezone, str):
         raise ValueError("druks.toml: timezone must be a string")
     validate_timezone(timezone)
+    log_formats = get_args(Settings.model_fields["log_format"].annotation)
+    if config.get("log_format", "text") not in log_formats:
+        raise ValueError(
+            f"druks.toml: log_format must be one of {', '.join(map(repr, log_formats))}"
+        )
     for table_name, keys in _KNOWN_TOML_KEYS.items():
         table = config.setdefault(table_name, {})
         if not isinstance(table, dict):
