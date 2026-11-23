@@ -283,6 +283,19 @@ class Notification(Base, Uuid7Pk):
             stack.blocks.append(ui.Callout(message, tone=tone))
         return stack
 
+    async def mark_action_run(self, position: int, *, username: str) -> None:
+        """Replace the action at ``position`` with the line that says ``username`` ran it,
+        and write the body again. A later click on that position then runs nothing."""
+        blocks = list(self.blocks)
+        line = constants.ACTION_RUN_MESSAGE.format(
+            username=username, label=blocks[position]["label"]
+        )
+        blocks[position] = ui.Text(line).model_dump(mode="json", by_alias=True)
+        self.blocks = blocks
+        self.body = ui.Stack(blocks).to_markdown()
+        self.updated_at = Base.utc_now()
+        await self.session.flush()
+
     async def mark_delivered(self, message_id: str | None = None) -> None:
         """Record the posted message. A notification that a claim took while its message
         posted stays acknowledged."""

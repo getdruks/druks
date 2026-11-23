@@ -20,6 +20,18 @@ PageFunction = Callable[..., Awaitable[Page]]
 # A route parameter — ``{note_id}``, or the catch-all ``{rest:path}``.
 _PARAMETER = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)(:path)?\}")
 
+
+def list_route_parameters(route: str) -> list[str]:
+    """The names of the parameters of ``route``, in the order that it holds them."""
+    return [name for name, _ in _PARAMETER.findall(route)]
+
+
+def get_route_path(route: str, arguments: dict) -> str:
+    """``route`` with each parameter filled from ``arguments`` and encoded, as the shell
+    fills it."""
+    return _PARAMETER.sub(lambda match: quote(str(arguments[match[1]]), safe=""), route)
+
+
 # The order the app declared its pages in, which sets tab order. A parent's
 # children all come from one ``pages.py``, and a module runs top to bottom, so
 # the count follows the source.
@@ -93,12 +105,12 @@ class PageRoute:
     @property
     def parameters(self) -> list[str]:
         """The names of the route's parameters, in the order the route holds them."""
-        return [name for name, _ in _PARAMETER.findall(self.route)]
+        return list_route_parameters(self.route)
 
     def get_path(self, arguments: dict[str, str]) -> str:
         """The route with each parameter filled from ``arguments`` and encoded, as
         the shell fills it."""
-        return _PARAMETER.sub(lambda match: quote(arguments[match[1]], safe=""), self.route)
+        return get_route_path(self.route, arguments)
 
     def check(self, app_name: str) -> None:
         """Everything this page decides on its own: its catch-all sits last, and

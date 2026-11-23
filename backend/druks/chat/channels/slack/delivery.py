@@ -11,7 +11,7 @@ from druks import ui
 from druks.chat.channels.slack import constants as slack
 from druks.chat.exceptions import FormError
 from druks.core.apis.slack import SlackClient
-from druks.notifications.buttons import encode_button
+from druks.notifications.buttons import encode_action, encode_button
 from druks.notifications.exceptions import (
     BlocksRefusedError,
     ChannelUnavailableError,
@@ -211,12 +211,15 @@ def get_blocks(
     a chart of its kind under its title, or under its value label when it has no title.
     Druks cuts each long title of a chart, and each long label of a line, bar, or area
     chart. A pie takes a segment for each category. Druks cuts no label of a pie. A message
-    draws the first two charts that Slack can draw. Any other block, and a block past a
-    limit of Slack, takes its text form. Text that follows text joins it in one markdown
-    block. ``blocks`` take the room that the rest leaves, the question included. When the
-    room runs out, the last block holds the text forms of the blocks left. When the markdown
-    is longer than Slack takes, Druks cuts the end of the blocks. A line in place of the
-    link then says so, with the link."""
+    draws the first two charts that Slack can draw. An action with no fields takes a
+    button that carries ``token`` and its position, with Slack's dialog when it asks to
+    confirm, while there is no ``outcome``. Any other block, and a block past a limit of
+    Slack, takes its text form. A table that selects rows takes its text form, which holds
+    its actions. Text that follows text joins it in one markdown block. ``blocks`` take the
+    room that the rest leaves, the question included. When the room runs out, the last
+    block holds the text forms of the blocks left. When the markdown is longer than Slack
+    takes, Druks cuts the end of the blocks. A line in place of the link then says so, with
+    the link."""
     controls: list[dict] = []
     if fields and actions:
         inputs_by_id = {}
@@ -321,7 +324,7 @@ def get_blocks(
                         "action_id": slack.LINK_BUTTON_ACTION_ID,
                     }
                     parts = [{"type": "actions", "elements": [button]}]
-            case ui.Table(title=title, columns=columns, rows=rows) if (
+            case ui.Table(title=title, columns=columns, rows=rows, actions=[]) if (
                 0 < len(columns) <= slack.TABLE_COLUMNS_LIMIT
             ):
                 labels = [column.label or slack.EMPTY_CELL_TEXT for column in columns]
@@ -450,6 +453,26 @@ def get_blocks(
                         ],
                     }
                     parts = [{"type": "data_visualization", "title": heading, "chart": chart}]
+            case ui.Action(label=label, confirm=confirm, fields=[]) if token and not outcome:
+                if (
+                    label
+                    and len(label) <= slack.BUTTON_TEXT_LIMIT
+                    and len(confirm) <= slack.CONFIRM_TEXT_LIMIT
+                    and (not confirm or len(label) <= slack.CONFIRM_BUTTON_LIMIT)
+                ):
+                    button = {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": label},
+                        "action_id": encode_action(token, index),
+                    }
+                    if confirm:
+                        button["confirm"] = {
+                            "title": {"type": "plain_text", "text": label},
+                            "text": {"type": "plain_text", "text": confirm},
+                            "confirm": {"type": "plain_text", "text": label},
+                            "deny": {"type": "plain_text", "text": slack.CONFIRM_DENY_TEXT},
+                        }
+                    parts = [{"type": "actions", "elements": [button]}]
         text_form = "" if parts else block.to_markdown()
         # One block of the room stays free for the link. When the room runs out, its last
         # block takes the blocks left as their text forms.

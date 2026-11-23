@@ -1,7 +1,8 @@
 from typing import Annotated
 
+from druks.accounts import Account, current_account
 from druks.chat import BotUser
-from fastapi import APIRouter, Body, status
+from fastapi import APIRouter, Body, Depends, status
 
 from druks_field_notes.models import Note
 from druks_field_notes.schemas import NoteSummary
@@ -35,3 +36,11 @@ async def clear_gist(note_id: int) -> dict[str, str]:
     note = await Note.get(id=note_id)
     await note.save_gist("")
     return {"result": "cleared"}
+
+
+@router.post(
+    "/{note_id}/archive", status_code=status.HTTP_204_NO_CONTENT, operation_id="archive_note"
+)
+async def archive_note(note_id: int, account: Account = Depends(current_account)) -> None:
+    note = await Note.get(id=note_id)
+    await note.archive(account.username)

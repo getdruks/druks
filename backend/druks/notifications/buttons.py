@@ -25,6 +25,27 @@ def decode_button(action_id: str) -> tuple[str, str]:
         raise MalformedButtonError() from error
 
 
+def encode_action(token: str, position: int) -> str:
+    """The id of the button that runs the action at ``position`` in the blocks of the
+    notification of ``token``. It carries no operation and no arguments."""
+    return f"{encode_button(token, str(position))}.action"
+
+
+def decode_action(action_id: str) -> tuple[str, int]:
+    """The token and the position that the id of an action's button names. Raises
+    MalformedButtonError for a position that is not a number."""
+    token, position = decode_button(action_id.rpartition(".")[0])
+    if position.isascii() and position.isdigit():
+        return token, int(position)
+    raise MalformedButtonError()
+
+
+def is_action_button(action_id: str) -> bool:
+    """Whether the id has the three parts of an action's button. The id of a choice has
+    two, so a choice of a gate never reads as an action."""
+    return isinstance(action_id, str) and action_id.count(".") == 2
+
+
 def _encode_part(value: str) -> str:
     return base64.urlsafe_b64encode(value.encode()).decode().rstrip("=")
 

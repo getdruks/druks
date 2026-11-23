@@ -179,9 +179,18 @@ async def get_channel(
 async def close_notifications(run_id: str, parked_at: str) -> None:
     # The claims make a rerun redo only the messages still open, so the body needs no step.
     async with step_session() as session:
-        for notification in await Notification.list_open(
-            session, run_id, datetime.fromisoformat(parked_at)
+        notification_ids = [
+            notification.id
+            for notification in await Notification.list_open(
+                session, run_id, datetime.fromisoformat(parked_at)
+            )
+        ]
+    for notification_id in notification_ids:
+        async with (
+            lock(constants.NOTIFICATION_LOCK.format(run=run_id, notification=notification_id)),
+            step_session() as session,
         ):
+            notification = await session.get(Notification, notification_id)
             if await notification.mark_acknowledged():
                 # The other messages still close when one edit fails.
                 try:

@@ -10,6 +10,8 @@ class Note(StoredSubject, ordering=("-created_at", "-id")):
     body: Mapped[str]
     # ``body`` in one line, written when a Summarize run finishes. None until then.
     gist: Mapped[str | None]
+    # The username of the account that archived the note. None until someone archives it.
+    archived_by: Mapped[str | None]
 
     @classmethod
     async def list_recent(cls, *, limit: int = 100) -> list["Note"]:
@@ -18,6 +20,10 @@ class Note(StoredSubject, ordering=("-created_at", "-id")):
 
     async def save_gist(self, gist: str) -> None:
         self.gist = gist
+        await self.save()
+
+    async def archive(self, username: str) -> None:
+        self.archived_by = username
         await self.save()
 
     @classmethod

@@ -60,5 +60,10 @@ CHART_SEGMENTS_LIMIT = 12
 CHART_LABEL_LIMIT = 20
 CHART_TITLE_LIMIT = 50
 CHART_AXIS_TITLE_LIMIT = 50
+# Slack's limits for the dialog that confirms a click. Its title is the label of the button.
+CONFIRM_TEXT_LIMIT = 300
+CONFIRM_BUTTON_LIMIT = 30
+# What the button that closes the dialog says, as on the dashboard.
+CONFIRM_DENY_TEXT = "Back"
 # What a button that opens a link sends as its action. A click on it answers no notification.
 LINK_BUTTON_ACTION_ID = "link"

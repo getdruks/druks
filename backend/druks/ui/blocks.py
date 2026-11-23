@@ -214,9 +214,9 @@ class PageBlock(Schema):
 
     def to_markdown(self) -> str:
         """The block as markdown that names no channel. A link with an address in
-        its ``url`` stays a link. A link without one shows only its words. A block
-        that sends what the operator does has no text form. It defines no
-        ``to_markdown``."""
+        its ``url`` stays a link. A link without one shows only its words. A form and
+        the controls of a gate have no text form. They define no ``to_markdown``. An
+        action has a text form only when it knows its page."""
         raise NoTextFormError(type(self).__name__)
 
     def subjects(self) -> list[tuple[str, str]]:
@@ -320,6 +320,15 @@ class Action(PageBlock):
     confirm: str = ""
     refresh: Literal["none", "page", "region"] = "page"
     link: Link | None = None
+    # The page where a person runs the action. Druks names it in the context that a
+    # review stores.
+    url: str = Field(default="", exclude_if=lambda url: not url)
+
+    @model_serializer(mode="wrap")
+    def _with_url(self, serialize: SerializerFunctionWrapHandler, info: SerializationInfo) -> dict:
+        if info.context and "action_url" in info.context:
+            return {**serialize(self), "url": info.context["action_url"]}
+        return serialize(self)
 
     @model_validator(mode="after")
     def _one_shape(self) -> "Action":
@@ -362,6 +371,12 @@ class Action(PageBlock):
                 "route. A GET route is a read. It can never be an action. Name an operation "
                 "that writes."
             )
+
+    def to_markdown(self) -> str:
+        # Only an action that knows its page has a text form: its label, linked to the page.
+        if self.url:
+            return _link(self.label, self.url)
+        raise NoTextFormError(type(self).__name__)
 
 
 class Form(PageBlock):
@@ -594,7 +609,7 @@ class SubjectStatus(PageValue):
     def _with_status(
         self, serialize: SerializerFunctionWrapHandler, info: SerializationInfo
     ) -> dict:
-        if info.context:
+        if info.context and "statuses" in info.context:
             return {**serialize(self), "status": _get_status(self.subject, info)}
         return serialize(self)
 
@@ -634,7 +649,10 @@ class GateControls(PageBlock):
     def _with_status(
         self, serialize: SerializerFunctionWrapHandler, info: SerializationInfo
     ) -> dict:
-        return {**serialize(self), "status": _get_status(self.subject, info)}
+        # Only a read has the statuses. A stored block keeps no status.
+        if info.context and "statuses" in info.context:
+            return {**serialize(self), "status": _get_status(self.subject, info)}
+        return serialize(self)
 
 
 class TimeValue(PageValue):
@@ -1026,7 +1044,8 @@ class Table(PageBlock):
             self.empty.check_placement(followed=followed, regions=regions, region=region)
 
     def to_markdown(self) -> str:
-        # An action has no text form. A table that selects rows has none either.
+        # An action has a text form only when it knows its page. A table that selects
+        # rows has one only then.
         actions = _controls(self.actions)
         body = ""
         if self.rows:
@@ -1163,7 +1182,7 @@ class Cards(PageBlock):
             self.empty.check_placement(followed=followed, regions=regions, region=region)
 
     def to_markdown(self) -> str:
-        # The drop is an action. An action has no text form.
+        # The drop is an action. It has a text form only when it knows its page.
         drop = ""
         if self.drop:
             drop = self.drop.to_markdown()

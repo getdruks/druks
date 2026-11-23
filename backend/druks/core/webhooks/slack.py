@@ -2,33 +2,45 @@ import hashlib
 import hmac
 import json
 import time
-from urllib.parse import parse_qs
+from functools import partial
+from urllib.parse import parse_qs, quote, urlsplit
 
 from dbos import DBOS
 from fastapi import HTTPException, status
 from fastapi.responses import JSONResponse, Response
 
+from druks.accounts.models import Account
+from druks.api.client import call_route
+from druks.api.exceptions import get_refusal
 from druks.chat.channels.slack.constants import LINK_BUTTON_ACTION_ID
 from druks.chat.channels.slack.delivery import deliver
 from druks.chat.forms import get_answer
 from druks.core.services import Slack
 from druks.db import db_session
 from druks.durable.engine import step_session
-from druks.exceptions import ObjectNotFound
-from druks.notifications.buttons import decode_button
-from druks.notifications.constants import CLOSED_MESSAGE
+from druks.exceptions import LockHeldError, ObjectNotFound
+from druks.locks import lock
+from druks.notifications.buttons import decode_action, decode_button, is_action_button
+from druks.notifications.constants import (
+    ACTION_RUNNING_MESSAGE,
+    CLOSED_MESSAGE,
+    NOTIFICATION_LOCK,
+)
 from druks.notifications.exceptions import (
+    ActionRefusedError,
     AlreadyAcknowledgedError,
     AnswerNotAllowedError,
     InvalidChoiceError,
     MalformedButtonError,
+    NotificationError,
     StaleRoundError,
     UnknownTokenError,
 )
 from druks.notifications.models import Notification
-from druks.notifications.services import respond_to_notification
+from druks.notifications.services import get_action_request, respond_to_notification
 from druks.secrets.models import VaultSecret
 from druks.services.exceptions import ServiceNotConnectedError
+from druks.settings import get_settings
 from druks.signals import publish
 from druks.webhooks import Webhook
 
@@ -40,6 +52,17 @@ CHOICE_MESSAGE = "<@{user}> chose {choice}."
 
 # What a submitted form's message says in place of its inputs.
 ANSWER_MESSAGE = "<@{user}> answered:\n{answers}"
+
+# What a person with no linked account reads by DM after a click on an action.
+CONNECT_MESSAGE = (
+    "Your Slack account is not connected to Druks, so Druks cannot run this action as you. "
+    "Connect it, then click the button again: {url}"
+)
+# The same, on an installation with no address for the link.
+CONNECT_IN_DRUKS_MESSAGE = (
+    "Your Slack account is not connected to Druks, so Druks cannot run this action as you. "
+    "Select Connect Slack under Chat → Channels in Druks, then click the button again."
+)
 
 
 def verify_slack_signature(
@@ -152,10 +175,6 @@ class SlackInteractivity(SlackWebhook):
             # Slack opened the link of the button, and still tells Druks of the click. A link
             # answers nothing.
             return JSONResponse({"accepted": True})
-        try:
-            token, choice_id = decode_button(action_id)
-        except MalformedButtonError as error:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Unknown button.") from error
         # The clicker's account, found in the workspace that Druks answers in, as in chat.
         account_id = await VaultSecret.get_owner_id(
             db_session(),
@@ -168,6 +187,17 @@ class SlackInteractivity(SlackWebhook):
         # not awaited: a slow or refused post cannot fail the click, and a queue would
         # add up to a second before the person sees it.
         try:
+            if is_action_button(action_id):
+                token, position = decode_action(action_id)
+                return await self.start_action(
+                    token,
+                    position,
+                    account_id=account_id,
+                    user=user,
+                    channel=channel,
+                    message=message,
+                )
+            token, choice_id = decode_button(action_id)
             notification = await respond_to_notification(
                 db_session(),
                 token,
@@ -177,6 +207,8 @@ class SlackInteractivity(SlackWebhook):
                 values=values,
                 has_inputs=True,
             )
+        except MalformedButtonError as error:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Unknown button.") from error
         except StaleRoundError as error:
             # The round is over, so the clicked message loses its buttons.
             self.log_ignored(event="block_actions", reason=type(error).__name__)
@@ -227,6 +259,100 @@ class SlackInteractivity(SlackWebhook):
         )
         return JSONResponse({"accepted": True})
 
+    async def start_action(
+        self,
+        token: str,
+        position: int,
+        *,
+        account_id: str | None,
+        user: str,
+        channel: str,
+        message: dict,
+    ) -> Response:
+        """Start the action at ``position`` in the blocks of the notification of ``token``,
+        as the clicker's account. A person with no linked account gets a DM that says how to
+        connect one, and nothing runs."""
+        request = await get_action_request(db_session(), token, position, user_id=user)
+        notification = request["notification"]
+        if account_id:
+            await DBOS.start_workflow_async(
+                run_action,
+                notification.id,
+                position,
+                account_id=account_id,
+                user=user,
+                channel=channel,
+                message_ts=message["ts"],
+                thread_ts=message.get("thread_ts", ""),
+            )
+            return JSONResponse({"accepted": True})
+        reason = CONNECT_IN_DRUKS_MESSAGE
+        # The link connects the Slack account, then opens the page of the notification.
+        if notification.deep_link:
+            page = quote(urlsplit(notification.deep_link).path, safe="")
+            endpoint = get_settings().urls.endpoint.rstrip("/")
+            reason = CONNECT_MESSAGE.format(url=f"{endpoint}/api/oauth/slack/connect?next={page}")
+        self.log_ignored(event="block_actions", reason="NoLinkedAccount")
+        # The person's DM keeps the link: Slack can drop a message that only one person sees.
+        await DBOS.start_workflow_async(
+            explain_reason, channel=user, user="", reason=reason, thread_ts=""
+        )
+        return JSONResponse({"accepted": False})
+
+
+@DBOS.workflow(name="slack.run_action")
+async def run_action(
+    notification_id: str,
+    position: int,
+    *,
+    account_id: str,
+    user: str,
+    channel: str,
+    message_ts: str,
+    thread_ts: str,
+) -> None:
+    """Run the action that a person clicked, then draw the message again, or show the person
+    alone why it did not run. Only the edit and the reply try again."""
+    try:
+        await call_action(notification_id, position, account_id=account_id, user=user)
+    except ActionRefusedError as error:
+        await explain_reason(channel, user=user, reason=str(error), thread_ts=thread_ts)
+    else:
+        await replace_buttons(notification_id, channel=channel, message_ts=message_ts, outcome="")
+
+
+@DBOS.step(name="slack.call_action")
+async def call_action(notification_id: str, position: int, *, account_id: str, user: str) -> None:
+    """Call the route of the action at ``position`` in the notification's blocks as the
+    account, and store the line that replaces the action. The call holds the notification's
+    lock, and reads the action again under it. Raises ActionRefusedError with what the
+    person who clicked reads."""
+    async with step_session() as session:
+        notification = await session.get(Notification, notification_id)
+    try:
+        async with lock(
+            NOTIFICATION_LOCK.format(run=notification.run_id, notification=notification.id),
+            blocking=False,
+        ):
+            async with step_session() as session:
+                request = await get_action_request(
+                    session, notification.correlation_token, position, user_id=user
+                )
+            response = await call_route(
+                request["method"], request["path"], json=request["body"], account_id=account_id
+            )
+            if response.is_success:
+                async with step_session() as session:
+                    account = await session.get(Account, account_id)
+                    notification = await session.get(Notification, notification_id)
+                    await notification.mark_action_run(position, username=account.username)
+                return
+    except LockHeldError as error:
+        raise ActionRefusedError(ACTION_RUNNING_MESSAGE) from error
+    except (NotificationError, ObjectNotFound) as error:
+        raise ActionRefusedError(str(error)) from error
+    raise ActionRefusedError(get_refusal(response)["message"])
+
 
 # DBOS runs a lone step as a workflow of its own, so the click handler starts these two
 # and does not wait for them.
@@ -235,20 +361,35 @@ async def replace_buttons(
     notification_id: str, *, channel: str, message_ts: str, outcome: str
 ) -> None:
     """Edit the notification's message in Slack: ``outcome`` takes the place of its
-    buttons and inputs."""
+    buttons and inputs. With no outcome, an open question keeps them, and a question that
+    is over keeps its message. The edit holds the lock of the message, so it draws what an
+    action of the message stored."""
     async with step_session() as session:
         notification = await session.get(Notification, notification_id)
-        client = await Slack.get_client()
-    await deliver(
-        client,
-        channel,
-        notification.body,
-        blocks=notification.blocks,
-        message_ts=message_ts,
-        deep_link=notification.deep_link,
-        outcome=outcome,
-        question_offset=notification.question_offset,
-    )
+    async with lock(
+        NOTIFICATION_LOCK.format(run=notification.run_id, notification=notification.id)
+    ):
+        async with step_session() as session:
+            notification = await session.get(Notification, notification_id)
+            client = await Slack.get_client()
+        edit = partial(
+            deliver,
+            client,
+            channel,
+            notification.body,
+            blocks=notification.blocks,
+            message_ts=message_ts,
+            deep_link=notification.deep_link,
+            question_offset=notification.question_offset,
+        )
+        if outcome:
+            await edit(outcome=outcome)
+        elif not notification.is_acknowledged:
+            await edit(
+                actions=notification.actions,
+                fields=notification.fields,
+                token=notification.correlation_token,
+            )
 
 
 @DBOS.step(name="slack.explain_reason", retries_allowed=True, max_attempts=5)

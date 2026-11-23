@@ -14,3 +14,6 @@ PAT_LIFETIME = timedelta(days=365)
 # last_used_at advances at most this often — a busy token must not write a row
 # per request.
 PAT_LAST_USED_RESOLUTION = timedelta(hours=1)
+# The key of a request's ASGI scope that names the account of a call from inside Druks.
+# The server builds the scope, so no client can set the key.
+ACCOUNT_SCOPE_KEY = "druks_account_id"

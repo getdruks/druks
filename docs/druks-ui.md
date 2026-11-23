@@ -447,11 +447,12 @@ shows none.
 
 ## Text forms
 
-Every block and value but three has a text form. `to_markdown()` takes no
-arguments. It writes the text form as markdown that names no channel. An
-approval keeps the blocks of a review's context beside their text form. A
-channel that draws no blocks sends the text. Slack draws some of the blocks with
-its own blocks. See [Approvals in Slack](#approvals-in-slack).
+Every block and value but two has a text form. An `Action` has one only in a
+review's context. `to_markdown()` takes no arguments. It writes the text form as
+markdown that names no channel. An approval keeps the blocks of a review's
+context beside their text form. A channel that draws no blocks sends the text.
+Slack draws some of the blocks with its own blocks. See
+[Approvals in Slack](#approvals-in-slack).
 
 | Block or value | Text form |
 | --- | --- |
@@ -472,7 +473,7 @@ its own blocks. See [Approvals in Slack](#approvals-in-slack).
 | `NumberValue` | The number with its unit. |
 | `TimeValue` | The time in UTC. |
 | `SubjectStatus` | The word that the dashboard shows. |
-| `ControlsValue` | Its links. |
+| `ControlsValue` | Its links. In a review's context, its actions too. |
 
 A link is a link in text when its `url` holds its address. A link to a page or
 to a subject names it inside one app. On its own, such a link shows only its
@@ -488,13 +489,23 @@ to an outside `http(s)` address stays a link. Any other address, such as a
 link. It encodes a space or a parenthesis in the address. The link then stays a
 link.
 
-`Form`, `Action`, and `GateControls` have no text form, because the operator
-acts through them. Their `to_markdown()` raises `NoTextFormError`, which names
-the block. A table that selects rows, a `Cards` list with a `drop` action, and a
-block with an action in its controls have no text form either. `review` refuses
-a context that holds one of the three blocks anywhere, before the run parks.
-`report` refuses a [status](#status-in-slack) that holds one, before it saves the
-status.
+`Form` and `GateControls` have no text form, because the operator acts through
+them. Their `to_markdown()` raises `NoTextFormError`, which names the block.
+`review` refuses a context that holds one of the two anywhere, before the run
+parks.
+
+An `Action` has a text form only in a review's context. When `review` stores
+the context, Druks gives each action the page of the run. That page shows the
+action as a button. The text form of the action is its label, linked to that
+page. An installation with no endpoint has no address for the page. The action
+then shows only its label. A table that selects rows, a `Cards` list with a
+`drop` action, and a block with an action in its controls write their actions
+in the same way. Slack draws some actions as buttons: see
+[Actions in Slack](#actions-in-slack).
+
+In any other place, the `to_markdown()` of an `Action` raises `NoTextFormError`
+too. `report` refuses a [status](#status-in-slack) that holds an `Action`, a
+`Form`, or a `GateControls`, before it saves the status.
 
 ## Approvals in Slack
 
@@ -505,8 +516,9 @@ Slack draws these blocks of an approval with its own blocks:
 | `Facts`, `Metrics` | A grid of two columns: each label in bold above its value, under the title in bold. A section of Slack holds 10 of them. More start a new section. |
 | `Divider` | A divider. |
 | `Link` | A button that opens the address of the link. |
-| `Table` | A data table that the person can sort and page through. The title is its caption, or the first column label when the table has no title. A `NumberValue` is a number cell. Slack sorts a column of number cells as numbers. A value with a link is a link. Any other value shows its text form. An empty value or column label shows a dash. The row detail stays on the dashboard. |
+| `Table` | A data table that the person can sort and page through. The title is its caption, or the first column label when the table has no title. A `NumberValue` is a number cell. Slack sorts a column of number cells as numbers. A value with a link is a link. Any other value shows its text form. An empty value or column label shows a dash. The row detail stays on the dashboard. A table that selects rows shows its text form. |
 | `Chart` | A chart of the same kind: line, bar, area, or pie. A line, bar, or area chart has the categories along the axis, in their order. Each series has a point for each category. The category label and the value label are the titles of the axes. A pie has no axes. It has a segment for each category, in their order, with the label of the category and its value. A chart with no title takes its value label as its title. An empty category or series label shows a dash. |
+| `Action` | At the top of the context and with no fields: a button that runs the action as the person who clicks it. See [Actions in Slack](#actions-in-slack). |
 
 Every other block shows its text form. A value in a fact or a metric shows its
 text form. A value with a link stays a link. Slack has no coloured label. A
@@ -518,8 +530,10 @@ A block that breaks a limit of Slack shows its text form:
 - a fact or a metric of more than 2,000 characters, with its label in bold on a
   line of its own;
 - the title of a `Facts` or a `Metrics` of more than 3,000 characters, in bold;
-- a link label of more than 75 characters;
-- a link address of more than 3,000 characters.
+- a link or an action label of more than 75 characters;
+- a link address of more than 3,000 characters;
+- an action that asks to confirm, when its label passes 30 characters or its
+  `confirm` passes 300.
 
 A link with no address shows its words, as in text. A message holds 50 blocks,
 its buttons included. When the message has no room for more blocks, the blocks
@@ -555,7 +569,64 @@ categories, or a category label of more than 20 characters.
 When Slack refuses the blocks, Druks sends the text of the approval in the same
 place, with the same buttons. A table or a chart then shows as a markdown table.
 Druks edits the message when the approval gets an answer or closes. The edit
-draws the blocks again, with the outcome in place of the buttons.
+draws the blocks again, with the outcome in place of the buttons. An action then
+shows its text form.
+
+### Actions in Slack
+
+An approval in Slack draws an `Action` as a button when the action is at the top
+of the review's context and has no fields:
+
+```python
+reply = await self.review(
+    context=[
+        ui.Facts([ui.Fact("Body", note.body)]),
+        ui.Action(label="Archive", operation="archive_note", arguments={"note_id": note.id}),
+    ]
+)
+```
+
+The `operation` of each action in the context names a write of the run's own
+app. `review` checks the operation when the run parks, as a page read checks it.
+A button shows the `label`. With `confirm`, Slack asks first: its dialog shows
+the confirm text, the label, and **Back**. `tone`, `refresh`, and `link` have no
+effect in Slack. Any other action of the context, such as an action with fields
+or an action in a table, shows its [text form](#text-forms) in Slack: its
+label, linked to the run's page. The person runs it there.
+
+The button names only the notification and the position of the action in its
+blocks. Druks reads the operation and the arguments from the blocks that it
+stored, so a click runs only an action that the review offers. On a click,
+Druks finds the account of the Slack user, as for an answer:
+
+- A person whose Slack account is not connected gets a direct message with the
+  link to connect it. The link returns to the run's page. On an installation
+  with no endpoint, the message says where to connect the account. Nothing
+  runs.
+- In a chat, only the person of the chat runs its actions.
+- An answered question and a past round run nothing.
+
+Druks answers Slack at once. After that, it calls the route of the operation in
+its own process, as the account. The request has the shape that the dashboard
+sends: see [Request shape](#request-shape). The request names the account in a
+place that only Druks's own process can write, so no client can copy it. The
+route runs `current_account`, `require_app_access`, and its own dependencies, as
+for the dashboard. A route that takes only the identity of the signed-in person
+refuses the request.
+
+When the route answers with any 2xx status, a line with the account and the
+label takes the place of the action. The line replaces the action in the message
+and in the notification, so a second click runs nothing. While the run waits,
+its page in Druks shows the action as a button too. That page keeps no record of
+a run from Slack. A recorded request on the Activity page shows each button and
+input of its context disabled. The inputs and the buttons of the approval stay,
+and the run still waits for its answer. When the route refuses, only the person
+who clicked reads why. A refused value names its field. A refusal that gives no
+reason Druks can read names its HTTP status. One action of a message runs at a
+time. A click while one runs gets a reply that says so.
+
+Druks does not try a refused or failed action again. When Druks stops after the
+route answers and before it records the line, the action can run once more.
 
 ## Status in Slack
 

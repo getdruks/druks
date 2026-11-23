@@ -1220,11 +1220,18 @@ reply = await self.review(
 The dashboard draws the blocks as a page draws them. Slack draws the facts,
 metrics, dividers, links, tables, and charts of an approval with its own blocks.
 It shows the other blocks as their [text forms](druks-ui.md#text-forms). See
-[Approvals in Slack](druks-ui.md#approvals-in-slack). The operator acts through
-a `Form`, an `Action`, or a `GateControls`. These blocks have no text form.
-`review` refuses them anywhere in the blocks. The `context` of a gate's in-app
-ask obeys the same rules. A `SubjectStatus` in the blocks shows where the work
-stands each time Druks reads the ask. The ask that Druks stores holds no status.
+[Approvals in Slack](druks-ui.md#approvals-in-slack). An `Action` in the blocks
+names one of the app's own writes. At the top of the blocks and with no fields,
+it is a button in Slack. A click runs the operation through its route, as the
+person who clicks. Slack honors the action's `label` and `confirm`. `tone`,
+`refresh`, and `link` have no effect there. Any other action shows in Slack as
+its label, linked to the run's page, where it is a button. See
+[Actions in Slack](druks-ui.md#actions-in-slack). The operator also acts through
+a `Form` or a `GateControls`. These two blocks have no text form. `review`
+refuses them anywhere in the blocks. An agent's tools send no action. The
+`context` of a gate's in-app ask obeys the same rules. A `SubjectStatus` in the
+blocks shows where the work stands each time Druks reads the ask. The ask that
+Druks stores holds no status.
 
 Text that is not blank, or a list of one or more blocks, guides the next pass.
 With this context, `request_changes` does not require answers or a note. Authors

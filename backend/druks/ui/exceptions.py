@@ -26,11 +26,11 @@ class PageContractError(PageReadError):
 
 class NoTextFormError(DruksError):
     """A block that the operator acts through has no text form. Its ``to_markdown()``
-    raises this error, so a review context or a status cannot hold the block."""
+    raises this error, so a review context or a status cannot hold the block. An action in
+    a review context is the exception: it knows its page, so it has a text form."""
 
     def __init__(self, block: str) -> None:
         super().__init__(
-            f"{block} has no text form, so a review context or a status cannot hold it. "
-            f"Take the {block} out of the context or the status, and show it on a page instead."
+            f"{block} has no text form here. Take the {block} out, and show it on a page instead."
         )
         self.block = block
