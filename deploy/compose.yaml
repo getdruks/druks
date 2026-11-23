@@ -205,6 +205,10 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     network_mode: host
+    # On the host network the image default listens on every host address,
+    # which a tailnet peer or a sandbox behind the secrets proxy can reach.
+    # Every service connects on 127.0.0.1.
+    command: ["postgres", "-c", "listen_addresses=127.0.0.1"]
     environment:
       POSTGRES_USER: ${DRUKS_POSTGRES_USER:-druks}
       POSTGRES_PASSWORD: ${DRUKS_POSTGRES_PASSWORD}
