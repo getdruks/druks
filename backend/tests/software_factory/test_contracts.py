@@ -81,6 +81,7 @@ def _implementation(**overrides):
     fields = {
         "type": "result",
         "status": "success",
+        "check_command": None,
         "base_sha": "a",
         "head_sha": "b",
         "commit_sha": "b",
@@ -118,6 +119,28 @@ def test_needs_clarification_may_omit_the_delivery_fields():
     )
     assert bailed.status == "needs_clarification"
     assert "pure function" in bailed.summary
+
+
+def test_needs_check_names_the_command_to_run():
+    asked = _implementation(
+        status="needs_check",
+        check_command="uv run pytest backend/",
+        base_sha=None,
+        head_sha=None,
+        commit_sha=None,
+        pr_number=None,
+    )
+    assert asked.check_command == "uv run pytest backend/"
+    with pytest.raises(ValueError, match="check_command"):
+        _implementation(status="needs_check", check_command=None)
+
+
+def test_a_delivery_that_also_names_a_command_is_still_a_delivery():
+    """The agent can name the test command that it ran. A complete, pushed delivery is not
+    thrown away for that."""
+    delivered = _implementation(check_command="uv run pytest backend/")
+
+    assert (delivered.status, delivered.check_command) == ("success", "uv run pytest backend/")
 
 
 def test_answered_questions_map_picks_to_labels_and_keep_free_text_verbatim():
@@ -205,6 +228,7 @@ def test_ask_contracts_cap_identity_and_cardinality():
             questions=[O.QuestionOutput(id=f"q{i}", prompt="p", options=[]) for i in range(9)],
             rejected_approaches=[],
             confidence="medium",
+            size="medium",
             status="planned",
             assignee_github_login=None,
             tickets=[],
@@ -233,6 +257,7 @@ def test_a_split_that_druks_cannot_write_is_refused(tickets):
             questions=[],
             rejected_approaches=[],
             confidence="medium",
+            size="medium",
             status="planned",
             assignee_github_login=None,
             tickets=tickets,

@@ -125,6 +125,8 @@ class PlanData(BaseModel):
     # The planner's self-reported calibration; "medium" for producers that
     # don't assert one (a contract revision), which never skips a park.
     confidence: Literal["high", "medium", "low"] = "medium"
+    # Reported by the planner; None for a contract revision, which does not size the change.
+    size: Literal["small", "medium", "large"] | None = None
     # Whether the planner could plan at all; "planned" for producers that don't
     # assert one (a contract revision).
     status: Literal["planned", "blocked"] = "planned"
@@ -166,6 +168,8 @@ class PlanOutput(workflows.InstructionOutput):
     questions: list[QuestionOutput] = Field(max_length=8)
     rejected_approaches: list[str]
     confidence: Literal["high", "medium", "low"]
+    # How large the change is. The build runs a small or medium change at less effort.
+    size: Literal["small", "medium", "large"]
     # ``blocked`` = the planner could not read the ticket or the repo, and
     # ``plan_markdown`` names what is missing. The workflow turns that into a
     # run-stopping failure.
@@ -206,6 +210,7 @@ class PlanOutput(workflows.InstructionOutput):
             questions=self.questions,
             rejected_approaches=self.rejected_approaches,
             confidence=self.confidence,
+            size=self.size,
             status=self.status,
             assignee_github_login=self.assignee_github_login,
             tickets=self.tickets,
@@ -271,8 +276,12 @@ class ImplementationOutput(workflows.InstructionOutput):
     type: Literal["result"]
     # ``needs_clarification`` = the implementer found a contradiction in the binding
     # requirements and bailed; ``summary`` carries the reason. The workflow turns
-    # that into a run-stopping failure.
-    status: Literal["success", "needs_clarification"]
+    # that into a run-stopping failure. ``needs_check`` = the implementer ends its turn to
+    # have Druks run ``check_command``, and Druks resumes it with the result; it is not a
+    # delivery and not a revision.
+    status: Literal["success", "needs_clarification", "needs_check"]
+    # The declared test command to run. Druks reads it only with ``needs_check``.
+    check_command: str | None
     # Nullable only for needs_clarification (bailed before delivering) — the strict
     # schema bans defaults, so optional is spelled required-but-nullable. On success
     # the validator below demands all four: a "success" without a pushed commit on a
@@ -304,6 +313,8 @@ class ImplementationOutput(workflows.InstructionOutput):
                     f"status=success without {', '.join(undelivered)} — a delivery has a "
                     "pushed commit on a PR; return needs_clarification if you could not deliver"
                 )
+        if self.status == "needs_check" and not self.check_command:
+            raise ValueError("status=needs_check without check_command — name the test to run")
         return self
 
 

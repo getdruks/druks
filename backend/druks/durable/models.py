@@ -775,14 +775,21 @@ class AgentCall(Base, Uuid7Pk):
             await session.commit()
 
     @classmethod
-    async def fail(cls, engine, *, call_id: str, error: BaseException) -> None:
+    async def fail(
+        cls, engine, *, call_id: str, error: BaseException, result: "AgentResult | None" = None
+    ) -> None:
         # The run raised after the call started (a cancel, or a crash past the
-        # agent body) — close the row so it doesn't linger as a phantom step.
+        # agent body) — close the row so it doesn't linger as a phantom step. A
+        # ``result`` means that the model finished and billed its work, and the
+        # output did not parse: the row keeps that cost.
         async with get_session(engine) as session:
             call = await session.get(cls, call_id)
             call.status = AgentCallStatus.FAILED.value
             call.finished_at = Base.utc_now()
             call.last_error = str(error)
+            if result:
+                call.cost_usd = result.cost_usd
+                call.cost_metadata = result.cost_metadata
             await session.commit()
 
     @classmethod
@@ -804,6 +811,21 @@ class AgentCall(Base, Uuid7Pk):
                 cls.agent == agent,
                 cls.status == AgentCallStatus.RUNNING.value,
             )
+        )
+
+    @classmethod
+    async def lookup_last_succeeded(
+        cls, session: AsyncSession, run_id: str, agent: str
+    ) -> "AgentCall | None":
+        return await session.scalar(
+            select(cls)
+            .where(
+                cls.run_id == run_id,
+                cls.agent == agent,
+                cls.status == AgentCallStatus.SUCCEEDED.value,
+            )
+            .order_by(cls.created_at.desc(), cls.id.desc())
+            .limit(1)
         )
 
     @classmethod

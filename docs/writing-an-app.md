@@ -499,7 +499,9 @@ An instruction belongs to the app class. The operator chooses the CLI that runs
 it, the model, the login that it bills, and the effort. The defaults are in
 **Settings → Instructions**. The app's own page overrides them for one
 instruction. `timeout` is the one declarable knob, because how long a step may
-take is a fact about the task.
+take is a fact about the task. A call can pass `effort="high"` to run at a lower
+effort than the setting for that one call. The setting is the ceiling: a call never
+runs above it.
 
 ```python
 from druks.workflows import Instruction, InstructionOutput
@@ -538,6 +540,10 @@ plugin state and no MCP server:
 A workflow that sets `steps_reuse_sandbox = True` keeps one sandbox for all its
 instructions. The sandbox takes its entries from the agent call that creates it.
 Give such a workflow instructions that all include MCP servers, or none that do.
+
+A Claude agent's Bash call cannot sleep for over two minutes in total or use
+`--watch`. The guard reads one command at a time. It does not read a loop, and it
+does not stop a command that follows a log or a socket, such as `tail -f`.
 
 Call an instruction only inside a workflow:
 
@@ -711,6 +717,44 @@ hooked agent still holds its sandbox. Recovery reuses a completed hooked call.
 An interrupted one runs again with its hooks. A hook that raises fails the
 hooked call. The time that a hook takes counts against the timeout of the
 hooked call.
+
+### Continue an instruction's session
+
+An instruction whose agent waits on something Druks can do for it can end its
+turn and continue later in the same conversation. Declare the instruction
+`resumable`, and call it again with `resume`:
+
+```python
+implement = Instruction(prompt="build/implement.md", contract=Implementation, resumable=True)
+
+
+async def run(self) -> Implementation:
+    delivery = await implement()
+    while delivery.status == "needs_check":
+        delivery = await implement(resume=functools.partial(self.run_check, delivery.check_command))
+    return delivery
+
+
+async def run_check(self, command: str, *, workspace: RepoWorkspace) -> str:
+    result = await workspace.host.exec(["sh", "-c", command], cwd=workspace.repo_path, timeout=600)
+    return f"Exit code {result.returncode}.\n{result.stdout[-4000:]}"
+```
+
+Druks calls `resume(workspace=...)` on the box that ran the last call. The checkout is as the agent left it, because a resumed call does not
+prepare the workspace again. The text that `resume` returns is the agent's next
+message, in a session forked from the last call. The call records its own
+cost and its own transcript.
+
+`resumable` makes the first call write the model's prompt cache for an hour,
+not five minutes, so that the call that resumes after a long pause reads the
+cache and does not write the whole context again. A template reads
+`can_resume`, which is true when the instruction is `resumable` and its harness can
+resume. Claude can. A harness that cannot resume sets `can_resume` to false, so
+the template offers the agent nothing to end its turn for. A resume on an
+instruction that is not `resumable` raises `WorkflowError`. A resume that cannot
+continue the session, because the harness cannot resume, the run has no finished
+call, or the last call's box was released, starts over with the full prompt and
+never calls `resume`: the session and the checkout went with the old box.
 
 `RepoWorkspace.get_diff()` returns the change of the checkout since it left the
 default branch: commits, uncommitted edits, and untracked files. It reads the
@@ -1274,8 +1318,10 @@ review = await self.wait("review.completed", label="Waiting for the review", ttl
 ```
 
 The run stays running. The run page shows the label. Druks sends no
-notification and keeps the warm sandbox. When the wait is longer than
-`ttl_seconds`, the run fails with `WaitTimeout`.
+notification and keeps the warm sandbox. The sandbox's lease lapses after about 30
+minutes, so a wait whose caller needs the sandbox afterwards passes `hold_box=True`,
+which renews the lease for the wait. When the wait is longer than `ttl_seconds`, the
+run fails with `WaitTimeout`.
 
 A subscriber answers the wait through the workflow class and the subject. The
 facts it sends are the result of `wait()`:
@@ -2857,6 +2903,6 @@ Import from concern namespaces, not from `druks.durable` or internal modules:
 | `druks.files` | `File`, `FileField` |
 | `druks.prompts` | `render_prompt` |
 | `druks.webhooks` | `Webhook`, `verify_hmac_sha256` |
-| `druks.testing` | `run_workflow`, `seed_run`, `seed_call`, `init_db`, and the fixtures that the plugin registers |
+| `druks.testing` | `run_workflow`, `seed_run`, `seed_call`, `init_db`, `worker_name`, and the fixtures that the plugin registers |
 
 The root `druks` package deliberately exports only its version.
