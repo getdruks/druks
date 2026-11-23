@@ -131,15 +131,85 @@ export function Chart({
   categoryLabel,
   valueLabel,
 }: {
-  kind: 'line' | 'bar' | 'area'
+  kind: 'line' | 'bar' | 'area' | 'pie'
   title: string
   categories: string[]
   series: ChartSeries[]
   categoryLabel: string
   valueLabel: string
 }) {
-  // One scale for every series, and always through zero, so a negative point
-  // reads below the line rather than as a shorter bar.
+  const caption = title && <figcaption className="dui-block-title">{title}</figcaption>
+  // The same numbers, for a reader who gets no picture.
+  const data = (
+    <table className="dui-chart-data">
+      <caption>{[title, valueLabel].filter(Boolean).join(' — ') || 'chart data'}</caption>
+      <thead>
+        <tr>
+          <th scope="col">{categoryLabel || 'category'}</th>
+          {series.map((one) => (
+            <th key={one.label} scope="col">
+              {one.label}
+            </th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {categories.map((category, index) => (
+          <tr key={category}>
+            <th scope="row">{category}</th>
+            {series.map((one) => (
+              <td key={one.label}>{one.points[index] ?? ''}</td>
+            ))}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+  if (kind === 'pie') {
+    const shares = series[0]?.points ?? []
+    const total = shares.reduce((sum, share) => sum + share, 0)
+    // Where a part of the whole ends on the unit circle, clockwise from twelve o'clock.
+    const edge = (part: number) => {
+      const angle = (2 * Math.PI * part) / total
+      return `${Math.sin(angle)} ${-Math.cos(angle)}`
+    }
+    return (
+      <figure className="dui-chart" data-kind={kind}>
+        {caption}
+        <svg className="dui-chart-pie" viewBox="-1 -1 2 2" aria-hidden="true">
+          {shares.length === 1 ? (
+            <circle className="dui-chart-slice dui-chart-bar-0" r={1} />
+          ) : (
+            shares.map((share, index) => {
+              const start = shares.slice(0, index).reduce((sum, earlier) => sum + earlier, 0)
+              const largeArc = share * 2 > total ? 1 : 0
+              return (
+                <path
+                  key={index}
+                  className={`dui-chart-slice dui-chart-bar-${index % 4}`}
+                  d={`M0 0L${edge(start)}A1 1 0 ${largeArc} 1 ${edge(start + share)}Z`}
+                />
+              )
+            })
+          )}
+        </svg>
+        <div className="dui-chart-legend" aria-hidden="true">
+          {categories.map((category, index) => (
+            <span key={category} className="dui-chart-key">
+              <span className={`dui-chart-swatch dui-chart-bar-${index % 4}`} />
+              {category}
+              <span className="dui-chart-value">
+                {shares[index]?.toLocaleString(undefined, { maximumFractionDigits: 20 })}
+              </span>
+            </span>
+          ))}
+        </div>
+        {data}
+      </figure>
+    )
+  }
+  // One scale for every series, and always through zero. A negative point then
+  // reads below the line, not as a shorter bar.
   const points = series.flatMap((one) => one.points)
   const lowest = Math.min(0, ...points)
   const highest = Math.max(0, ...points)
@@ -150,7 +220,7 @@ export function Chart({
   const baseline = place(0)
   return (
     <figure className="dui-chart" data-kind={kind}>
-      {title && <figcaption className="dui-block-title">{title}</figcaption>}
+      {caption}
       <svg
         className="dui-chart-plot"
         viewBox={`0 0 ${PLOT_WIDTH} ${PLOT_HEIGHT}`}
@@ -174,8 +244,8 @@ export function Chart({
             ))
           }
           const line = one.points.map((value, index) => `${across(index)},${place(value)}`).join(' ')
-          // Markers as well as the line: one point draws no segment, and a
-          // series of one would otherwise show nothing at all.
+          // Markers as well as the line. A line of one point draws no segment
+          // and shows nothing.
           const marks = one.points.map((value, index) => (
             <circle
               key={`${one.label}:${index}`}
@@ -221,30 +291,7 @@ export function Chart({
           ))}
         </div>
       )}
-      {/* The same numbers, for a reader who gets no picture. */}
-      <table className="dui-chart-data">
-        <caption>{[title, valueLabel].filter(Boolean).join(' — ') || 'chart data'}</caption>
-        <thead>
-          <tr>
-            <th scope="col">{categoryLabel || 'category'}</th>
-            {series.map((one) => (
-              <th key={one.label} scope="col">
-                {one.label}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {categories.map((category, index) => (
-            <tr key={category}>
-              <th scope="row">{category}</th>
-              {series.map((one) => (
-                <td key={one.label}>{one.points[index] ?? ''}</td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      {data}
     </figure>
   )
 }

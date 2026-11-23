@@ -489,7 +489,7 @@ export type Block =
   | { block: 'files'; title: string; files: FileSummary[] }
   | {
       block: 'chart'
-      kind: 'line' | 'bar' | 'area'
+      kind: 'line' | 'bar' | 'area' | 'pie'
       title: string
       categories: string[]
       series: ChartSeries[]

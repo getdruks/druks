@@ -1,3 +1,4 @@
+import re
 from datetime import UTC, datetime
 
 import pytest
@@ -70,6 +71,47 @@ def test_a_chart_carries_its_series_axes_and_labels():
 def test_a_series_must_carry_one_point_for_each_category():
     with pytest.raises(ValueError, match="one point for each"):
         Chart(categories=["Mon"], series=[ChartSeries(label="peer-7", points=[3, 5])])
+
+
+@pytest.mark.parametrize(
+    ("title", "series", "error"),
+    [
+        (
+            "Sources",
+            [ChartSeries(label="web", points=[3, 1]), ChartSeries(label="api", points=[2, 2])],
+            "pie chart 'Sources' has 2 series. A pie draws one series. Give it one series.",
+        ),
+        (
+            "",
+            [],
+            "pie chart of categories ['Mon', 'Tue'] has 0 series. A pie draws one series. "
+            "Give it one series.",
+        ),
+        (
+            "Sources",
+            [ChartSeries(label="web", points=[3, 0])],
+            "pie chart 'Sources' has a point of zero or less for the categories ['Tue']. A pie "
+            "draws each point as a share of the whole. Give each point a number above zero.",
+        ),
+        (
+            "",
+            [ChartSeries(label="web", points=[-1, 2])],
+            "pie chart of categories ['Mon', 'Tue'] has a point of zero or less for the "
+            "categories ['Mon']. A pie draws each point as a share of the whole. Give each "
+            "point a number above zero.",
+        ),
+    ],
+    ids=["two-series", "untitled-no-series", "zero", "untitled-negative"],
+)
+def test_a_pie_is_one_series_above_zero_and_the_error_names_the_chart(title, series, error):
+    with pytest.raises(ValueError, match=re.escape(error)):
+        Chart(kind="pie", title=title, categories=["Mon", "Tue"], series=series)
+
+
+def test_a_pie_with_no_categories_holds_one_empty_series():
+    (block,) = wire(Chart(kind="pie", series=[ChartSeries(label="web", points=[])]))
+
+    assert (block["categories"], block["series"]) == ([], [{"label": "web", "points": []}])
 
 
 def test_a_table_row_must_carry_one_cell_for_each_column():

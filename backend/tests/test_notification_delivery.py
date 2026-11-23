@@ -1450,6 +1450,34 @@ def test_a_chart_goes_out_as_slack_s_chart_of_its_kind_with_a_point_for_each_cat
     }
 
 
+def test_a_pie_goes_out_as_slack_s_pie_with_a_segment_for_each_category():
+    # The categories are not in the order of their names. A pie has no axes. Its category label
+    # and value label stay out.
+    chart = ui.Chart(
+        kind="pie",
+        title="Answers by source",
+        categories=["Web", "API", "Mail"],
+        series=[ui.ChartSeries(label="Answers", points=[12, 5, 3])],
+        category_label="Source",
+        value_label="Answers",
+    )
+
+    (block,) = get_blocks("text", blocks=[chart])
+
+    assert block == {
+        "type": "data_visualization",
+        "title": "Answers by source",
+        "chart": {
+            "type": "pie",
+            "segments": [
+                {"label": "Web", "value": 12},
+                {"label": "API", "value": 5},
+                {"label": "Mail", "value": 3},
+            ],
+        },
+    }
+
+
 def test_a_chart_cuts_a_label_past_20_characters_and_a_title_past_50():
     chart = ui.Chart(
         title="T" * 51,
@@ -1501,17 +1529,19 @@ def test_a_chart_with_no_title_takes_its_value_label_and_an_empty_axis_title_sta
 
 
 def test_a_chart_shows_a_dash_for_an_empty_category_or_series_label():
-    chart = ui.Chart(
-        title="Answers",
-        categories=["Mon", ""],
-        series=[ui.ChartSeries(label="", points=[3, 5])],
-    )
+    series = [ui.ChartSeries(label="", points=[3, 5])]
+    chart = ui.Chart(title="Answers", categories=["Mon", ""], series=series)
+    pie = ui.Chart(kind="pie", title="Answers", categories=["Mon", ""], series=series)
 
-    (block,) = get_blocks("text", blocks=[chart])
+    chart_block, pie_block = get_blocks("text", blocks=[chart, pie])
 
-    assert block["chart"]["axis_config"] == {"categories": ["Mon", "—"]}
-    assert block["chart"]["series"] == [
+    assert chart_block["chart"]["axis_config"] == {"categories": ["Mon", "—"]}
+    assert chart_block["chart"]["series"] == [
         {"name": "—", "data": [{"label": "Mon", "value": 3}, {"label": "—", "value": 5}]}
+    ]
+    assert pie_block["chart"]["segments"] == [
+        {"label": "Mon", "value": 3},
+        {"label": "—", "value": 5},
     ]
 
 
@@ -1548,4 +1578,57 @@ def test_a_message_draws_its_first_two_charts_that_slack_takes_and_the_others_as
         ("markdown", text_forms),
         ("data_visualization", "Second"),
         ("markdown", third_chart.to_markdown()),
+    ]
+
+
+def test_a_pie_takes_a_segment_for_each_of_12_categories_and_a_label_of_20_characters_whole():
+    one_fan = ui.Chart(
+        kind="pie",
+        title="One fan",
+        categories=["F" * 20],
+        series=[ui.ChartSeries(label="rpm", points=[7])],
+    )
+    twelve_fans = ui.Chart(
+        kind="pie",
+        title="Twelve fans",
+        categories=[f"Fan {number}" for number in range(12)],
+        series=[ui.ChartSeries(label="rpm", points=list(range(1, 13)))],
+    )
+
+    one_fan_block, twelve_fans_block = get_blocks("text", blocks=[one_fan, twelve_fans])
+
+    assert one_fan_block["chart"]["segments"] == [{"label": "F" * 20, "value": 7}]
+    assert twelve_fans_block["chart"]["segments"] == [
+        {"label": f"Fan {number}", "value": number + 1} for number in range(12)
+    ]
+
+
+def test_a_pie_that_slack_cannot_draw_shows_its_table_and_leaves_the_room_for_two_charts():
+    speed = ui.ChartSeries(label="rpm", points=[1])
+    thirteen_fans = ui.Chart(
+        kind="pie",
+        title="Thirteen fans",
+        categories=[f"Fan {number}" for number in range(13)],
+        series=[ui.ChartSeries(label="rpm", points=[1] * 13)],
+    )
+    long_label = ui.Chart(kind="pie", title="Long label", categories=["F" * 21], series=[speed])
+    no_fans = ui.Chart(kind="pie", title="No fans", series=[ui.ChartSeries(label="rpm", points=[])])
+    untitled_pie = ui.Chart(kind="pie", categories=["Fan"], series=[speed])
+    long_value_label = ui.Chart(
+        kind="pie", categories=["Fan"], series=[speed], value_label="V" * 51
+    )
+    line = ui.Chart(title="Line", categories=["Mon"], series=[speed])
+    last_pie = ui.Chart(kind="pie", title="Last pie", categories=["Fan"], series=[speed])
+    charts = [thirteen_fans, long_label, no_fans, untitled_pie, long_value_label, line, last_pie]
+
+    parts = get_blocks("text", blocks=charts)
+
+    text_forms = "\n\n".join(
+        chart.to_markdown() for chart in (thirteen_fans, long_label, no_fans, untitled_pie)
+    )
+    assert [(part["type"], part.get("title") or part["text"]) for part in parts] == [
+        ("markdown", text_forms),
+        ("data_visualization", "V" * 49 + "…"),
+        ("data_visualization", "Line"),
+        ("markdown", last_pie.to_markdown()),
     ]

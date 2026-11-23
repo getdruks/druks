@@ -504,7 +504,7 @@ Slack draws these blocks of an approval with its own blocks:
 | `Divider` | A divider. |
 | `Link` | A button that opens the address of the link. |
 | `Table` | A data table that the person can sort and page through. The title is its caption, or the first column label when the table has no title. A `NumberValue` is a number cell. Slack sorts a column of number cells as numbers. A value with a link is a link. Any other value shows its text form. An empty value or column label shows a dash. The row detail stays on the dashboard. |
-| `Chart` | A chart of the same kind: line, bar, or area. The categories are along the axis, in their order. Each series has a point for each category. The category label and the value label are the titles of the axes. A chart with no title takes its value label as its title. An empty category or series label shows a dash. |
+| `Chart` | A chart of the same kind: line, bar, area, or pie. A line, bar, or area chart has the categories along the axis, in their order. Each series has a point for each category. The category label and the value label are the titles of the axes. A pie has no axes. It has a segment for each category, in their order, with the label of the category and its value. A chart with no title takes its value label as its title. An empty category or series label shows a dash. |
 
 Every other block shows its text form. A value in a fact or a metric shows its
 text form. A value with a link stays a link. Slack has no coloured label. A
@@ -534,13 +534,21 @@ many rows Druks left out. It links to the run's page when the installation has
 an endpoint. A table shows its text form when it has no columns, more than 20
 columns, or no rows, or when no row fits.
 
-A message holds 2 charts. A chart holds 12 series of 20 points. Druks cuts a
-category or a series label to 20 characters, and a title or an axis title to 50.
-Slack requires a title. A chart with no title and no value label shows its text
-form. A chart also shows its text form when it has no series or no categories,
-more than 12 series, or more than 20 categories. It shows its text form too when
-two categories or two series would show the same label. The first 2 charts that
-Slack can draw show as charts. Each chart after them shows its text form.
+A message holds 2 charts. The first 2 charts that Slack can draw show as
+charts. Each chart after them shows its text form. Slack requires a title. A
+chart with no title and no value label shows its text form. Druks cuts a title
+or an axis title to 50 characters.
+
+A line, bar, or area chart holds 12 series of 20 points. Druks cuts a category
+or a series label to 20 characters. Such a chart shows its text form when it has
+no series or no categories, more than 12 series, or more than 20 categories. It
+shows its text form too when two categories or two series would show the same
+label.
+
+A pie holds 12 segments, one for each category. A segment label holds 20
+characters. Druks cuts no label of a pie. A cut label can hide the category of a
+share. A pie shows its text form when it has no categories, more than 12
+categories, or a category label of more than 20 characters.
 
 When Slack refuses the blocks, Druks sends the text of the approval in the same
 place, with the same buttons. A table or a chart then shows as a markdown table.
@@ -1307,7 +1315,7 @@ class ChartSeries:
 
 class Chart:
     block: Literal["chart"] = "chart"
-    kind: Literal["line", "bar", "area"] = "line"
+    kind: Literal["line", "bar", "area", "pie"] = "line"
     title: str = ""
     categories: list[str] = []
     series: list[ChartSeries] = []
@@ -1330,6 +1338,26 @@ class Chart:
 Every series must have one point for each category. Every point must be a
 number JSON can carry. The shell renders a table of the same numbers, titled
 with the chart's own title and value label, for a screen reader.
+
+A line, bar, or area chart draws its categories along an axis. A pie draws no
+axes. It draws a slice for each category. The slice is the share of the
+category in the whole:
+
+```python
+ui.Chart(
+    kind="pie",
+    title="Answers by source",
+    categories=["Web", "API", "Mail"],
+    series=[ui.ChartSeries(label="Answers", points=[12, 5, 3])],
+)
+```
+
+A pie has one series, and each of its points is above zero. Druks refuses
+another shape when it builds the block. The error names the chart by its title,
+or by its categories when it has no title. The dashboard colours the slices
+with the four chart series colours in turn, clockwise from the top. A line in
+the colour of the surface separates two slices. The legend shows the colour,
+the category, and the value of each slice.
 
 ### ImageGallery
 

@@ -209,13 +209,14 @@ def get_blocks(
     button that opens it. A table takes a data table of its first rows that fit. When rows
     do not fit, a line above it says how many Druks left out, with the link. A chart takes
     a chart of its kind under its title, or under its value label when it has no title.
-    Druks cuts each long label and title of a chart. A message draws the first two charts
-    that Slack can draw. Any other block, and a block past a limit of Slack, takes its text
-    form. Text that follows text joins it in one markdown block. ``blocks`` take the room
-    that the rest leaves, the question included. When the room runs out, the last block
-    holds the text forms of the blocks left. When the markdown is longer than Slack takes,
-    Druks cuts the end of the blocks. A line in place of the link then says so, with the
-    link."""
+    Druks cuts each long title of a chart, and each long label of a line, bar, or area
+    chart. A pie takes a segment for each category. Druks cuts no label of a pie. A message
+    draws the first two charts that Slack can draw. Any other block, and a block past a
+    limit of Slack, takes its text form. Text that follows text joins it in one markdown
+    block. ``blocks`` take the room that the rest leaves, the question included. When the
+    room runs out, the last block holds the text forms of the blocks left. When the markdown
+    is longer than Slack takes, Druks cuts the end of the blocks. A line in place of the
+    link then says so, with the link."""
     controls: list[dict] = []
     if fields and actions:
         inputs_by_id = {}
@@ -381,7 +382,7 @@ def get_blocks(
                     # the link that ends the message.
                     parts.insert(0, {"type": "markdown", "text": notice})
             case ui.Chart(
-                kind=kind,
+                kind="line" | "bar" | "area" as kind,
                 title=title,
                 categories=categories,
                 series=series,
@@ -423,6 +424,30 @@ def get_blocks(
                             for name, one in zip(names, series, strict=True)
                         ],
                         "axis_config": axes,
+                    }
+                    parts = [{"type": "data_visualization", "title": heading, "chart": chart}]
+            case ui.Chart(
+                kind="pie",
+                title=title,
+                categories=categories,
+                series=[one],
+                value_label=value_label,
+            ) if (
+                chart_room
+                and 0 < len(categories) <= slack.CHART_SEGMENTS_LIMIT
+                # A cut label can hide the category of a share. Druks cuts no label of a pie.
+                and all(len(category) <= slack.CHART_LABEL_LIMIT for category in categories)
+            ):
+                heading = cut_text(title or value_label, slack.CHART_TITLE_LIMIT)
+
+                if heading:
+                    chart_room -= 1
+                    chart = {
+                        "type": "pie",
+                        "segments": [
+                            {"label": category or slack.EMPTY_CELL_TEXT, "value": point}
+                            for category, point in zip(categories, one.points, strict=True)
+                        ],
                     }
                     parts = [{"type": "data_visualization", "title": heading, "chart": chart}]
         text_form = "" if parts else block.to_markdown()
