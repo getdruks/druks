@@ -151,7 +151,9 @@ databases stay after the run, and the next run resets them. A worker also uses i
 Redis index, counting down from the one `DRUKS_TEST_REDIS_URL` names, and it never
 takes index 0, the one the application points at by default. The default index 15
 leaves room for 15 workers, and a worker with no index left fails at start with a
-message that says so. A test that creates a database of its own names it with
+message that says so. Two runs that share one Postgres and one Redis also share these names, and the second run's
+reset drops the first run's tables, so run one suite at a time against one set of services.
+A test that creates a database of its own names it with
 `worker_name` from `druks.testing`. Run one test without `-n` when you want a debugger.
 
 The pull-request backend

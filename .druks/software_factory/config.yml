@@ -7,6 +7,6 @@ verification:
   typecheck_commands:
     - npm --prefix frontend run build
   test_commands:
-    - uv run pytest backend/
+    - uv run pytest backend/ -n auto --maxprocesses=8
     - npm --prefix frontend test
     - cd druks-calls && uv run --locked pytest

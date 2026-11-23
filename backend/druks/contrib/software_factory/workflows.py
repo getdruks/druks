@@ -401,7 +401,10 @@ class Build(Workflow):
         while not (ci_report := await self._read_ci(head_sha, started_at)):
             with suppress(WaitTimeout):
                 await self.wait(
-                    "check.completed", label="Waiting for CI", ttl_seconds=CI_POLL_SECONDS
+                    "check.completed",
+                    label="Waiting for CI",
+                    ttl_seconds=CI_POLL_SECONDS,
+                    hold_box=True,
                 )
         self.journal.add(ci_report)
         return ci_report
@@ -416,7 +419,11 @@ class Build(Workflow):
         repo = (await self.subject).repo
         github = await Github.get_client(repo)
         runs = await github.list_workflow_runs(repo, head_sha)
-        has_rerun = any(run["run_attempt"] > 1 for run in runs)
+        # CI had finished when the build read it red, so a run that is active now is a rerun,
+        # also when GitHub has not raised its attempt number yet.
+        has_rerun = any(
+            run["run_attempt"] > 1 or run["status"] in RUN_ACTIVE_STATUSES for run in runs
+        )
         attempts = {}
         for run in runs:
             if run["conclusion"] not in RERUN_CONCLUSIONS or run["run_attempt"] > 1:

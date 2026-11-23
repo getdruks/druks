@@ -1135,15 +1135,18 @@ class Workflow:
         self.journal.add(reply)
         return reply
 
-    async def wait(self, topic: str, *, label: str, ttl_seconds: float) -> dict[str, Any]:
+    async def wait(
+        self, topic: str, *, label: str, ttl_seconds: float, hold_box: bool = False
+    ) -> dict[str, Any]:
         """Wait for the facts that ``answer`` delivers on ``topic``, and return them. The run
         stays running, shows ``label``, and keeps its warm sandbox. A failure answered
-        instead raises ``WaitFailed``."""
+        instead raises ``WaitFailed``. The sandbox's lease lapses after about 30 minutes, so
+        ``hold_box=True`` renews it for the wait, for a caller that needs the box afterwards."""
         # The wait takes answers before its label shows, so an answer sent on seeing it arrives.
         await DBOS.set_event_async("waiting_on", topic)
         await set_run_phase(label)
         async with AsyncExitStack() as stack:
-            if self._host:
+            if hold_box and self._host:
                 # A lease renews only while something holds it, and the box would expire
                 # in the middle of a long wait.
                 try:

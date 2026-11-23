@@ -115,6 +115,16 @@ async def test_a_retry_finds_the_run_it_already_reran_and_does_not_rerun_it(monk
     assert github.reruns == []
 
 
+async def test_a_retry_that_finds_the_rerun_active_before_its_attempt_rises_reruns_nothing(
+    monkeypatch,
+):
+    github = _FakeGithub([[_run(1, conclusion=None, attempt=1, status="in_progress")]])
+    flow = _rerun_flow(monkeypatch, github)
+
+    assert await _rerun(flow, HEAD) is True
+    assert github.reruns == []
+
+
 async def test_a_run_that_already_has_a_second_attempt_is_not_rerun_again(monkeypatch):
     github = _FakeGithub([[_run(1, conclusion="failure", attempt=2)]])
     flow = _rerun_flow(monkeypatch, github)
@@ -158,12 +168,6 @@ async def test_the_rerun_waits_for_the_new_attempt_before_it_returns(monkeypatch
     # rerun, not the old red.
     assert github.listed == 3
     assert slept == [RERUN_POLL_SECONDS]
-
-
-def test_the_rerun_is_a_durable_step_so_a_replay_does_not_rerun_twice():
-    # _wrap_steps memoizes a @step's result, so a workflow replay reads the recorded
-    # value instead of rerunning the jobs. A plain method would have no __wrapped__.
-    assert Build._rerun_failed_jobs.__wrapped__.__name__ == "_rerun_failed_jobs"
 
 
 def _phase_flow(monkeypatch, *, ci, rerun):

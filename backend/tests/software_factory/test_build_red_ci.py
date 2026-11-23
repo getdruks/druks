@@ -74,7 +74,8 @@ async def test_the_wait_for_ci_keeps_the_box_and_reads_again_after_each_timeout(
     async def read_ci(head_sha, started_at):
         return next(verdicts)
 
-    async def wait(topic, *, label, ttl_seconds):
+    async def wait(topic, *, label, ttl_seconds, hold_box):
+        assert hold_box
         waits.append((topic, label))
         raise WaitTimeout(topic)
 
@@ -128,7 +129,7 @@ async def test_a_wait_renews_the_lease_of_the_box_it_keeps(monkeypatch):
 
     flow = _wait_flow(monkeypatch, host=SimpleNamespace(id="host-1"), lease=lease, events=events)
 
-    await flow.wait("check.completed", label="Waiting for CI", ttl_seconds=60)
+    await flow.wait("check.completed", label="Waiting for CI", ttl_seconds=60, hold_box=True)
 
     kinds = [event[0] for event in events]
     assert kinds.index("lease") < kinds.index("recv") < kinds.index("lease released")
@@ -145,7 +146,7 @@ async def test_a_wait_with_no_box_takes_no_lease(monkeypatch):
 
     flow = _wait_flow(monkeypatch, host=None, lease=lease, events=events)
 
-    await flow.wait("check.completed", label="Waiting for CI", ttl_seconds=60)
+    await flow.wait("check.completed", label="Waiting for CI", ttl_seconds=60, hold_box=True)
 
     assert ("recv", "check.completed") in events
 
@@ -160,8 +161,26 @@ async def test_a_wait_releases_a_box_that_is_already_gone_and_still_waits(monkey
 
     flow = _wait_flow(monkeypatch, host=SimpleNamespace(id="host-1"), lease=lease, events=events)
 
-    facts = await flow.wait("check.completed", label="Waiting for CI", ttl_seconds=60)
+    facts = await flow.wait(
+        "check.completed", label="Waiting for CI", ttl_seconds=60, hold_box=True
+    )
 
     assert facts == {"conclusion": "success"}
     assert ("release", "host-1") in events
     assert flow._host is None
+
+
+async def test_a_wait_that_does_not_ask_for_the_box_takes_no_lease(monkeypatch):
+    events = []
+
+    @asynccontextmanager
+    async def lease(*, host_id):
+        raise AssertionError("only a wait that holds the box renews its lease")
+        yield
+
+    flow = _wait_flow(monkeypatch, host=SimpleNamespace(id="host-1"), lease=lease, events=events)
+
+    await flow.wait("review.completed", label="Waiting for the review", ttl_seconds=60)
+
+    assert ("recv", "review.completed") in events
+    assert ("release", "host-1") not in events

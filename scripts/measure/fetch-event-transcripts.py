@@ -101,7 +101,8 @@ def fetch_subject(api, app, path, out_dir):
                     api.download(
                         f"/api/{app}/transcripts/{call['id']}/files/"
                         f"{urllib.parse.quote(name)}?disposition=attachment",
-                        os.path.join(call_dir, name),
+                        # The name comes from the server, so it never leaves the call folder.
+                        os.path.join(call_dir, os.path.basename(name)),
                     )
                     files += 1
                 except urllib.error.HTTPError as error:

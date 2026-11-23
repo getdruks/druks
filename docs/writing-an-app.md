@@ -528,7 +528,8 @@ instructions, and the sandbox takes its entries from the agent call that creates
 Give such a workflow instructions that all include MCP servers, or none that do.
 
 A Claude agent's Bash call cannot sleep for over two minutes in total or use
-`--watch`.
+`--watch`. The guard reads one command at a time. It does not read a loop, and it
+does not stop a command that follows a log or a socket, such as `tail -f`.
 
 Call it only inside a workflow:
 
@@ -1279,8 +1280,10 @@ review = await self.wait("review.completed", label="Waiting for the review", ttl
 ```
 
 The run stays running. The run page shows the label. Druks sends no
-notification and keeps the warm sandbox. When the wait is longer than
-`ttl_seconds`, the run fails with `WaitTimeout`.
+notification and keeps the warm sandbox. The sandbox's lease lapses after about 30
+minutes, so a wait whose caller needs the sandbox afterwards passes `hold_box=True`,
+which renews the lease for the wait. When the wait is longer than `ttl_seconds`, the
+run fails with `WaitTimeout`.
 
 A subscriber answers the wait through the workflow class and the subject. The
 facts it sends are the result of `wait()`:
