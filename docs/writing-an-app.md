@@ -2752,6 +2752,6 @@ Import from concern namespaces, not from `druks.durable` or internal modules:
 | `druks.files` | `File`, `FileField` |
 | `druks.prompts` | `render_prompt` |
 | `druks.webhooks` | `Webhook`, `verify_hmac_sha256` |
-| `druks.testing` | `run_workflow`, `seed_run`, `seed_call`, `init_db` — plus the fixtures the plugin registers |
+| `druks.testing` | `run_workflow`, `seed_run`, `seed_call`, `init_db`, `worker_name` — plus the fixtures the plugin registers |
 
 The root `druks` package deliberately exports only its version.
