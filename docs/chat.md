@@ -495,8 +495,9 @@ through the same checks as in the chat: the owner's app check, the tool's input
 check, and the route's own checks. A run that the call starts reports to the
 conversation, the same as a run that the chat started. When the tool refuses the
 call, or Druks cannot reach its own MCP server, Druks skips the call. The agent
-tells the person why in the conversation. DBOS records that due time as failed.
-The schedule goes on.
+tells the person why in the conversation. When the agent no longer answers the
+schedule's owner, Druks skips the call and tells the person itself, and no agent
+turn runs. DBOS records that due time as failed. The schedule goes on.
 
 A due time makes one call, also when two Druks servers run. An interrupted call
 can run again. A due time that passes while Druks is down is not called later.

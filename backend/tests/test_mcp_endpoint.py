@@ -24,9 +24,9 @@ from druks.agents.models import Agent
 from druks.api.server import mcp_app
 from druks.browser.constants import BROWSER_TOOLS
 from druks.chat.channels.whatsapp.constants import WAHA_AUDIENCE
-from druks.chat.constants import CONVERSATION_HEADER
-from druks.chat.enums import ConversationSource
-from druks.chat.models import Conversation, Reminder
+from druks.chat.constants import CONVERSATION_HEADER, REFUSED_MESSAGE
+from druks.chat.enums import ConversationSource, MessageRole
+from druks.chat.models import Conversation, Message, Reminder
 from druks.contrib.software_factory.app import SoftwareFactory
 from druks.contrib.software_factory.models import Project, ProjectRepo, Ticket
 from druks.contrib.software_factory.ticketing.base import Tracker
@@ -37,7 +37,7 @@ from druks.mcp.exceptions import InvalidAgentToolError
 from druks.mcp.server import create_mcp_app
 from druks.schedules.exceptions import ScheduleSkipped
 from druks.schedules.models import Schedule
-from druks.schedules.service import call_tool
+from druks.schedules.service import call_tool, report_skip
 from druks.secrets.enums import SecretKind
 from druks.secrets.models import VaultSecret
 from druks.settings import Urls
@@ -974,6 +974,15 @@ async def test_a_schedule_whose_agent_no_longer_answers_its_owner_says_why(accou
     )
     await druks_db.commit()
 
+    assert await report_skip(schedule.id, PRIVATE_AGENT_MESSAGE) is None
+    notice = await druks_db.scalar(
+        select(Message).where(
+            Message.conversation_id == conversation.id, Message.role == MessageRole.ASSISTANT
+        )
+    )
+    assert notice.body == REFUSED_MESSAGE.format(
+        tool="chat_create_reminder", reason=PRIVATE_AGENT_MESSAGE
+    )
     with pytest.raises(ScheduleSkipped, match=re.escape(PRIVATE_AGENT_MESSAGE)):
         await call_tool(schedule.id)
 
