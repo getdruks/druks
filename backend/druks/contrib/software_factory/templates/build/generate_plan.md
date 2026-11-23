@@ -60,6 +60,11 @@ request to your acceptance criteria. Wrong shape here compounds into every step 
   fifty lines. Growth pressure is a signal to cut detail, not to add sections. When the plan
   implies a change far larger than the ticket's apparent size, say so in the plan and
   question the scope instead of specifying the bloat.
+- **End the plan with a `## Change map`.** It is what the implementer starts from, so it must
+  come from files you opened and never from a guess. List the files to change, each with the
+  symbols that change and the reason. List the files to read first, named by symbol, never by
+  line range, because lines go stale. List the targeted test commands that prove the change.
+  Leave a part out when you did not find it, and say what you could not confirm.
 - Do not write ACs that require a browser, live API call, visual check, or operator action
   post-merge. If it cannot be code-verified, move it to out-of-scope as a post-merge note.
 - **Keep verification profile checks out of ACs.** The implementer runs the profile on every
