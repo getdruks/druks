@@ -6,13 +6,17 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from druks.accounts.enums import AccountKind
 from druks.accounts.models import Account
+from druks.agents.constants import PICTURE_CONTENT_TYPES
 from druks.core.models import Uuid7Pk
 from druks.exceptions import ObjectNotFound, PermissionDenied, ValidationError
+from druks.files import File, FileField
+from druks.files.models import FileRecord
 from druks.harnesses.config import AgentConfig, build_config, check_config
 from druks.harnesses.exceptions import AgentConfigError, HarnessNotConnectedError
 from druks.harnesses.providers import provider_label
 from druks.harnesses.registry import get_harnesses
 from druks.models import Model
+from druks.settings import get_settings
 from druks.skills.models import Skill
 from druks.user_settings.models import InstallationSettings
 
@@ -33,8 +37,8 @@ class Agent(Model, Uuid7Pk):
     is_private: Mapped[bool]
     # A tag that names no agent in this channel reaches this agent.
     channel_id: Mapped[str | None] = mapped_column(default=None, unique=True)
-    # A channel shows this image on the agent's replies.
-    picture_url: Mapped[str | None] = mapped_column(default=None)
+    # A channel shows the picture on the agent's replies.
+    picture: Mapped[File | None] = FileField()
 
     @classmethod
     async def list_for_account(cls, session: AsyncSession, account: Account) -> list["Agent"]:
@@ -131,7 +135,7 @@ class Agent(Model, Uuid7Pk):
         model: str,
         is_private: bool,
         channel_id: str | None,
-        picture_url: str | None,
+        picture: str | None,
     ) -> None:
         """Set every field. Only an admin changes the owner or the channel. Only a public
         agent has a channel: everyone there talks to it."""
@@ -157,6 +161,20 @@ class Agent(Model, Uuid7Pk):
         if other and other.id != self.id:
             raise ValidationError(f"An agent named {name!r} already exists.")
         await self._check_harness(session, harness, model, is_private)
+        if picture and picture != (self.picture and self.picture.id):
+            record = await session.get(FileRecord, picture)
+            # The picture gets a public address, so it must be a file the editor uploaded.
+            if not record or record.deleted_at or record.uploaded_by != editor.id:
+                raise ValidationError(f"File {picture!r} is not a file you uploaded.")
+            if record.content_type not in PICTURE_CONTENT_TYPES:
+                raise ValidationError(
+                    f"{record.name} is not a png, jpg or gif image. Choose one of these types."
+                )
+            self.picture = File(
+                id=record.id, name=record.name, size=record.size, content_type=record.content_type
+            )
+        elif not picture:
+            self.picture = None
         self.owner_id = owner_id
         self.name = name
         self.description = description
@@ -166,8 +184,14 @@ class Agent(Model, Uuid7Pk):
         self.model = model
         self.is_private = is_private
         self.channel_id = channel_id
-        self.picture_url = picture_url
         await session.flush()
+
+    @property
+    def picture_url(self) -> str | None:
+        """The address a channel's servers fetch the picture from, with no sign-in."""
+        if self.picture:
+            return f"{get_settings().urls.webhook_base}/media/{self.picture.id}"
+        return None
 
     async def get_config(self, session: AsyncSession) -> AgentConfig:
         """A private agent runs on its owner's subscription. A public agent runs on the

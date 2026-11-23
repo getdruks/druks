@@ -469,14 +469,16 @@ authentication. Keep the listener on loopback. Never publish it.
 
 A public listener that bypasses the identity edge must not forward the
 configured identity header. The shipped webhook listener serves only
-provider-authenticated `/_external/*` and PAT-authenticated `/mcp` routes. The
+provider-authenticated `/_external/*`, agents' pictures at `GET /media/*`, and
+PAT-authenticated `/mcp` routes. The
 issuer listener serves only the `/api/secrets/*` route, which authenticates the
 sandbox's identity bearer. These routes do not resolve the header. A future
 public listener must keep the same isolation.
 
 Public `POST /_external/*` routes bypass the identity gate and use their own
 authentication. Webhooks use signature validation. The notification response
-route uses its correlation token. `GET /api/auth/me` answers without a
+route uses its correlation token. `GET /media/<file-id>` serves
+a file only while it is an agent's picture. `GET /api/auth/me` answers without a
 resolved account so the dashboard can render onboarding in the `none`-mode
 setup state.
 

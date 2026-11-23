@@ -14,6 +14,7 @@ from starlette.routing import Route
 from druks.accounts.dependencies import current_account, resolve_single_operator
 from druks.accounts.exceptions import AuthConfigurationError
 from druks.accounts.routes import router as auth_router
+from druks.agents.routes import media_router as agents_media_router
 from druks.agents.routes import router as agents_router
 from druks.api.artifacts import router as artifacts_router
 from druks.api.dashboard import router as dashboard_router
@@ -320,13 +321,13 @@ async def _unhandled_exception_handler(
 
 # Platform-core routers, mounted by hand at their own prefixes. App routers
 # (core, software_factory, usage, …) are discovered and mounted under /api/<app> by load().
-# /api sits behind the identity gate except the identity/connection surface and
-# the health probe; /_external routes carry their own authentication. The
-# boundary test pins the split. The auth and harness-connection routers mount
-# ungated because each of their routes carries its own resolver (/me and the
-# connection flow must answer during none/zero setup; capability management
-# admits only the session identity). The secrets router authenticates a box's
-# grant bearer and nothing else.
+# /api sits behind the identity gate except the identity/connection surface and the
+# health probe; /_external routes carry their own authentication, and /media serves
+# agent pictures at a public address. The boundary test pins the split. The auth and
+# harness-connection routers mount ungated because each of their routes carries its
+# own resolver (/me and the connection flow must answer during none/zero setup;
+# capability management admits only the session identity). The secrets router
+# authenticates a box's grant bearer and nothing else.
 _identity_gate = [Depends(current_account), Depends(current_conversation)]
 app.include_router(health_router)
 # Before the webhook catch-all ({hook_path:path}): declaration order is match order.
@@ -335,6 +336,7 @@ app.include_router(webhooks_router)
 app.include_router(auth_router)
 app.include_router(teams_router)
 app.include_router(agents_router)
+app.include_router(agents_media_router)
 app.include_router(providers_router)
 app.include_router(secrets_router)
 app.include_router(browser_sessions_router)

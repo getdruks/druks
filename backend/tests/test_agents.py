@@ -37,25 +37,6 @@ async def test_a_member_creates_an_agent_and_owns_it(tmp_path: Path, druks_db):
     assert listed.json() == [created.json()]
 
 
-async def test_the_owner_gives_an_agent_a_picture(tmp_path: Path, druks_db):
-    await Account.get_or_create(druks_db, "admin@example.com")
-    member = await Account.get_or_create(druks_db, "member@example.com")
-    headers = {IDENTITY_HEADER: member.username}
-    picture = "https://example.com/security.png"
-
-    with header_client(tmp_path) as client:
-        agent = client.post("/api/agents", json=AGENT, headers=headers).json()
-        url = f"/api/agents/{agent['id']}"
-        client.put(
-            url,
-            json={**AGENT, "ownerId": member.id, "channelId": None, "pictureUrl": picture},
-            headers=headers,
-        )
-        fetched = client.get(url, headers=headers)
-
-    assert fetched.json()["pictureUrl"] == picture
-
-
 async def test_agent_names_are_unique_in_any_case(tmp_path: Path, druks_db):
     admin = await Account.get_or_create(druks_db, "admin@example.com")
     headers = {IDENTITY_HEADER: admin.username}
@@ -78,7 +59,7 @@ async def test_agent_names_are_unique_in_any_case(tmp_path: Path, druks_db):
                 "name": "SECURITY ENGINEER",
                 "ownerId": admin.id,
                 "channelId": None,
-                "pictureUrl": None,
+                "picture": None,
             },
             headers=headers,
         )
@@ -105,7 +86,7 @@ async def test_another_member_cannot_see_or_change_a_private_agent(tmp_path: Pat
         ).json()
         listed_by_other = client.get("/api/agents", headers=other_headers)
         listed_by_admin = client.get("/api/agents", headers={IDENTITY_HEADER: admin.username})
-        update = {**AGENT, "ownerId": owner.id, "channelId": None, "pictureUrl": None}
+        update = {**AGENT, "ownerId": owner.id, "channelId": None, "picture": None}
         private_url = f"/api/agents/{private['id']}"
         public_url = f"/api/agents/{public['id']}"
         private_requests = [
@@ -146,18 +127,18 @@ async def test_only_an_admin_changes_the_owner(tmp_path: Path, druks_db):
         url = f"/api/agents/{agent['id']}"
         by_owner = client.put(
             url,
-            json={**AGENT, "ownerId": other.id, "channelId": None, "pictureUrl": None},
+            json={**AGENT, "ownerId": other.id, "channelId": None, "picture": None},
             headers={IDENTITY_HEADER: owner.username},
         )
         by_admin = client.put(
             url,
-            json={**AGENT, "ownerId": other.id, "channelId": None, "pictureUrl": None},
+            json={**AGENT, "ownerId": other.id, "channelId": None, "picture": None},
             headers={IDENTITY_HEADER: admin.username},
         )
         not_operators = [
             client.put(
                 url,
-                json={**AGENT, "ownerId": owner_id, "channelId": None, "pictureUrl": None},
+                json={**AGENT, "ownerId": owner_id, "channelId": None, "picture": None},
                 headers={IDENTITY_HEADER: admin.username},
             )
             for owner_id in (bot.id, "no-such-id")
@@ -182,7 +163,7 @@ async def test_only_an_admin_gives_an_agent_a_channel_the_bot_is_in(
             "/api/agents", json=AGENT, headers={IDENTITY_HEADER: owner.username}
         ).json()
         url = f"/api/agents/{agent['id']}"
-        update = {**AGENT, "ownerId": owner.id, "channelId": "C1", "pictureUrl": None}
+        update = {**AGENT, "ownerId": owner.id, "channelId": "C1", "picture": None}
         by_owner = client.put(url, json=update, headers={IDENTITY_HEADER: owner.username})
         outside = client.put(
             url, json={**update, "channelId": "C2"}, headers={IDENTITY_HEADER: admin.username}
@@ -213,7 +194,7 @@ async def test_a_channel_has_one_agent_and_only_a_public_one(tmp_path: Path, dru
         second = client.post(
             "/api/agents", json={**AGENT, "name": "Writer"}, headers=headers
         ).json()
-        bound = {**AGENT, "ownerId": admin.id, "channelId": "C1", "pictureUrl": None}
+        bound = {**AGENT, "ownerId": admin.id, "channelId": "C1", "picture": None}
         client.put(f"/api/agents/{first['id']}", json=bound, headers=headers)
         taken = client.put(
             f"/api/agents/{second['id']}",
@@ -383,3 +364,91 @@ async def test_an_agent_lists_the_schedules_set_in_its_conversations(tmp_path: P
     [shown] = listed.json()
     assert (shown["id"], shown["accountId"]) == (schedules[0].id, owner.id)
     assert (shown["lastRun"]["run"], shown["lastRun"]["status"]) == ("due-time-1", "ERROR")
+
+
+async def test_a_file_answers_publicly_only_while_it_is_an_agents_picture(tmp_path: Path, druks_db):
+    await Account.get_or_create(druks_db, "admin@example.com")
+    member = await Account.get_or_create(druks_db, "member@example.com")
+    headers = {IDENTITY_HEADER: member.username}
+    update = {**AGENT, "ownerId": member.id, "channelId": None}
+
+    with header_client(tmp_path) as client:
+        agent = client.post("/api/agents", json=AGENT, headers=headers).json()
+        uploaded = client.post(
+            "/api/core/uploads", files={"file": ("face.png", b"png bytes")}, headers=headers
+        ).json()
+        url = f"/media/{uploaded['id']}"
+        before = client.get(url)
+        client.put(
+            f"/api/agents/{agent['id']}",
+            json={**update, "picture": uploaded["id"]},
+            headers=headers,
+        )
+        served = client.get(url)
+        client.put(f"/api/agents/{agent['id']}", json={**update, "picture": None}, headers=headers)
+        removed = client.get(url)
+
+    assert [before.status_code, served.status_code, removed.status_code] == [404, 200, 404]
+    assert served.content == b"png bytes"
+
+
+async def test_a_picture_must_be_a_png_jpg_or_gif(tmp_path: Path, druks_db):
+    await Account.get_or_create(druks_db, "admin@example.com")
+    member = await Account.get_or_create(druks_db, "member@example.com")
+    headers = {IDENTITY_HEADER: member.username}
+
+    with header_client(tmp_path) as client:
+        agent = client.post("/api/agents", json=AGENT, headers=headers).json()
+        uploaded = client.post(
+            "/api/core/uploads", files={"file": ("face.svg", b"<svg/>")}, headers=headers
+        ).json()
+        refused = client.put(
+            f"/api/agents/{agent['id']}",
+            json={**AGENT, "ownerId": member.id, "channelId": None, "picture": uploaded["id"]},
+            headers=headers,
+        )
+
+    assert refused.status_code == 422
+
+
+async def test_a_picture_must_be_a_file_the_editor_uploaded(tmp_path: Path, druks_db):
+    admin = await Account.get_or_create(druks_db, "admin@example.com")
+    member = await Account.get_or_create(druks_db, "member@example.com")
+    headers = {IDENTITY_HEADER: member.username}
+
+    with header_client(tmp_path) as client:
+        agent = client.post("/api/agents", json=AGENT, headers=headers).json()
+        uploaded = client.post(
+            "/api/core/uploads",
+            files={"file": ("face.png", b"png bytes")},
+            headers={IDENTITY_HEADER: admin.username},
+        ).json()
+        refused = client.put(
+            f"/api/agents/{agent['id']}",
+            json={**AGENT, "ownerId": member.id, "channelId": None, "picture": uploaded["id"]},
+            headers=headers,
+        )
+
+    assert refused.status_code == 422
+
+
+async def test_an_admin_saves_a_members_agent_and_keeps_its_picture(tmp_path: Path, druks_db):
+    admin = await Account.get_or_create(druks_db, "admin@example.com")
+    member = await Account.get_or_create(druks_db, "member@example.com")
+    headers = {IDENTITY_HEADER: member.username}
+
+    with header_client(tmp_path) as client:
+        agent = client.post("/api/agents", json=AGENT, headers=headers).json()
+        uploaded = client.post(
+            "/api/core/uploads", files={"file": ("face.png", b"png bytes")}, headers=headers
+        ).json()
+        update = {**AGENT, "ownerId": member.id, "channelId": None, "picture": uploaded["id"]}
+        client.put(f"/api/agents/{agent['id']}", json=update, headers=headers)
+        saved = client.put(
+            f"/api/agents/{agent['id']}",
+            json={**update, "description": "Reviews every change."},
+            headers={IDENTITY_HEADER: admin.username},
+        )
+
+    assert saved.status_code == 200
+    assert saved.json()["picture"]["id"] == uploaded["id"]

@@ -16,6 +16,16 @@ http://:8000 {
 		Permissions-Policy "camera=(), geolocation=(), microphone=()"
 	}
 
+	# A channel's servers fetch an agent's picture at a public address, with no sign-in.
+	# Druks checks each file is a picture; Caddy must not serve the files folder itself,
+	# which also holds every private file.
+	@media {
+		method GET
+		path /media/*
+	}
+	handle @media {
+		reverse_proxy {$DRUKS_UPSTREAM}
+	}
 	@webhooks {
 		method POST
 		path /_external/*
@@ -88,9 +98,9 @@ http://:8000 {
 
 # Public integrations ingress — set DRUKS_WEBHOOK_HOST to a hostname with an
 # A-record at this box and Caddy auto-provisions TLS for it. Serves the
-# HMAC-verified /_external/* paths, the PAT-authenticated /mcp endpoint
-# (this host is the canonical MCP address), and the token-authenticated call
-# streams at /_calls/*. Nothing else: no dashboard
+# HMAC-verified /_external/* paths, agents' pictures at GET /media/*, the
+# PAT-authenticated /mcp endpoint (this host is the canonical MCP address), and
+# the token-authenticated call streams at /_calls/*. Nothing else: no dashboard
 # routes, and nothing served here resolves the DRUKS_AUTH_HEADER assertion,
 # so edge identity stays unforgeable from the public side. Unset → an inert
 # loopback listener; deployments whose edge already carries webhooks (exe.dev
@@ -105,6 +115,16 @@ http://:8000 {
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "no-referrer"
 		X-Frame-Options "DENY"
+	}
+	# A channel's servers fetch an agent's picture at a public address, with no sign-in.
+	# Druks checks each file is a picture; Caddy must not serve the files folder itself,
+	# which also holds every private file.
+	@media {
+		method GET
+		path /media/*
+	}
+	handle @media {
+		reverse_proxy {$DRUKS_UPSTREAM}
 	}
 	@webhooks {
 		method POST
