@@ -137,12 +137,20 @@ Backend checks:
 uv pip install -e backend/tests/druks-field_notes   # once per environment
 uv run ruff check backend druks-calls
 uv run ruff format --check backend druks-calls
-uv run pytest backend/
+uv run pytest backend/ -n auto
 ```
 
 The suite builds its subjects from `field_notes`, the proof app. This standalone
 distribution depends on Druks. It installs like an author app, not as a Druks
 dependency. Install it one time for the full suite.
+
+`-n auto` runs the suite under pytest-xdist, one worker per CPU. Each worker
+creates and uses its own database, named `druks_test_gw0`, `druks_test_gw1`, and
+so on after the one `DRUKS_TEST_DATABASE_URL` names. It also uses its own Redis
+index, counting down from the one `DRUKS_TEST_REDIS_URL` names. Redis has 16
+indexes by default, so a run takes up to 16 workers. A test that creates a
+database of its own names it with `worker_name` from `druks.testing`. Run one
+test without `-n` when you want a debugger.
 
 The pull-request backend
 workflow does the same. Pyright is available for local and editor use. It is not

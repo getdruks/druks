@@ -34,7 +34,7 @@ from druks.notifications.services import respond_to_notification
 from druks.secrets.datastructures import Audience
 from druks.secrets.models import VaultSecret
 from druks.settings import Settings, configure_settings, get_settings
-from druks.testing import configure_app_for_test, init_db, make_settings
+from druks.testing import configure_app_for_test, init_db, make_settings, worker_name
 from druks.workflows import Gate, OperatorReply, Run, Workflow
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, Field
@@ -43,7 +43,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.orm import Session
 
 PG_BASE = os.environ.get("DRUKS_TEST_PG", "postgresql://druks:druks@localhost:5432")
-DB = "druks_notifications_durable_test"
+DB = worker_name("druks_notifications_durable_test")
 URL = f"{PG_BASE.replace('postgresql://', 'postgresql+psycopg://')}/{DB}"
 _BOT_TOKEN = "xoxb-durablesecret"
 
