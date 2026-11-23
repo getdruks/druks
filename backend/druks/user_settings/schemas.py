@@ -95,15 +95,6 @@ class InstructionSettingResponse(Schema):
     timeout_source: Literal["agent", "declared", "default"]
 
 
-class InstructionsAppResponse(Schema):
-    name: str
-    instructions: list[InstructionSettingResponse]
-
-
-class InstructionsResponse(Schema):
-    apps: list[InstructionsAppResponse]
-
-
 class SettingsFieldResponse(Schema):
     name: str
     label: str

@@ -20,7 +20,6 @@ import {
   type Harness,
   type Account,
   type InstructionSetting,
-  type InstructionsResponse,
   type AppSettingChoices,
   type AppSettings,
   type Billing,
@@ -413,7 +412,7 @@ export function InstructionsPane({
   defaults,
   onDefaults,
   accounts,
-  resolved,
+  apps,
   harnessByName,
   harnessColor,
   catalog,
@@ -425,7 +424,7 @@ export function InstructionsPane({
   defaults: Defaults
   onDefaults: (next: Defaults) => void
   accounts: Account[]
-  resolved: InstructionsResponse
+  apps: AppSettings[]
   harnessByName: Record<string, Harness>
   harnessColor: Record<string, string>
   catalog: Catalog
@@ -625,7 +624,7 @@ export function InstructionsPane({
             <div>effort</div>
             <div>timeout</div>
           </div>
-          {resolved.apps.map((app) => (
+          {apps.filter((app) => app.instructions.length > 0).map((app) => (
             <Fragment key={app.name}>
               <div className="instructions-app">
                 <span>{appLabel(app.name)}</span>

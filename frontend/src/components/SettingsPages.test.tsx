@@ -78,13 +78,6 @@ const critic: InstructionSetting = {
   timeoutSource: 'default',
 }
 
-const resolvedAgents = {
-  apps: [
-    { name: 'software_factory', instructions: [coder] },
-    { name: 'review', instructions: [critic] },
-  ],
-}
-
 const providerCatalogs = [
   {
     provider: 'anthropic',
@@ -201,7 +194,7 @@ const appSettings: AppsSettingsResponse = {
       builtin: false,
       bot: null,
       botAccess: null,
-      instructions: [],
+      instructions: [critic],
       workflows: [],
       settings: [
         {
@@ -332,9 +325,6 @@ function stubFetch(
       }
       if (path === '/api/settings/harnesses') {
         return new Response(JSON.stringify(harnesses), { status: 200 })
-      }
-      if (path === '/api/instructions') {
-        return new Response(JSON.stringify(resolvedAgents), { status: 200 })
       }
       if (path === '/api/auth/accounts') {
         return new Response(JSON.stringify([{ id: 'acc-1', username: 'paulo@example.com', isDefault: true, role: 'admin' }]), {
@@ -768,6 +758,7 @@ describe('SettingsPages instructions', () => {
     expect(await screen.findByText('coder')).toBeTruthy()
     expect(screen.getByText('critic')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Open Software Factory' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Open Field Notes' })).toBeNull()
     expect(screen.getByText('API key ⚬')).toBeTruthy()
     expect(screen.getByText('openai/gpt-5.5')).toBeTruthy()
   })
@@ -1462,7 +1453,7 @@ describe('settings resource read failures', () => {
       stubFetch(false)
       for (const method of [
         'getSettings', 'getAppSettings', 'providerCatalogs', 'providerSubscriptions',
-        'providerKeys', 'providers', 'harnesses', 'accounts', 'instructions',
+        'providerKeys', 'providers', 'harnesses', 'accounts',
       ] as const) {
         const request = vi.spyOn(api, method)
         if (state === 'failed') request.mockRejectedValue(new Error('Offline'))
@@ -1603,7 +1594,6 @@ describe('settings resource read failures', () => {
     'providers',
     'harnesses',
     'accounts',
-    'instructions',
   ] as const)(
     'shows a failed %s read on Instructions and retries without false choices',
     async (method) => {

@@ -913,16 +913,6 @@ export interface InstructionSetting {
   timeoutSource: TimeoutSource
 }
 
-export interface InstructionsApp {
-  name: string
-  instructions: InstructionSetting[]
-}
-
-export interface InstructionsResponse {
-  apps: InstructionsApp[]
-}
-
-
 export interface WorkflowSettingField {
   name: string
   /** Human label + one-line help from the field's Field(title=, description=). */
