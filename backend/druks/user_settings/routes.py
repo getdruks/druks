@@ -197,8 +197,8 @@ async def update_app_settings(
             if problems := (await app.settings()).clean():
                 settings_problems[app.name] = problems
     except ValueError as exc:
-        # A domain rejection answers 422. override_setting redacts a submitted value, and
-        # App.settings() the value of a secret file, so neither reaches the message.
+        # A domain rejection answers 422. override_setting and App.settings() redact each
+        # value they refuse, so no secret reaches the message.
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     if settings_problems:

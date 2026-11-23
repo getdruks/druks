@@ -117,7 +117,7 @@ class SettingsFieldResponse(Schema):
 
     @classmethod
     def from_field(
-        cls, name: str, field: FieldInfo, *, value: Any, overridden: bool, managed: bool = False
+        cls, name: str, field: FieldInfo, *, value: Any, overridden: bool, managed: bool
     ) -> "SettingsFieldResponse":
         kind = field_kind(field)
         secret = kind == "secret"

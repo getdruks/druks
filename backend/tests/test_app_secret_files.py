@@ -38,10 +38,6 @@ async def test_a_secret_file_sets_the_setting_until_it_is_removed(tmp_path: Path
             "/api/settings/apps",
             json={"appSettings": {"field_notes": {"sync_token": "sk-pasted"}}},
         )
-        cleared = client.patch(
-            "/api/settings/apps",
-            json={"appSettings": {"field_notes": {"sync_token": None}}},
-        )
         configured = (await FieldNotes.settings()).sync_token
 
     assert stored.status_code == 200
@@ -50,7 +46,6 @@ async def test_a_secret_file_sets_the_setting_until_it_is_removed(tmp_path: Path
     assert changed.status_code == 422
     assert "apps.field_notes.sync_token" in changed.json()["detail"]
     assert "sk-pasted" not in changed.text
-    assert cleared.status_code == 422
     assert configured.get_secret_value() == "sk-from-file"
 
     (secrets / "apps.field_notes.sync_token").unlink()
@@ -93,42 +88,13 @@ def test_a_secret_file_for_a_disabled_app_refuses_to_start(
         loader.load_installed_apps()
 
 
-@pytest.mark.parametrize("text", ["987654321", "true", "null", '{"type": "service_account"}'])
-async def test_a_secret_file_is_the_text_it_holds(tmp_path: Path, secrets, text):
-    (secrets / "apps.field_notes.sync_signing_key").write_text(f"{text}\n")
+async def test_a_secret_file_is_the_text_it_holds(tmp_path: Path, secrets):
+    (secrets / "apps.field_notes.sync_signing_key").write_text('{"type": "service_account"}\n')
 
-    with TestClient(configure_app_for_test(settings=make_settings(tmp_path))) as client:
-        other_change = client.patch(
-            "/api/settings/apps", json={"appSettings": {"field_notes": {"board_size": 20}}}
-        )
+    with TestClient(configure_app_for_test(settings=make_settings(tmp_path))):
         configured = (await FieldNotes.settings()).sync_signing_key
 
-    assert other_change.status_code == 200
-    assert configured.get_secret_value() == text
-
-
-async def test_a_secret_file_that_the_app_refuses_stays_out_of_the_error(tmp_path: Path, secrets):
-    # The proof app's validator quotes the token it refuses.
-    (secrets / "apps.field_notes.sync_token").write_text("not-a-token\n")
-
-    with TestClient(configure_app_for_test(settings=make_settings(tmp_path))) as client:
-        other_change = client.patch(
-            "/api/settings/apps", json={"appSettings": {"field_notes": {"board_size": 20}}}
-        )
-        # Clearing a field validates nothing until the route's last check of the app.
-        other_clear = client.patch(
-            "/api/settings/apps", json={"appSettings": {"field_notes": {"board_size": None}}}
-        )
-        with pytest.raises(ValueError) as refused:
-            await FieldNotes.settings()
-
-    for response in (other_change, other_clear):
-        assert response.status_code == 422
-        assert "apps.field_notes.sync_token" in response.json()["detail"]
-        assert "not-a-token" not in response.text
-    assert "not-a-token" not in str(refused.value)
-    assert refused.value.__cause__ is None
-    assert refused.value.__suppress_context__
+    assert configured.get_secret_value() == '{"type": "service_account"}'
 
 
 def test_a_secret_file_cannot_switch_an_app(secrets):

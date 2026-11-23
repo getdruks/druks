@@ -184,8 +184,9 @@ class App:
 
     @classmethod
     async def settings(cls) -> AppSettings:
-        """The app's settings, resolved through the override store keyed by app
-        name. Raises if the app declares no ``Settings``."""
+        """The app's settings. A field takes its secret file's value, else the operator's
+        override, else its default. Raises ``TypeError`` when the app declares no
+        ``Settings``, and ``ValueError`` without the refused value when the settings refuse one."""
         from druks.db import db_session
         from druks.user_settings.models import SettingsOverride
 
@@ -202,17 +203,14 @@ class App:
             )
             for name, field in model.model_fields.items()
         }
-        configured = cls.configured_settings()
+        values.update(cls.configured_settings())
         try:
-            return model.model_validate({**values, **configured})
+            return model.model_validate(values)
         except ValidationError as error:
-            if not configured:
-                raise
-            # A validator can quote the value it refuses, and a file's value is a secret.
-            files = ", ".join(f"apps.{cls.name}.{field}" for field in configured)
+            # A validator can quote the value it refuses, and a value can be a secret.
             raise ValueError(
                 f"The settings of {cls.name} are invalid: "
-                f"{redacted_validation_message(model, error)}. Secret files set {files}."
+                f"{redacted_validation_message(model, error)}"
             ) from None
 
     @classmethod
