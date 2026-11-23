@@ -2,7 +2,7 @@ import re
 from collections.abc import Iterable, Iterator, Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeVar
+from typing import TYPE_CHECKING, Annotated, Literal, TypeVar
 from urllib.parse import quote
 
 from pydantic import (
@@ -34,7 +34,7 @@ Part = TypeVar("Part", bound=Schema)
 # An address that names its own host, and a path from the root of the dashboard.
 _ABSOLUTE_URL = re.compile(r"https?://", re.IGNORECASE)
 _DASHBOARD_PATH = re.compile(r"/(?!/)")
-# What an address keeps as written: its delimiters, and the octets it already encodes.
+# quote() leaves the delimiters of an address and its encoded octets as they are.
 _ADDRESS_MARKS = ":/?#[]@!$&'*+,;=%"
 
 # The rule under the header of a table, for the alignment of each column.
@@ -43,8 +43,8 @@ _ALIGNMENT_RULE = {"start": "---", "end": "---:"}
 
 def _subject_identity(value):
     """``follows=`` takes the subject a page or a region watches, or a subject
-    class for every subject of that type. Druks streams what it names and
-    rereads the page on every snapshot it sends."""
+    class for every subject of that type. Druks streams these subjects. It
+    rereads the page on each snapshot that it sends."""
     if not value or isinstance(value, dict | Follows):
         return value
     if isinstance(value, type):
@@ -54,12 +54,12 @@ def _subject_identity(value):
     else:
         identity = getattr(value, "identity", None)
         if identity:
-            # A subject id reaches the stream through a URL, so it travels as text.
+            # A subject id goes to the stream in a URL, as text.
             return {"subject_type": identity["type"], "subject_id": str(identity["id"])}
     raise ValueError(
         "follows= takes the subject a page watches, or its class for every subject of that "
-        f"type, not {type(value).__name__}. A run is about a subject, and the subject is what "
-        "the stream carries."
+        f"type, not {type(value).__name__}. The stream carries subjects, not runs. Give the "
+        "subject itself."
     )
 
 
@@ -86,19 +86,19 @@ def _one_subject(follows: Follows) -> Follows:
 Subject = Annotated[Follows, BeforeValidator(_subject_identity), AfterValidator(_one_subject)]
 
 
-def _get_status(subject: Follows, info: SerializationInfo) -> dict[str, Any]:
-    # A read of a page or of an ask hands in where the work on each subject stands.
+def _get_status(subject: Follows, info: SerializationInfo) -> dict:
+    # A read of a page or of an ask puts the status of each subject in the context.
     status = info.context["statuses"][(subject.subject_type, subject.subject_id)]
     return status.model_dump(mode=info.mode, by_alias=info.by_alias)
 
 
-def _check_field_names(*, owner: str, fields: list[FormField], arguments: dict[str, Any]) -> None:
+def _check_field_names(*, owner: str, fields: list[FormField], arguments: dict) -> None:
     names = [field.name for field in fields]
     repeated_names = sorted({name for name in names if names.count(name) > 1})
     if repeated_names:
         raise ValueError(
-            f"{owner} has two fields named {repeated_names}; one would take the other's value. "
-            "Give each field its own name."
+            f"{owner} has two fields named {repeated_names}. One would take the value of the "
+            "other. Give each field its own name."
         )
     taken = sorted(set(names) & set(arguments))
     if taken:
@@ -134,14 +134,14 @@ def _heading(title: str) -> str:
 
 
 def _titled(title: str, body: str) -> str:
-    # An empty block writes nothing, not even its title, as the dashboard shows nothing.
+    # An empty block writes nothing, not even its title. The dashboard shows nothing for it.
     if body:
         return _join([_heading(title), body])
     return ""
 
 
 def _bullets(items: Iterable[str]) -> str:
-    # The lines of an item keep its indent, so an item of two paragraphs stays one item.
+    # Druks indents the next lines of an item. An item of two paragraphs then stays one item.
     return "\n".join("- " + item.replace("\n", "\n  ") for item in items)
 
 
@@ -150,7 +150,7 @@ def _quote(text: str) -> str:
 
 
 def _number(number: float) -> str:
-    # Grouped, in full, and never in exponent form, as the dashboard shows it.
+    # The dashboard shows a number grouped, in full, and never in exponent form.
     return f"{Decimal(str(number)).normalize():,f}"
 
 
@@ -160,7 +160,7 @@ def _time(when: datetime) -> str:
 
 def _table(header: list[str], rows: Iterable[list[str]], aligns: Sequence[str]) -> str:
     rule = [_ALIGNMENT_RULE[align] for align in aligns]
-    # A pipe would end a cell and a line break its row, so a cell keeps neither.
+    # A pipe ends a cell. A line break ends a row. A cell keeps neither.
     return "\n".join(
         "| " + " | ".join(" ".join(cell.replace("|", "\\|").splitlines()) for cell in line) + " |"
         for line in [header, rule, *rows]
@@ -168,10 +168,10 @@ def _table(header: list[str], rows: Iterable[list[str]], aligns: Sequence[str]) 
 
 
 def get_absolute_url(path: str) -> str:
-    """``path`` as an address that opens outside the dashboard: an outside http(s)
-    address as written, or a path on the dashboard at ``urls.endpoint``. A space or a
-    parenthesis in it is encoded, so it ends no link. Empty for any other address, and
-    for a path on an installation with no endpoint."""
+    """``path`` as an address that opens outside the dashboard. An outside http(s)
+    address stays as written. A path on the dashboard starts with ``urls.endpoint``.
+    Druks encodes a space or a parenthesis. Neither can then end a link. Any other
+    address, or a path on an installation with no endpoint, gives an empty string."""
     endpoint = get_settings().urls.endpoint.rstrip("/")
     address = ""
     if _ABSOLUTE_URL.match(path):
@@ -194,33 +194,34 @@ def _controls(controls: "Sequence[Action | Link]") -> str:
 
 
 def _linked(words: str, link: "Link | None") -> str:
-    # A link on a value or a card takes the words it sits on.
+    # A link on a value or a card takes their words as its label.
     if link and words:
         return link.model_copy(update={"label": words}).to_markdown()
     return words
 
 
 class PageBlock(Schema):
-    """What every block shares. ``block`` names its kind on the wire,
-    ``check_placement`` is how a block refuses a spot it cannot work in, and
-    ``to_markdown`` is how it reads as text."""
+    """What every block shares. ``block`` names its kind on the wire.
+    ``check_placement`` refuses a place where the block cannot work.
+    ``to_markdown`` gives its text form."""
 
     block: str
 
     def check_placement(self, *, followed: bool, regions: set[str], region: str = "") -> None:
         """Raise when this block cannot sit where the page put it. ``followed``
-        says whether any ancestor watches a subject, ``region`` names the nearest
-        one around it, and ``regions`` collects the region names already taken."""
+        tells whether an ancestor watches a subject. ``region`` names the nearest
+        region around the block. ``regions`` holds the region names already in use."""
 
     def to_markdown(self) -> str:
-        """The block as markdown that names no channel. A link is a link when its
-        ``url`` holds its address, and reads as its words when it does not. A block
-        that sends what the operator does has no text form, and defines none."""
+        """The block as markdown that names no channel. A link with an address in
+        its ``url`` stays a link. A link without one shows only its words. A block
+        that sends what the operator does has no text form. It defines no
+        ``to_markdown``."""
         raise NoTextFormError(type(self).__name__)
 
     def subjects(self) -> list[tuple[str, str]]:
         """The ``(subject_type, subject_id)`` of every status and gate in this block,
-        however deep. A read gets where the work on each of them stands."""
+        however deep. A read uses them to get the status of each subject."""
         return [
             (part.subject.subject_type, part.subject.subject_id)
             for part in iter_parts([self], SubjectStatus, GateControls)
@@ -241,11 +242,11 @@ class BlockParent(PageBlock):
 
 
 class Link(PageBlock):
-    """A control that navigates: to another page of this app, to the subject's
-    own platform page, or outside. A link on a value takes the value's words,
-    so it needs no label of its own."""
+    """A control that opens another page of this app, the platform page of a
+    subject, or an outside address. A link on a value takes the words of the
+    value. It needs no label of its own."""
 
-    # A route argument travels in a URL, so an id reads as its text.
+    # A route argument goes in a URL. A number becomes its text.
     model_config = ConfigDict(coerce_numbers_to_str=True)
 
     block: Literal["link"] = "link"
@@ -267,18 +268,21 @@ class Link(PageBlock):
     def _one_destination(self) -> "Link":
         if self.subject and not self.subject.subject_id:
             raise ValueError(
-                f"Link {self.label!r} names the {self.subject.subject_type} type, and a link "
+                f"Link {self.label!r} names the {self.subject.subject_type} type. A link "
                 "opens one subject's page. Give the subject itself."
             )
         if [bool(self.page), bool(self.url), bool(self.subject)].count(True) == 1:
             return self
-        raise ValueError(f"Link {self.label!r} must set exactly one of page, url, or subject")
+        raise ValueError(
+            f"Link {self.label!r} sets none or more than one of page, url, and subject. "
+            "Set exactly one of them."
+        )
 
     def get_address(self, app: str, pages: Sequence["PageRoute"]) -> str:
-        """Where the link opens: its ``url``, or the path on the dashboard of its page
+        """Where the link opens. That is its ``url``, or the dashboard path of its page
         or its subject, as ``app`` routes it with ``pages``. A subject opens the page
-        that the app declares for it, else its own page. Empty for a page that is not
-        in ``pages``."""
+        that the app declares for it, or else its own page. A page that is not in
+        ``pages`` gives an empty string."""
         address = self.url
         if self.subject:
             subject_type, subject_id = self.subject.subject_type, self.subject.subject_id
@@ -298,18 +302,18 @@ class Link(PageBlock):
 
 
 class Action(PageBlock):
-    """A control that calls one of the app's own operations. ``operation`` is a
-    route's ``operation_id``; the shell resolves it to a method and a URL, so
-    the author writes no URL.
+    """A control that calls one of the app's own operations. ``operation`` is the
+    ``operation_id`` of a route. The shell finds the method and the URL of that
+    route. The author writes no URL.
 
-    After a send, the shell navigates when the action sets ``link``, or when
-    the operation answers exactly ``{"url": ...}`` with an absolute http(s)
-    URL. ``refresh`` applies only when neither navigates."""
+    After a send, the shell opens ``link`` when the action sets it. It also opens
+    the URL when the operation answers exactly ``{"url": ...}`` with an absolute
+    http(s) URL. ``refresh`` applies only when the shell opens neither."""
 
     block: Literal["action"] = "action"
     label: str
     operation: str
-    arguments: dict[str, Any] = Field(default_factory=dict)
+    arguments: dict = Field(default_factory=dict)
     fields: list[FormField] = Field(default_factory=list)
     tone: Literal["default", "primary", "danger"] = "default"
     # Non-empty text asks the operator before the shell sends anything.
@@ -322,7 +326,7 @@ class Action(PageBlock):
         if self.fields and self.confirm:
             raise ValueError(
                 f"Action {self.label!r} gives both fields and confirm. Each asks the operator "
-                "before the action runs, so give one or the other."
+                "before the action runs. Give one or the other."
             )
         return self
 
@@ -350,12 +354,13 @@ class Action(PageBlock):
             raise ValueError(
                 f"app {app_name!r} action {self.label!r} names operation "
                 f"{self.operation!r}, which none of its routes declares. This app declares "
-                f"{sorted(operations)}."
+                f"{sorted(operations)}. Name one of these operations."
             )
         if operation.method == "GET":
             raise ValueError(
                 f"app {app_name!r} action {self.label!r} names {self.operation!r}, a GET "
-                "route. A GET is a read, so it can never be an action."
+                "route. A GET route is a read. It can never be an action. Name an operation "
+                "that writes."
             )
 
 
@@ -388,12 +393,12 @@ class Form(PageBlock):
         if self.submit == "change" and self.extra_actions:
             raise ValueError(
                 f"form {self.title!r} submits on change and also has extra actions. "
-                "An extra action is a button; give the form a button, or drop extra_actions."
+                "An extra action is a button. Give the form a button, or drop extra_actions."
             )
         if self.submit == "change" and self.action.confirm:
             raise ValueError(
                 f"form {self.title!r} submits on change and also asks to confirm. "
-                "A confirm is a press; give the form a button, or drop confirm."
+                "A confirm needs a button. Give the form a button, or drop confirm."
             )
         _check_field_names(
             owner=f"form {self.title!r}",
@@ -432,8 +437,8 @@ class Markdown(PageBlock):
 
 
 class Quote(PageBlock):
-    """Someone else's words, kept as they arrived — a message, a reply, an
-    answer. Line breaks survive; nothing is read as markup."""
+    """The words of someone else, as they arrived, such as a message, a reply,
+    or an answer. The shell keeps the line breaks. It reads nothing as markup."""
 
     block: Literal["quote"] = "quote"
     text: str
@@ -447,8 +452,8 @@ class Quote(PageBlock):
 
 class Callout(PageBlock):
     """A short message the reader should not miss. The tone selects the
-    presentation; the app writes the words. ``controls`` are the next step
-    the message points at."""
+    presentation. The app writes the words. ``controls`` are the next step
+    that the message points at."""
 
     block: Literal["callout"] = "callout"
     tone: Literal["info", "success", "warning", "danger"] = "info"
@@ -486,7 +491,7 @@ class Divider(PageBlock):
 
 
 class EmptyState(PageBlock):
-    """What a page shows in place of content it has none of."""
+    """What a page shows when it has no content."""
 
     block: Literal["empty_state"] = "empty_state"
     title: str
@@ -519,12 +524,14 @@ class PageValue(Schema):
     def to_markdown(self) -> str:
         """The value as markdown, the way a fact, a list item, or a table cell
         writes it."""
-        raise NotImplementedError(f"{type(self).__name__} has no to_markdown()")
+        raise NotImplementedError(
+            f"{type(self).__name__} has no to_markdown(). Define one on {type(self).__name__}."
+        )
 
 
 class TextValue(PageValue):
-    """Words. ``link`` is how a table cell, a fact, or a list item reaches
-    another page."""
+    """Words. ``link`` opens another page from a table cell, a fact, or a list
+    item."""
 
     def __init__(self, text, **data):
         super().__init__(text=text, **data)
@@ -554,8 +561,8 @@ class NumberValue(PageValue):
 
 
 class StatusValue(PageValue):
-    """Where something stands. The app writes the word; the tone selects the
-    presentation. ``link`` reaches the thing it names."""
+    """Where something stands. The app writes the word. The tone selects the
+    presentation. ``link`` opens the thing that the word names."""
 
     value: Literal["status"] = "status"
     label: str
@@ -571,9 +578,9 @@ class StatusValue(PageValue):
 
 class SubjectStatus(PageValue):
     """Where the work on one subject stands. The shell shows "needs you" when
-    the subject waits on the operator, ``working`` while Druks works on it, what
-    stopped it, or "idle". Druks reads ``status`` each time it serves the value,
-    so a stored value keeps none."""
+    the subject waits on the operator. It shows ``working`` while Druks works on
+    it, what stopped it, or "idle". Druks reads ``status`` each time it serves
+    the value. A stored value keeps no status."""
 
     value: Literal["subject_status"] = "subject_status"
     subject: Subject
@@ -586,7 +593,7 @@ class SubjectStatus(PageValue):
     @model_serializer(mode="wrap")
     def _with_status(
         self, serialize: SerializerFunctionWrapHandler, info: SerializationInfo
-    ) -> dict[str, Any]:
+    ) -> dict:
         if info.context:
             return {**serialize(self), "status": _get_status(self.subject, info)}
         return serialize(self)
@@ -606,7 +613,7 @@ class SubjectStatus(PageValue):
 
 class GateControls(PageBlock):
     """The operator's answer to what a subject waits on. The shell reads the
-    ask, the options, and the artifact, and shows nothing while the subject
+    ask, the options, and the artifact. It shows nothing while the subject
     waits on nothing."""
 
     block: Literal["gate_controls"] = "gate_controls"
@@ -619,14 +626,14 @@ class GateControls(PageBlock):
         if followed:
             return
         raise ValueError(
-            "GateControls sits in nothing that follows a subject, so an answered gate would "
+            "GateControls sits in nothing that follows a subject. An answered gate would then "
             "stay on screen. Put it in a Page or Section with follows=."
         )
 
     @model_serializer(mode="wrap")
     def _with_status(
         self, serialize: SerializerFunctionWrapHandler, info: SerializationInfo
-    ) -> dict[str, Any]:
+    ) -> dict:
         return {**serialize(self), "status": _get_status(self.subject, info)}
 
 
@@ -684,7 +691,7 @@ Value = Annotated[
 
 
 class TimelineItem(Schema):
-    # Aware, so items from different sources order against each other.
+    # An aware time lets Druks order items from different sources.
     when: AwareDatetime
     title: str
     description: str = ""
@@ -700,10 +707,9 @@ class Timeline(PageBlock):
 
     @model_validator(mode="after")
     def _oldest_first(self) -> "Timeline":
-        # Druks orders here, where the stamps keep their full precision: a
-        # browser compares milliseconds and would call two microseconds apart
-        # the same moment. Sorting is stable, so items that truly share a
-        # moment keep the order the app gave them.
+        # Druks sorts here, at full precision. A browser compares only milliseconds.
+        # It sees two times a few microseconds apart as the same moment. The sort is
+        # stable. Items with the same time keep the order that the app gave them.
         self.items.sort(key=lambda item: item.when)
         return self
 
@@ -741,11 +747,12 @@ class Progress(PageBlock):
         if self.steps:
             raise ValueError(
                 f"Progress {self.label!r} gives both completed and steps. Staged work reads as "
-                "its steps, so give one or the other."
+                "its steps. Give one or the other."
             )
         if self.completed > self.total:
             raise ValueError(
-                f"Progress {self.label!r} has completed {self.completed} of {self.total}."
+                f"Progress {self.label!r} has completed {self.completed} of {self.total}. "
+                "Set completed to at most total."
             )
         return self
 
@@ -759,8 +766,8 @@ class Progress(PageBlock):
 
 
 class Image(PageBlock):
-    """One image. ``alternative_text`` is what a reader gets in place of it, so
-    it says what the image shows, not that it is an image."""
+    """One image. ``alternative_text`` is what a reader gets in place of the
+    image. It says what the image shows, not that it is an image."""
 
     block: Literal["image"] = "image"
     url: str
@@ -772,9 +779,9 @@ class Image(PageBlock):
 
 
 class FileSummary(Schema):
-    """One file, as the shell shows it. The download is derived from the id, so
-    a file always travels through the platform's own route and its identity
-    gate."""
+    """One file, as the shell shows it. Druks builds the download address from
+    the id. A download then always goes through the platform's own route and its
+    identity check."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -829,7 +836,8 @@ class Chart(PageBlock):
         if wrong_series:
             raise ValueError(
                 f"chart series {wrong_series} do not carry one point for each of the "
-                f"{len(self.categories)} categories."
+                f"{len(self.categories)} categories. Give each series one point for each "
+                "category."
             )
         return self
 
@@ -940,7 +948,7 @@ class TableColumn(Schema):
 class TableRow(Schema):
     cells: list[Value] = Field(default_factory=list)
     detail: str = ""
-    # Identity the shell sends when this row is selected.
+    # The identity that the shell sends when the operator selects this row.
     key: str = ""
 
     def __init__(self, cells=(), **data):
@@ -949,9 +957,8 @@ class TableRow(Schema):
 
 class Table(PageBlock):
     """Rows of values under named columns. Every row carries one cell for each
-    column; with no rows the shell shows ``empty``. ``select`` names the
-    argument the selected keys fill, and ``actions`` are what run on that
-    list."""
+    column. With no rows, the shell shows ``empty``. ``select`` names the
+    argument that the selected keys fill. ``actions`` run on those keys."""
 
     block: Literal["table"] = "table"
     title: str = ""
@@ -967,7 +974,7 @@ class Table(PageBlock):
         if wrong_counts:
             raise ValueError(
                 f"table {self.title!r} has rows of {sorted(set(wrong_counts))} cells under "
-                f"{len(self.columns)} columns."
+                f"{len(self.columns)} columns. Give each row one cell for each column."
             )
         return self
 
@@ -993,9 +1000,8 @@ class Table(PageBlock):
         repeated_keys = sorted({key for key in keys if keys.count(key) > 1})
         if repeated_keys:
             raise ValueError(
-                f"table {self.title!r} has two rows keyed {repeated_keys}; the shell "
-                "would not know which one the operator picked. Give each row its "
-                "own key."
+                f"table {self.title!r} has two rows keyed {repeated_keys}. The shell "
+                "cannot tell which one the operator picked. Give each row its own key."
             )
         for action in self.actions:
             if action.fields:
@@ -1020,7 +1026,7 @@ class Table(PageBlock):
             self.empty.check_placement(followed=followed, regions=regions, region=region)
 
     def to_markdown(self) -> str:
-        # An action has no text form, so a table that selects rows has none either.
+        # An action has no text form. A table that selects rows has none either.
         actions = _controls(self.actions)
         body = ""
         if self.rows:
@@ -1078,8 +1084,9 @@ class Stack(BlockParent):
 
 class Columns(BlockParent):
     """Blocks across the page. ``even`` shares the width. ``sidebar`` keeps
-    the last column a rail. ``split`` is the page: two independently scrolling
-    panes, a list and what it opened. They stack on a narrow screen."""
+    the last column a rail. ``split`` fills the page with two panes that scroll
+    on their own. The first holds a list. The second holds what the list opened.
+    The columns stack on a narrow screen."""
 
     block: Literal["columns"] = "columns"
     layout: Literal["even", "sidebar", "split"] = "even"
@@ -1091,7 +1098,8 @@ class Columns(BlockParent):
     def _split_is_two_panes(self) -> "Columns":
         if self.layout == "split" and len(self.blocks) != 2:
             raise ValueError(
-                "Columns layout='split' takes exactly two panes — a list and what it opened."
+                f"Columns layout='split' takes two blocks, not {len(self.blocks)}. Give it a "
+                "list and what the list opened."
             )
         return self
 
@@ -1099,14 +1107,14 @@ class Columns(BlockParent):
 class Card(BlockParent):
     """A titled panel. ``link`` is its destination. The shell makes the whole
     panel the control when ``controls`` is empty. ``drag`` is what a drop
-    action receives; empty means the card does not move."""
+    action receives. An empty ``drag`` means the card does not move."""
 
     block: Literal["card"] = "card"
     title: str = ""
     description: str = ""
     controls: list[Action | Link] = Field(default_factory=list)
     link: Link | None = None
-    drag: dict[str, Any] = Field(default_factory=dict)
+    drag: dict = Field(default_factory=dict)
 
     def check_placement(self, *, followed: bool, regions: set[str], region: str = "") -> None:
         super().check_placement(followed=followed, regions=regions, region=region)
@@ -1127,8 +1135,8 @@ class Card(BlockParent):
 class Cards(PageBlock):
     """One card for each of a set of things. ``wrap`` lets the shell fit as
     many across as the screen takes. ``stack`` is one column. ``tiles`` is a
-    wrap of squares: an image fills each card and is cropped rather than shown
-    in full. ``drop`` is the action a dragged card submits onto this list."""
+    wrap of squares. An image fills each card. The shell crops the image to the
+    square. ``drop`` is the action that a card dragged onto this list submits."""
 
     block: Literal["cards"] = "cards"
     title: str = ""
@@ -1140,7 +1148,10 @@ class Cards(PageBlock):
     @model_validator(mode="after")
     def _drop_is_immediate(self) -> "Cards":
         if self.drop and (self.drop.fields or self.drop.confirm):
-            raise ValueError("Cards.drop cannot collect fields or confirm — the drop is the submit")
+            raise ValueError(
+                "Cards.drop collects fields or asks to confirm. The drop is the submit. "
+                "Remove its fields and its confirm."
+            )
         return self
 
     def check_placement(self, *, followed: bool, regions: set[str], region: str = "") -> None:
@@ -1152,7 +1163,7 @@ class Cards(PageBlock):
             self.empty.check_placement(followed=followed, regions=regions, region=region)
 
     def to_markdown(self) -> str:
-        # A dragged card runs the drop, and an action has no text form.
+        # The drop is an action. An action has no text form.
         drop = ""
         if self.drop:
             drop = self.drop.to_markdown()
@@ -1165,8 +1176,8 @@ class Cards(PageBlock):
 
 
 class Section(BlockParent):
-    """A titled part of a page. A ``name`` makes it a region the shell can
-    replace on its own, and ``follows`` is what makes it do so."""
+    """A titled part of a page. A ``name`` makes it a region that the shell can
+    replace on its own. ``follows`` makes the shell replace it."""
 
     block: Literal["section"] = "section"
     title: str = ""
@@ -1177,8 +1188,8 @@ class Section(BlockParent):
     def check_placement(self, *, followed: bool, regions: set[str], region: str = "") -> None:
         if self.name in regions:
             raise ValueError(
-                f"this page has two regions named {self.name!r}; the shell replaces a region "
-                "by name, so it could not tell them apart. Give each one its own name."
+                f"this page has two regions named {self.name!r}. The shell replaces a region "
+                "by name. It cannot tell the two apart. Give each region its own name."
             )
         if self.name:
             regions.add(self.name)
@@ -1199,7 +1210,8 @@ class Section(BlockParent):
     def _named_when_followed(self) -> "Section":
         if self.follows and not self.name:
             raise ValueError(
-                "a Section that follows a subject needs a name — the shell replaces it by name"
+                "a Section that follows a subject needs a name. The shell replaces it by "
+                "name. Give it a name."
             )
         return self
 
