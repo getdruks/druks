@@ -172,44 +172,6 @@ def test_patch_settings_rejects_a_model_no_harness_runs(tmp_path: Path):
     assert "gpt-5.5" in response.json()["detail"]
 
 
-def test_agents_lists_every_apps_agents_as_they_resolve(tmp_path: Path):
-    with settings_client(tmp_path) as client:
-        client.patch(
-            "/api/settings/apps",
-            json={
-                "agentHarnesses": {"software_factory.implement": "codex"},
-                "agentModels": {"software_factory.implement": "openai/gpt-5.5"},
-            },
-        )
-        body = client.get("/api/instructions").json()
-    apps = {app["name"]: app for app in body["apps"]}
-    assert "software_factory" in apps
-    assert "field_notes" in apps
-    agents = {agent["name"]: agent for agent in apps["software_factory"]["instructions"]}
-    assert agents["software_factory.implement"]["harness"] == "codex"
-    assert agents["software_factory.implement"]["harnessSource"] == "agent"
-    assert agents["software_factory.implement"]["model"] == "openai/gpt-5.5"
-    assert agents["software_factory.implement"]["source"] == "agent"
-    assert agents["software_factory.implement"]["billing"] == "subscription"
-    assert agents["software_factory.implement"]["billingSource"] == "default"
-    assert agents["software_factory.generate_plan"]["harnessSource"] == "default"
-    assert set(agents["software_factory.generate_plan"]) == {
-        "name",
-        "label",
-        "description",
-        "harness",
-        "harnessSource",
-        "model",
-        "source",
-        "billing",
-        "billingSource",
-        "effort",
-        "effortSource",
-        "timeout",
-        "timeoutSource",
-    }
-
-
 def test_apps_judge_an_agents_triple_as_it_resolves(tmp_path: Path):
     with settings_client(tmp_path) as client:
         response = client.patch(
@@ -747,24 +709,22 @@ def test_apps_reject_out_of_range_workflow_setting(tmp_path: Path):
     assert response.status_code == 422
 
 
-def test_settings_lists_read_the_overrides_in_one_query(tmp_path: Path, monkeypatch):
+def test_app_settings_read_the_overrides_in_one_query(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(Summarize, "every", "0 9 * * *")
-    reads: dict[str, int] = {}
-    route = ""
+    statements: list[str] = []
 
     def record(conn, cursor, statement, parameters, context, executemany):
         if "settings_overrides" in statement:
-            reads[route] = reads.get(route, 0) + 1
+            statements.append(statement)
 
     with settings_client(tmp_path) as client:
         event.listen(Engine, "before_cursor_execute", record)
         try:
-            for route in ("/api/settings/apps", "/api/instructions"):
-                assert client.get(route).status_code == 200
+            assert client.get("/api/settings/apps").status_code == 200
         finally:
             event.remove(Engine, "before_cursor_execute", record)
 
-    assert reads == {"/api/settings/apps": 1, "/api/instructions": 1}
+    assert len(statements) == 1
 
 
 async def test_a_member_reads_no_settings_of_an_app_they_cannot_use(tmp_path: Path, druks_db):
@@ -774,9 +734,8 @@ async def test_a_member_reads_no_settings_of_an_app_they_cannot_use(tmp_path: Pa
 
     with settings_client(tmp_path) as client:
         settings = client.get("/api/settings/apps").json()["apps"]
-        agents = client.get("/api/instructions").json()["apps"]
         choices = client.get("/api/settings/apps/choices?app=field_notes")
 
-    assert "field_notes" not in {app["name"] for app in settings + agents}
-    assert "software_factory" in {app["name"] for app in agents}
+    assert "field_notes" not in {app["name"] for app in settings}
+    assert "software_factory" in {app["name"] for app in settings}
     assert choices.status_code == 403

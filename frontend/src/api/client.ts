@@ -2,7 +2,6 @@ import type {
   Account,
   AgentSchedule,
   AccountRole,
-  InstructionsResponse,
   AgentCallFiles,
   ArtifactContent,
   Automation,
@@ -335,7 +334,6 @@ export const api = {
   updatePersonalSettings: (body: UpdatePersonalSettingsRequest) =>
     patchJSON<PersonalSettings>('/api/settings/personal', body),
   harnesses: () => getJSON<Harness[]>('/api/settings/harnesses'),
-  instructions: () => getJSON<InstructionsResponse>('/api/instructions'),
   accounts: () => getJSON<Account[]>('/api/auth/accounts'),
   setAccountRole: (accountId: string, role: AccountRole) =>
     patchJSON<Account>(`/api/auth/accounts/${encodeURIComponent(accountId)}`, { role }),

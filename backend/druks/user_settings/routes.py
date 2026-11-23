@@ -29,8 +29,6 @@ from .schemas import (
     AppsSettingsResponse,
     AppsSettingsUpdate,
     HarnessResponse,
-    InstructionsAppResponse,
-    InstructionsResponse,
     PersonalSettingsResponse,
     SettingsResponse,
     UpdatePersonalSettingsRequest,
@@ -38,7 +36,6 @@ from .schemas import (
 )
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
-instructions_router = APIRouter(prefix="/api/instructions", tags=["settings"])
 
 _EXECUTION_DEFAULTS = (
     "default_harness",
@@ -53,24 +50,6 @@ _EXECUTION_DEFAULTS = (
 @router.get("/harnesses", response_model=list[HarnessResponse], response_model_by_alias=True)
 async def list_harnesses() -> tuple[type[Harness], ...]:
     return get_harnesses()
-
-
-@instructions_router.get("", response_model=InstructionsResponse, response_model_by_alias=True)
-async def list_instructions(
-    session: SessionDep, account: Account = Depends(current_account)
-) -> InstructionsResponse:
-    settings = await InstallationSettings.get_or_create(session)
-    overrides = await SettingsOverride.list_by_key(session)
-    projected = [
-        InstructionsAppResponse(
-            name=app.name,
-            instructions=await reads.list_instruction_settings(
-                session, app, settings=settings, overrides=overrides
-            ),
-        )
-        for app in await account.list_usable_apps()
-    ]
-    return InstructionsResponse(apps=[app for app in projected if app.instructions])
 
 
 @router.get("", response_model=SettingsResponse, response_model_by_alias=True)

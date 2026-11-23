@@ -45,7 +45,6 @@ beforeEach(() => {
       }],
     }
     if (url === '/api/settings/apps/choices?app=chat') response = {}
-    if (url === '/api/instructions') response = { apps: [] }
     return new Response(JSON.stringify(response))
   }))
 })
