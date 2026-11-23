@@ -518,6 +518,8 @@ Slack draws these blocks of an approval with its own blocks:
 | `Link` | A button that opens the address of the link. |
 | `Table` | A data table that the person can sort and page through. The title is its caption, or the first column label when the table has no title. A `NumberValue` is a number cell. Slack sorts a column of number cells as numbers. A value with a link is a link. Any other value shows its text form. An empty value or column label shows a dash. The row detail stays on the dashboard. A table that selects rows shows its text form. |
 | `Chart` | A chart of the same kind: line, bar, area, or pie. A line, bar, or area chart has the categories along the axis, in their order. Each series has a point for each category. The category label and the value label are the titles of the axes. A pie has no axes. It has a segment for each category, in their order, with the label of the category and its value. A chart with no title takes its value label as its title. An empty category or series label shows a dash. |
+| `Image` | An image that Slack fetches from the address of the image. The alternative text is its alt text. The caption is its title. An image with no caption has no title. |
+| `ImageGallery` | An image for each image of the gallery, in their order. The title of the gallery is a heading above them, as in its text form. A gallery with no title has no heading. |
 | `Action` | At the top of the context and with no fields: a button that runs the action as the person who clicks it. See [Actions in Slack](#actions-in-slack). |
 
 Every other block shows its text form. A value in a fact or a metric shows its
@@ -533,7 +535,10 @@ A block that breaks a limit of Slack shows its text form:
 - a link or an action label of more than 75 characters;
 - a link address of more than 3,000 characters;
 - an action that asks to confirm, when its label passes 30 characters or its
-  `confirm` passes 300.
+  `confirm` passes 300;
+- an image address of more than 3,000 characters, after Druks encodes it;
+- the alternative text or the caption of an image, of more than 2,000
+  characters.
 
 A link with no address shows its words, as in text. A message holds 50 blocks,
 its buttons included. When the message has no room for more blocks, the blocks
@@ -566,11 +571,29 @@ characters. Druks cuts no label of a pie. A cut label can hide the category of a
 share. A pie shows its text form when it has no categories, more than 12
 categories, or a category label of more than 20 characters.
 
+Slack fetches an image from its address. Druks does not fetch it. Slack draws a
+png, a jpg, or a gif. Druks knows the format only from the address. An image
+shows as an image when its `url` is an outside `http(s)` address, and the path
+of the address ends in `.png`, `.jpg`, `.jpeg`, or `.gif`, in capitals or not.
+The query and the fragment do not count. Any other image shows its text form.
+This holds for an svg, an address with no extension, a path on the dashboard,
+and a `data:` address. A Druks file shows its text form too. Slack cannot read
+a Druks file by its address. Slack fetches the address that the text form links.
+Druks encodes a space or a parenthesis in it, as in text.
+
+Slack draws each image of a gallery that it can draw. Each other image keeps its
+line of the text form, in its place among the images. A gallery with no image
+that Slack can draw shows its text form. A message holds all the blocks of a
+gallery or none of them. When the message has no room for all of them, the
+gallery shows its text form in the last block, with the blocks after it. The
+heading and the lines of a gallery count in the 12,000 characters of markdown.
+
 When Slack refuses the blocks, Druks sends the text of the approval in the same
-place, with the same buttons. A table or a chart then shows as a markdown table.
-Druks edits the message when the approval gets an answer or closes. The edit
-draws the blocks again, with the outcome in place of the buttons. An action then
-shows its text form.
+place, with the same buttons. Slack refuses them, for example, when it cannot
+download an image, or when the channel takes no images. A table or a chart then
+shows as a markdown table, and an image as a link. Druks edits the message when
+the approval gets an answer or closes. The edit draws the blocks again, with the
+outcome in place of the buttons. An action then shows its text form.
 
 ### Actions in Slack
 
