@@ -50,6 +50,7 @@
 .activity-work-label { color: var(--druks-color-text-secondary); }
 .activity-detail h3 { font-size: 16px; font-weight: 600; margin: 18px 0 10px; }
 .activity-explanation, .activity-response, .activity-request, .activity-result { border-top: 1px solid var(--druks-color-border-subtle); padding: 18px 0; }
+.activity-request-context { min-width: 0; border: 0; padding: 0; margin: 0; }
 .activity-explanation p { margin: 0; }
 .activity-explanation p + p { margin-top: 8px; color: var(--druks-color-text-secondary); }
 .activity-detail-context { font-weight: 500; white-space: pre-wrap; margin: 0 0 12px; }

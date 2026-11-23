@@ -17,6 +17,7 @@ from druks.durable.models import Artifact, Run
 from druks.durable.reads import read_ask
 from druks.exceptions import ObjectNotFound
 from druks.notifications.constants import (
+    ACTION_GONE_MESSAGE,
     NOTE_FIELD,
     NOTE_REQUIRED_MESSAGE,
     QUESTION_FIELD_PREFIX,
@@ -31,9 +32,9 @@ from druks.notifications.exceptions import (
 )
 from druks.notifications.models import Notification
 from druks.registry import get_app
-from druks.settings import get_settings
 from druks.teams.models import Team
 from druks.ui.blocks import iter_parts
+from druks.ui.page import get_route_path, list_route_parameters
 
 
 async def list_notification_channels() -> list[dict]:
@@ -144,6 +145,56 @@ async def create_park_notification(
     return notification.id
 
 
+async def get_action_request(
+    session: AsyncSession, token: str, position: int, *, user_id: str
+) -> dict:
+    """The request that a click by ``user_id`` sends for the action at ``position`` in the
+    blocks of the notification of ``token``: the notification, and the method, the path and
+    the JSON body of the operation's route, as the dashboard sends them. Raises when the
+    action cannot run."""
+    notification = await Notification.get_for_token(session, token)
+    if not notification:
+        raise UnknownTokenError()
+    # A line of text has the position of an action that ran.
+    if position >= len(notification.blocks) or notification.blocks[position]["block"] != "action":
+        raise InvalidChoiceError(ACTION_GONE_MESSAGE)
+    action = notification.blocks[position]
+    if notification.is_acknowledged:
+        raise AlreadyAcknowledgedError()
+    # The click must land on the round of the notification, read past the identity map.
+    run = await session.get(Run, notification.run_id, populate_existing=True)
+    if run.state != RunState.PARKED.value or run.input_requested_at != notification.run_parked_at:
+        raise StaleRoundError()
+    if notification.conversation_id:
+        conversation = await session.get(Conversation, notification.conversation_id)
+        if user_id != conversation.user_id:
+            raise AnswerNotAllowedError("Only the person of this conversation can run its actions.")
+    if not run.workflow:
+        raise ObjectNotFound("run", {"id": run.id})
+    app = get_app(run.app)
+    # The app can lose the route after the run parks.
+    operation = app.operations().get(action["operation"])
+    if not operation:
+        raise InvalidChoiceError(f"The app {app.name} has no route for this action now.")
+    parameters = list_route_parameters(operation.path)
+    # A number is a value even when it is 0. A client drops a segment of one or two dots
+    # from a path, and then another route answers, so neither is a value.
+    if missing_names := [
+        name for name in parameters if action["arguments"].get(name) in (None, "", ".", "..")
+    ]:
+        raise InvalidChoiceError(
+            f"This action carries no path value for {', '.join(missing_names)}."
+        )
+    return {
+        "notification": notification,
+        "method": operation.method,
+        "path": get_route_path(operation.path, action["arguments"]),
+        "body": {
+            name: value for name, value in action["arguments"].items() if name not in parameters
+        },
+    }
+
+
 async def get_offered_control(ask: dict, control: str) -> dict:
     """The control that the ask offers under the id ``control``."""
     for offered in ask.get("controls", []):
@@ -183,9 +234,8 @@ async def validate_in_app_answer(
         account = await session.get(Account, account_id) if account_id else None
         if not account or not await account.can_use_app(app):
             reason = TEAM_ONLY_MESSAGE.format(app=app.name)
-            # An installation with no endpoint has no address for the link.
-            if endpoint := get_settings().urls.endpoint.rstrip("/"):
-                reason += f" Open it in Druks: {endpoint}/runs/{run.id}"
+            if run_link := run.get_link():
+                reason += f" Open it in Druks: {run_link}"
             raise AnswerNotAllowedError(reason)
     ask = await run.get_ask()
     offered = await get_offered_control(ask, control)

@@ -21,7 +21,12 @@ from mcp.types import CallToolRequestParams, ToolAnnotations
 
 from druks.accounts.exceptions import InvalidPatError
 from druks.accounts.models import Account, PersonalAccessToken
-from druks.api.exceptions import AgentApiError, InvalidToolArguments, ToolNotAvailable
+from druks.api.exceptions import (
+    AgentApiError,
+    InvalidToolArguments,
+    ToolNotAvailable,
+    get_refusal,
+)
 from druks.apps.exceptions import AppBotError
 from druks.database import session_scope
 from druks.mcp.exceptions import InvalidAgentToolError
@@ -95,23 +100,8 @@ class ToolErrors(Middleware):
         except AgentApiError as error:
             body = {"code": error.code, "message": str(error), "retryable": error.retryable}
         except ToolError as error:
-            body = self._parse_refusal(error.__cause__.response)
+            body = get_refusal(error.__cause__.response)
         raise ToolError(json.dumps(body))
-
-    @staticmethod
-    def _parse_refusal(response: httpx2.Response) -> dict:
-        # An agent route answers in this shape already. Every other route answers
-        # {error, detail}, and a validation error's detail lists the refused fields.
-        refusal = response.json()
-        if "code" in refusal:
-            return refusal
-        message = refusal["detail"]
-        if refusal["error"] == "VALIDATION_ERROR":
-            message = "; ".join(
-                f"{'.'.join(map(str, field_error['loc'][1:]))}: {field_error['msg']}"
-                for field_error in refusal["detail"]
-            )
-        return {"code": refusal["error"], "message": message, "retryable": False}
 
 
 class StrictInputValidation(Middleware):

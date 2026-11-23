@@ -10,6 +10,7 @@ from druks.durable.models import Run
 from druks.durable.reads import read_ask
 from druks.events.models import Event
 from druks.testing import seed_run
+from druks.ui.blocks import iter_parts
 from druks.ui.exceptions import NoTextFormError
 from druks.workflows import OperatorReply, YesNo, current_workflow
 from druks_field_notes.models import Note
@@ -190,36 +191,10 @@ async def test_a_block_context_reads_where_the_work_stands_each_time(
 @pytest.mark.parametrize(
     "context, refused",
     [
-        (
-            [ui.Section(blocks=[ui.GateControls(_NOTE)])],
-            "GateControls",
-        ),
-        (
-            [
-                ui.Callout(
-                    "Retry it.",
-                    controls=[ui.Action(label="Retry", operation="write_note", refresh="region")],
-                )
-            ],
-            "Action",
-        ),
-        (
-            [
-                ui.Table(
-                    columns=[ui.TableColumn("Do")],
-                    rows=[
-                        ui.TableRow(
-                            [ui.ControlsValue([ui.Action(label="Go", operation="write_note")])]
-                        )
-                    ],
-                )
-            ],
-            "Action",
-        ),
-        ([ui.Cards(drop=ui.Action(label="Move", operation="write_note"))], "Action"),
+        ([ui.Section(blocks=[ui.GateControls(_NOTE)])], "GateControls"),
         ([ui.Stack([ui.Form(action=ui.Action(label="Save", operation="write_note"))])], "Form"),
     ],
-    ids=["gate controls", "action in a region it lacks", "table cell", "drop", "form"],
+    ids=["gate controls", "form"],
 )
 async def test_review_refuses_a_part_with_no_text_form_before_it_parks(
     druks_db, summarize, context, refused
@@ -229,6 +204,32 @@ async def test_review_refuses_a_part_with_no_text_form_before_it_parks(
 
     assert raised.value.block == refused
     assert not list(await druks_db.scalars(select(Event)))
+
+
+async def test_review_refuses_an_action_that_names_no_write_of_its_app_before_it_parks(
+    druks_db, summarize
+):
+    with pytest.raises(ValueError, match="names operation 'shred_note', which none of its routes"):
+        await summarize.review(context=[ui.Action(label="Shred", operation="shred_note")])
+
+    assert not list(await druks_db.scalars(select(Event)))
+
+
+async def test_review_stores_an_action_inside_a_block_with_the_page_of_its_run(
+    druks_db, summarize, monkeypatch
+):
+    monkeypatch.setattr(DBOS, "recv_async", AsyncMock(return_value={"action": "approve"}))
+    go = ui.Action(label="Go", operation="write_note")
+    table = ui.Table(columns=[ui.TableColumn("Do")], rows=[ui.TableRow([ui.ControlsValue([go])])])
+
+    await summarize.review(context=[table])
+
+    parked = await druks_db.scalar(select(Event).where(Event.type == "workflow.parked"))
+    stored = ui.Stack.from_context(parked.payload["input_request"]["context"])
+    (action,) = iter_parts(stored.blocks, ui.Action)
+    assert action.url == f"/runs/{summarize.workflow_id}"
+    # The app's own action stays as the app wrote it.
+    assert not go.url
 
 
 async def test_review_refuses_a_part_that_is_not_a_block_before_it_parks(druks_db, summarize):

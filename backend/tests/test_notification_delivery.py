@@ -27,7 +27,7 @@ from druks.chat.models import Conversation
 from druks.core.apis.slack import SlackClient
 from druks.core.webhooks.slack import replace_buttons
 from druks.durable.models import AgentCall, Artifact, Run
-from druks.notifications.buttons import decode_button, encode_button
+from druks.notifications.buttons import decode_button, encode_action, encode_button
 from druks.notifications.constants import CLOSED_MESSAGE
 from druks.notifications.exceptions import (
     ChannelUnavailableError,
@@ -648,6 +648,11 @@ def _stored(*blocks) -> list[dict]:
     return [block.model_dump(mode="json", by_alias=True) for block in blocks]
 
 
+def _action(*, operation: str = "archive_note", **data) -> ui.Action:
+    """An action as a review stores it: with the page of its run."""
+    return ui.Action(operation=operation, url="/runs/run-1", **data)
+
+
 def _mrkdwn(text: str) -> dict:
     return {"type": "mrkdwn", "text": text}
 
@@ -1036,6 +1041,153 @@ async def test_a_link_button_opens_its_page_and_a_link_with_no_address_reads_as_
     ]
 
 
+async def test_an_action_goes_out_as_a_button_that_names_its_place_and_slack_confirms_it(slack):
+    blocks = _stored(
+        ui.Markdown("# Review"),
+        ui.Action(
+            label="Archive",
+            operation="archive_note",
+            arguments={"note_id": 7},
+            tone="danger",
+            confirm="Archive the note?",
+        ),
+        ui.Action(label="Clear gist", operation="clear_gist", arguments={"note_id": 7}),
+    )
+
+    await deliver(SlackClient(token=_BOT_TOKEN), "C1", "text", blocks=blocks, token="t")
+
+    (post,) = slack.posts
+    confirm = {
+        "title": _label("Archive"),
+        "text": _label("Archive the note?"),
+        "confirm": _label("Archive"),
+        "deny": _label("Back"),
+    }
+    archive = {"type": "button", "text": _label("Archive"), "action_id": encode_action("t", 1)}
+    clear = {"type": "button", "text": _label("Clear gist"), "action_id": encode_action("t", 2)}
+    assert post["blocks"] == [
+        {"type": "markdown", "text": "# Review"},
+        {"type": "actions", "elements": [{**archive, "confirm": confirm}]},
+        {"type": "actions", "elements": [clear]},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("make", "limit"),
+    [
+        (lambda size: _action(label="A" * size), 75),
+        (lambda size: _action(label="A" * size, confirm="Sure?"), 30),
+        (lambda size: _action(label="Archive", confirm="C" * size), 300),
+    ],
+    ids=["label", "label-that-confirms", "confirm"],
+)
+async def test_an_action_takes_a_button_up_to_a_limit_and_its_label_linked_to_the_run_past_it(
+    slack, make, limit
+):
+    _set_endpoint("https://druks.example")
+    client = SlackClient(token=_BOT_TOKEN)
+    page = "https://druks.example/runs/run-1"
+
+    await deliver(client, "C1", "text", blocks=_stored(make(limit)), token="t", deep_link=page)
+    await deliver(client, "C1", "text", blocks=_stored(make(limit + 1)), token="t", deep_link=page)
+
+    button_post, text_post = slack.posts
+    assert button_post["blocks"][0]["type"] == "actions"
+    label = make(limit + 1).label
+    assert text_post["blocks"] == [{"type": "markdown", "text": f"[{label}]({page})\n{page}"}]
+
+
+async def test_actions_past_the_room_of_a_message_go_out_as_their_labels_linked_to_the_run(slack):
+    _set_endpoint("https://druks.example")
+    actions = [_action(label=f"Archive {number}") for number in range(60)]
+    page = "https://druks.example/runs/run-1"
+
+    await deliver(
+        SlackClient(token=_BOT_TOKEN),
+        "C1",
+        "text",
+        blocks=_stored(*actions),
+        token="t",
+        deep_link=page,
+    )
+
+    (post,) = slack.posts
+    *buttons, rest = post["blocks"]
+    assert [button["elements"][0]["action_id"] for button in buttons] == [
+        encode_action("t", number) for number in range(49)
+    ]
+    labels = [f"[Archive {number}]({page})" for number in range(49, 60)]
+    assert rest == {"type": "markdown", "text": "\n\n".join(labels) + f"\n{page}"}
+
+
+async def test_an_action_with_fields_and_a_table_that_selects_rows_go_out_as_their_text(slack):
+    _set_endpoint("https://druks.example")
+    rename = _action(
+        label="Rename", operation="write_note", fields=[ui.TextField(name="title", label="Title")]
+    )
+    table = ui.Table(
+        columns=[ui.TableColumn("Note")],
+        rows=[ui.TableRow(["Fan noise"], key="7")],
+        select="note_ids",
+        actions=[_action(label="Archive selected", operation="archive_notes")],
+    )
+
+    await deliver(
+        SlackClient(token=_BOT_TOKEN), "C1", "text", blocks=_stored(rename, table), token="t"
+    )
+
+    (post,) = slack.posts
+    page = "https://druks.example/runs/run-1"
+    text = f"[Rename]({page})\n\n[Archive selected]({page})\n\n| Note |\n| --- |\n| Fan noise |"
+    assert post["blocks"] == [{"type": "markdown", "text": text}]
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "label"),
+    [("https://druks.example", "[Archive](https://druks.example/runs/run-1)"), ("", "Archive")],
+    ids=["endpoint", "no-endpoint"],
+)
+async def test_an_approval_keeps_its_action_and_its_text_links_the_label_to_the_run(
+    druks_db, slack, endpoint, label
+):
+    _set_endpoint(endpoint)
+    # The action runs on the run's page, and not on the page that it opens after it runs.
+    archive = _action(
+        label="Archive",
+        arguments={"note_id": 7},
+        link=ui.Link(url="https://notes.example/archived"),
+    )
+    run = await _parked_review(druks_db, context=_stored(archive))
+    notification_id = await create_park_notification(
+        druks_db,
+        run,
+        {"type": "note", "id": 7},
+        account_id=run.account_id,
+        deep_link=run.get_link(),
+    )
+    notification = await druks_db.get(Notification, notification_id)
+    slack.refusals = ["invalid_blocks"]
+
+    await deliver(
+        SlackClient(token=_BOT_TOKEN),
+        "C1",
+        notification.body,
+        blocks=notification.blocks,
+        token=notification.correlation_token,
+        deep_link=notification.deep_link,
+    )
+
+    text = f"# Review\n\n{label}"
+    assert notification.body == text
+    assert notification.blocks[1] == archive.model_dump(mode="json", by_alias=True)
+    refused_post, text_post = slack.posts
+    assert refused_post["blocks"][1]["elements"][0]["action_id"] == encode_action(
+        notification.correlation_token, 1
+    )
+    # Slack refuses the blocks, so their text goes in their place.
+    assert text_post["blocks"][0]["text"].startswith(text)
+
+
 CONTROLS = [
     {"id": "approve", "note_required": False},
     {"id": "request_changes", "note_required": True},
@@ -1221,6 +1373,59 @@ async def test_a_thread_approval_shows_its_inputs_with_every_control_until_it_cl
         assert post["blocks"] == [
             {"type": "markdown", "text": approval.body},
             {"type": "section", "text": {"type": "mrkdwn", "text": CLOSED_MESSAGE}},
+        ]
+
+
+async def test_an_approval_s_actions_are_buttons_until_it_closes_and_the_line_of_one_that_ran_stays(
+    druks_db, slack
+):
+    archive = _action(label="Archive", arguments={"note_id": 7})
+    clear = _action(label="Clear gist", operation="clear_gist", arguments={"note_id": 7})
+    approval = await _approval(druks_db, is_in_a_chat=True, context=_stored(archive, clear))
+    conversation = await druks_db.get(Conversation, approval.conversation_id)
+    token = approval.correlation_token
+
+    await SlackChannel.post_buttons(druks_db, conversation, approval)
+    await approval.mark_action_run(1, username="member@example.com")
+    await druks_db.commit()
+    await replace_buttons(approval.id, channel="C1", message_ts="1.0", outcome="")
+    await replace_buttons(
+        approval.id, channel="C1", message_ts="1.0", outcome="<@U1> chose Approve."
+    )
+    approval.message_id = "C1:1.0"
+    await SlackChannel.remove_buttons(druks_db, conversation, approval)
+
+    post, redraw, answer_edit, close_edit = slack.posts
+    clear_button = {
+        "type": "actions",
+        "elements": [
+            {"type": "button", "text": _label("Clear gist"), "action_id": encode_action(token, 2)}
+        ],
+    }
+    assert post["blocks"][:3] == [
+        {"type": "markdown", "text": "# Review"},
+        {
+            "type": "actions",
+            "elements": [
+                {"type": "button", "text": _label("Archive"), "action_id": encode_action(token, 1)}
+            ],
+        },
+        clear_button,
+    ]
+    # The approval keeps its inputs and buttons beside the action that has not run.
+    assert redraw["blocks"][:2] == [
+        {"type": "markdown", "text": "# Review\n\nmember@example.com ran Archive."},
+        clear_button,
+    ]
+    assert [block.get("block_id") for block in redraw["blocks"][2:]] == ["note", None]
+    # An outcome takes the place of every button. With no endpoint, an action shows its label.
+    for edit, outcome in ((answer_edit, "<@U1> chose Approve."), (close_edit, CLOSED_MESSAGE)):
+        assert edit["blocks"] == [
+            {
+                "type": "markdown",
+                "text": "# Review\n\nmember@example.com ran Archive.\n\nClear gist",
+            },
+            {"type": "section", "text": _mrkdwn(outcome)},
         ]
 
 

@@ -62,3 +62,15 @@ STATUS_LOCK = "notifications:status:{status}"
 
 # What a person reads when they cannot answer a run of an app that a team lists.
 TEAM_ONLY_MESSAGE = "Only an admin or the team that uses {app} can answer this run."
+
+# The line that takes the place of an action in a notification once its route answers.
+ACTION_RUN_MESSAGE = "{username} ran {label}."
+
+# What a person reads when the position of their click holds no action any more.
+ACTION_GONE_MESSAGE = "This action already ran."
+
+# What a person reads when another click on an action of the message still runs.
+ACTION_RUNNING_MESSAGE = "An action of this message runs now. Click again when it ends."
+
+# One action or one edit of a notification's message at a time, keyed by run.
+NOTIFICATION_LOCK = "notifications:{run}:{notification}"

@@ -36,6 +36,32 @@ def agent_error_responses(*errors: AgentApiError) -> dict:
     }
 
 
+def get_refusal(response) -> dict:
+    """A route's refusal as the agent routes' one shape, {code, message, retryable}. A
+    route of an app can answer in a shape of its own, or with no body. Its refusal then
+    names the status."""
+    try:
+        answer = response.json()
+    except ValueError:
+        answer = None
+    match answer:
+        case {"code": str(), "message": str()}:
+            return answer
+        case {"error": "VALIDATION_ERROR", "detail": list(field_errors)}:
+            message = "; ".join(
+                f"{'.'.join(map(str, field_error['loc'][1:]))}: {field_error['msg']}"
+                for field_error in field_errors
+            )
+            return {"code": "VALIDATION_ERROR", "message": message, "retryable": False}
+        case {"error": str(code), "detail": str(detail)}:
+            return {"code": code, "message": detail, "retryable": False}
+    return {
+        "code": f"HTTP_{response.status_code}",
+        "message": f"The route refused the request with status {response.status_code}.",
+        "retryable": False,
+    }
+
+
 class RunNotFound(AgentApiError):
     status_code = 404
     code = "RUN_NOT_FOUND"

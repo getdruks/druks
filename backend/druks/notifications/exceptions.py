@@ -45,6 +45,11 @@ class BlocksRefusedError(DeliveryError):
     """Slack refuses the blocks of the message. The same message can still go as text."""
 
 
+class ActionRefusedError(NotificationError):
+    """An action of a notification did not run. The message says why, for the person who
+    clicked its button."""
+
+
 class MalformedButtonError(NotificationError):
     # A button action_id embeds the respond token, so the message never echoes
     # the input.

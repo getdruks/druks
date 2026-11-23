@@ -132,7 +132,7 @@ from druks.signals import publish
 from druks.skills.models import Skill
 from druks.teams.models import Team
 from druks.tracing import record_gate_wait
-from druks.ui.blocks import Block, Stack
+from druks.ui.blocks import Action, Block, Stack, iter_parts
 from druks.usage.models import UsageScrape
 from druks.user_settings.models import SettingsOverride
 from druks.workspaces import Workspace
@@ -451,12 +451,18 @@ async def _park(
         input_request = {"questions": [], **input_request, "reply_fields": list(gate.model_fields)}
         context = input_request.get("context", "")
         if stack := Stack.from_context(context):
+            operations = get_app(workflow.app).operations()
+            for app_action in iter_parts(stack.blocks, Action):
+                app_action.check_operation(workflow.app, operations)
+            # Each action of the context gets the page where a person runs it.
+            run_page = f"/runs/{workflow.workflow_id}"
+            input_request["context"] = [
+                block.model_dump(mode="json", by_alias=True, context={"action_url": run_page})
+                for block in stack.blocks
+            ]
             # An approval writes the blocks as text. A part with no text form fails here,
             # before the run parks.
-            stack.to_markdown()
-            input_request["context"] = [
-                block.model_dump(mode="json", by_alias=True) for block in stack.blocks
-            ]
+            Stack.from_context(input_request["context"]).to_markdown()
         if action := gate.model_fields.get("action"):
             # A request for changes needs a note to guide the next pass, unless the ask
             # carries its own context. Every place that takes an answer reads this.

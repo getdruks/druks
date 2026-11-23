@@ -44,7 +44,7 @@ def test_proof_migration_applies_under_its_own_version_table(request):
             head = conn.exec_driver_sql(
                 "SELECT version_num FROM alembic_version_field_notes"
             ).scalar()
-            assert head == "field_notes_0001"
+            assert head == "field_notes_0002"
     finally:
         with engine.connect() as conn:
             _drop(conn)

@@ -66,6 +66,46 @@ async def test_a_review_shows_its_facts_and_table_on_the_dashboard_and_in_the_ap
     )
 
 
+async def test_a_review_offers_an_action_of_the_app_and_its_approval_keeps_it(
+    druks_db, monkeypatch
+):
+    note = await Note.create(body="Fan noise on rack 3.")
+    run = await seed_run(druks_db, kind=Summarize.kind, subject=note)
+    workflow = Summarize()
+    workflow._workflow_id = run.id
+    workflow._subject = note.identity
+    shown = {}
+
+    async def call_through(options, function, *args, **kwargs):
+        return await function(*args, **kwargs)
+
+    async def answer(*args, **kwargs):
+        await druks_db.refresh(run)
+        shown["ask"] = await run.get_ask()
+        shown["approval"] = await get_rendered_ask(druks_db, run)
+        return {"action": "approve"}
+
+    monkeypatch.setattr(DBOS, "run_step_async", call_through)
+    monkeypatch.setattr(DBOS, "enqueue_workflow_async", mock.AsyncMock())
+    monkeypatch.setattr(DBOS, "recv_async", answer)
+    archive = ui.Action(
+        label="Archive",
+        operation="archive_note",
+        arguments={"note_id": note.id},
+        confirm="Archive the note?",
+    )
+
+    reply = await workflow.review(context=[ui.Facts([ui.Fact("Body", note.body)]), archive])
+
+    assert reply.action == "approve"
+    stored = archive.model_dump(
+        mode="json", by_alias=True, context={"action_url": f"/runs/{run.id}"}
+    )
+    assert shown["ask"]["context"][1] == stored
+    assert shown["approval"]["blocks"][2] == stored
+    assert shown["approval"]["body"] == "# Review\n\n- **Body**: Fan noise on rack 3.\n\nArchive"
+
+
 async def test_summarize_keeps_one_status_that_each_report_replaces(druks_db, monkeypatch):
     note = await Note.create(body="Fan noise on rack 3.")
     run = await seed_run(druks_db, kind=Summarize.kind, subject=note)

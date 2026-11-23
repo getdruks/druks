@@ -11,8 +11,11 @@ from druks.ui.exceptions import NoTextFormError
 CATALOG = json.loads((Path(__file__).parents[2] / "frontend/src/druksui/catalog.json").read_text())
 BLOCKS = {model.model_fields["block"].default: model for model in get_args(get_args(ui.Block)[0])}
 VALUES = {model.model_fields["value"].default: model for model in get_args(get_args(ui.Value)[0])}
-# A block with no text form defines no ``to_markdown`` of its own.
-REFUSED = {kind for kind, model in BLOCKS.items() if model.to_markdown is PageBlock.to_markdown}
+# A block with no text form defines no ``to_markdown`` of its own. An action has a text form
+# only when it knows its page, and no action of the catalog does.
+REFUSED = {"action"} | {
+    kind for kind, model in BLOCKS.items() if model.to_markdown is PageBlock.to_markdown
+}
 
 
 def entries(value):
