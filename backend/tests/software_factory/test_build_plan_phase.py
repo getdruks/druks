@@ -79,6 +79,7 @@ def _blocked_plan(reason: str) -> PlanData:
         questions=[],
         rejected_approaches=[],
         confidence="low",
+        size="medium",
         status="blocked",
         assignee_github_login=None,
         tickets=[],
@@ -863,7 +864,7 @@ async def test_needs_clarification_delivery_stops_the_run(monkeypatch):
     reason — the stop is a workflow decision now, not a contract side effect."""
     flow = Build()
 
-    async def bailed():
+    async def bailed(*, effort=None):
         return SimpleNamespace(
             status="needs_clarification",
             summary="AC-3 requires a pure function that performs I/O",
@@ -983,6 +984,9 @@ def _implementing_build(
         calls.append(f"ci:{conclusion}")
         return CiReport(head_sha=head_sha, conclusion=conclusion)
 
+    async def rerun_failed_jobs(head_sha):
+        return False
+
     async def review_work():
         calls.append("review")
         return ReviewReport(decision=next(decisions), summary="", findings=[], context_repos=[])
@@ -994,6 +998,7 @@ def _implementing_build(
     monkeypatch.setattr(flow, "_create_branch", create_branch)
     monkeypatch.setattr(flow, "implement", implement)
     monkeypatch.setattr(flow, "_wait_for_ci", wait_for_ci)
+    monkeypatch.setattr(flow, "_rerun_failed_jobs", rerun_failed_jobs)
     monkeypatch.setattr(flow, "_review_work", review_work)
     monkeypatch.setattr(flow, "_work_gate", work_gate)
     return flow, calls

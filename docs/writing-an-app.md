@@ -486,7 +486,8 @@ An instruction belongs to the app class. Which CLI runs it, which model, which
 login it bills, and at what effort are the operator's choices: defaults in
 **Settings → Instructions**, overridden per instruction on the app's own page. `timeout`
 is the one declarable knob, because how long a step may take is a fact about
-the task.
+the task. A call can pass `effort="high"` to run at a lower effort than the
+setting for that one call. The setting is the ceiling: a call never runs above it.
 
 ```python
 from druks.workflows import Instruction, InstructionOutput
@@ -525,6 +526,9 @@ plugin state and no MCP server:
 A workflow that sets `steps_reuse_sandbox = True` keeps one sandbox for all its
 instructions, and the sandbox takes its entries from the agent call that creates it.
 Give such a workflow instructions that all include MCP servers, or none that do.
+
+A Claude agent's Bash call cannot sleep for over two minutes in total or use
+`--watch`.
 
 Call it only inside a workflow:
 
@@ -684,6 +688,44 @@ its own call and artifact. It gets its own sandbox, because the hooked
 agent still holds its sandbox. Recovery reuses a completed hooked call, and an
 interrupted one runs again with its hooks. A hook that raises fails the hooked
 call. The time that a hook takes counts against the timeout of the hooked call.
+
+### Continue an instruction's session
+
+An instruction whose agent waits on something Druks can do for it can end its
+turn and continue later in the same conversation. Declare the instruction
+`resumable`, and call it again with `resume`:
+
+```python
+implement = Instruction(prompt="build/implement.md", contract=Implementation, resumable=True)
+
+
+async def run(self) -> Implementation:
+    delivery = await implement()
+    while delivery.status == "needs_check":
+        delivery = await implement(resume=functools.partial(self.run_check, delivery.check_command))
+    return delivery
+
+
+async def run_check(self, command: str, *, workspace: RepoWorkspace) -> str:
+    result = await workspace.host.exec(["sh", "-c", command], cwd=workspace.repo_path, timeout=600)
+    return f"Exit code {result.returncode}.\n{result.stdout[-4000:]}"
+```
+
+Druks calls `resume(workspace=...)` on the box that ran the last call. The checkout is as the agent left it, because a resumed call does not
+prepare the workspace again. The text that `resume` returns is the agent's next
+message, in a session forked from the last call. The call records its own
+cost and its own transcript.
+
+`resumable` makes the first call write the model's prompt cache for an hour,
+not five minutes, so that the call that resumes after a long pause reads the
+cache and does not write the whole context again. A template reads
+`can_resume`, which is true when the instruction is `resumable` and its harness can
+resume. Claude can. A harness that cannot resume sets `can_resume` to false, so
+the template offers the agent nothing to end its turn for. A resume on a harness
+that cannot raises `WorkflowError`, and so does a resume with no finished call
+to continue. A resume after the last call's box was released starts over on a
+new box with the full prompt, because the session and the checkout went with
+the old box.
 
 `RepoWorkspace.get_diff()` returns the change of the checkout since it left the
 default branch: commits, uncommitted edits, and untracked files. It reads the
@@ -2711,6 +2753,6 @@ Import from concern namespaces, not from `druks.durable` or internal modules:
 | `druks.files` | `File`, `FileField` |
 | `druks.prompts` | `render_prompt` |
 | `druks.webhooks` | `Webhook`, `verify_hmac_sha256` |
-| `druks.testing` | `run_workflow`, `seed_run`, `seed_call`, `init_db` — plus the fixtures the plugin registers |
+| `druks.testing` | `run_workflow`, `seed_run`, `seed_call`, `init_db`, `worker_name` — plus the fixtures the plugin registers |
 
 The root `druks` package deliberately exports only its version.

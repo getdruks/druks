@@ -58,6 +58,20 @@ class Harness(ABC):
     skills_folder: ClassVar[str] = ""
     # The argv that answers one prompt and exits.
     reply_command: ClassVar[tuple[str, ...]]
+    # True when ``build_invocation`` takes ``resume_session``: a call that continues an
+    # earlier call's session on the same box.
+    can_resume: ClassVar[bool] = False
+
+    @classmethod
+    def get_own_cost(
+        cls,
+        cost_usd: float | None,
+        cost_metadata: dict | None,
+        parent_metadata: dict | None,
+    ) -> tuple[float | None, dict | None]:
+        """What a resumed call cost by itself. A CLI that reports a resumed session's totals
+        since the session began overrides this to take the parent's share off."""
+        return cost_usd, cost_metadata
 
     def __init__(
         self,

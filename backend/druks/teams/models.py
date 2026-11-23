@@ -86,9 +86,9 @@ class Team(Model, Uuid7Pk, ordering=("name",)):
     async def _get_members(session: AsyncSession, member_ids: list[str]) -> list[Account]:
         """The operator accounts with these ids. Bot and bot admin accounts are refused."""
         operators = await session.scalars(
-            sqlalchemy.select(Account).where(
-                Account.id.in_(member_ids), Account.kind == AccountKind.OPERATOR
-            )
+            sqlalchemy.select(Account)
+            .where(Account.id.in_(member_ids), Account.kind == AccountKind.OPERATOR)
+            .order_by(Account.created_at, Account.id)
         )
         members = {member.id: member for member in operators}
         for member_id in member_ids:

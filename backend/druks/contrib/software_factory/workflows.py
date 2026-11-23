@@ -1,3 +1,5 @@
+import asyncio
+import functools
 import logging
 import time
 from typing import Any
@@ -14,6 +16,7 @@ from druks.contrib.software_factory.contracts import (
 from druks.contrib.software_factory.enums import HumanFeedbackAction, Resolution, ReviewDecision
 from druks.contrib.software_factory.models import ProjectRepo, WorkItem
 from druks.contrib.software_factory.ticketing.enums import TicketStatus
+from druks.core.apis.exceptions import GitHubRerunRefusedError
 from druks.core.services import Github
 from druks.db import db_session
 from druks.mcp.inbound import get_druks_mcp_server
@@ -27,11 +30,21 @@ from druks.workspaces import RepoWorkspace
 
 from .app import SoftwareFactory
 from .constants import (
+    CHECK_LINE_CHARS,
+    CHECK_LOG_PATH,
+    CHECK_TAIL_LINES,
+    CHECK_TIMEOUT_SECONDS,
     CI_POLL_SECONDS,
     CI_TTL_SECONDS,
     GITHUB_MCP_NAME,
     GITHUB_MCP_URL,
+    IMPLEMENT_EFFORT_BY_SIZE,
+    MAX_CHECK_RUNS,
+    RERUN_CONCLUSIONS,
+    RERUN_POLL_SECONDS,
+    RERUN_START_POLLS,
     REVIEW_TTL_SECONDS,
+    RUN_ACTIVE_STATUSES,
     TICKET_TOOLS,
 )
 from .datastructures import PullRequest
@@ -365,6 +378,10 @@ class Build(Workflow):
             # that head has already been read.
             if not previous_delivery or delivery.head_sha != previous_delivery.head_sha:
                 ci_report = await self._wait_for_ci(delivery.head_sha)
+                if ci_report.conclusion == "red" and await self._rerun_failed_jobs(
+                    delivery.head_sha
+                ):
+                    ci_report = await self._wait_for_ci(delivery.head_sha)
                 if ci_report.conclusion == "red" and can_revise:
                     continue
             review = await self._review_work()
@@ -380,6 +397,45 @@ class Build(Workflow):
             await self.sleep(CI_POLL_SECONDS, label="Waiting for CI", until="check.completed")
         self.journal.add(ci_report)
         return ci_report
+
+    @step(retries=3)
+    async def _rerun_failed_jobs(self, head_sha: str) -> bool:
+        """Rerun every failed or timed-out Actions run on ``head_sha`` once, and wait for
+        the rerun to start, so the next CI read sees it and not the old red. Return whether
+        a rerun is running. A red with no Actions run to rerun, such as
+        ``druks-house-rules``, returns False. A run that already has a second attempt is not
+        rerun again, so a retry of this step reruns no run twice."""
+        repo = (await self.subject).repo
+        github = await Github.get_client(repo)
+        runs = await github.list_workflow_runs(repo, head_sha)
+        has_rerun = any(run["run_attempt"] > 1 for run in runs)
+        attempts = {}
+        for run in runs:
+            if run["conclusion"] not in RERUN_CONCLUSIONS or run["run_attempt"] > 1:
+                continue
+            try:
+                await github.rerun_failed_jobs(repo, run["id"])
+            except GitHubRerunRefusedError as error:
+                logger.warning("Druks could not rerun %s", error)
+                continue
+            attempts[run["id"]] = run["run_attempt"]
+        if not attempts and not has_rerun:
+            return False
+        for _ in range(RERUN_START_POLLS):
+            runs = {run["id"]: run for run in await github.list_workflow_runs(repo, head_sha)}
+            if all(
+                run_id in runs
+                and (
+                    runs[run_id]["run_attempt"] > attempt
+                    or runs[run_id]["status"] in RUN_ACTIVE_STATUSES
+                )
+                for run_id, attempt in attempts.items()
+            ):
+                break
+            await asyncio.sleep(RERUN_POLL_SECONDS)
+        else:
+            logger.warning("The rerun on %s did not start in time", head_sha)
+        return True
 
     @step
     async def _now(self) -> float:
@@ -475,12 +531,75 @@ class Build(Workflow):
     # Body code, never @step. The agent calls inside memoize themselves and write the
     # journal. On replay a @step would skip them, and the journal would stay empty.
     async def implement(self) -> ImplementationOutput:
-        delivery = await SoftwareFactory.implement()
+        effort = IMPLEMENT_EFFORT_BY_SIZE.get(self.journal.plan_size)
+        delivery = await SoftwareFactory.implement(effort=effort)
+        # The implementer ended its turn to have a declared test command run. Druks runs it
+        # on the implementer's box and resumes the same session with the result.
+        check_runs = 0
+        while delivery.status == "needs_check":
+            check_runs += 1
+            if check_runs > MAX_CHECK_RUNS:
+                raise FatalError(
+                    f"the implementer asked for {check_runs} test runs without delivering"
+                )
+            delivery = await SoftwareFactory.implement(
+                effort=effort, resume=functools.partial(self._run_check, delivery.check_command)
+            )
         # The implementer found a contradiction in the binding requirements and stopped.
         # The run fails with that reason, so the dashboard shows it.
         if delivery.status == "needs_clarification":
             raise FatalError(f"implementation needs clarification: {delivery.summary}")
         return delivery
+
+    async def _run_check(self, command: str, *, workspace: BuildWorkspace) -> str:
+        """Run the declared test ``command`` in the checkout as the implementer left it, and
+        return the message that continues its session: the exit code and the tail of the
+        output. The full output stays in a log on the box."""
+        declared = [
+            entry["command"]
+            for entry in (self._profile.get("verification") or {}).get("test_commands", [])
+        ]
+        if command not in declared:
+            return (
+                f"`{command}` is not one of this repo's declared test commands, so Druks did "
+                "not run it. Run it yourself, or name one of these:\n"
+                + "\n".join(f"- `{declared_command}`" for declared_command in declared)
+            )
+        result = await workspace.host.exec(
+            # The kill after the limit stops a command that ignores the first signal, and the
+            # newline lets a command end in a comment.
+            [
+                "timeout",
+                "-k",
+                "30",
+                str(CHECK_TIMEOUT_SECONDS),
+                "sh",
+                "-c",
+                f"({command}\n) > {CHECK_LOG_PATH} 2>&1",
+            ],
+            cwd=workspace.repo_path,
+            timeout=CHECK_TIMEOUT_SECONDS + 120,
+        )
+        # One long line must not fill the agent's context.
+        tail = await workspace.host.exec(
+            [
+                "sh",
+                "-c",
+                f"tail -n {CHECK_TAIL_LINES} {CHECK_LOG_PATH} | cut -c1-{CHECK_LINE_CHARS}",
+            ],
+            cwd=workspace.repo_path,
+            timeout=30,
+        )
+        outcome = f"exit code {result.returncode}"
+        if result.returncode == 124:
+            outcome = f"killed after {CHECK_TIMEOUT_SECONDS // 60} minutes"
+        return (
+            f"Druks ran `{command}` on your box: {outcome}.\n\n"
+            f"The last {CHECK_TAIL_LINES} lines of its output:\n\n```\n{tail.stdout}```\n\n"
+            f"The whole output is in {CHECK_LOG_PATH}. Read only what you need from it. "
+            "Fix what the result shows, then name a test command again, or finish and "
+            "return your result as before."
+        )
 
     @step
     async def _create_branch(self) -> None:

@@ -169,3 +169,14 @@ async def test_deleting_a_team_keeps_its_accounts(tmp_path: Path, druks_db):
         admin.username,
         member.username,
     }
+
+
+async def test_a_team_lists_its_members_in_the_order_they_joined_druks(druks_db):
+    first = await Account.get_or_create(druks_db, "first@example.com")
+    second = await Account.get_or_create(druks_db, "second@example.com")
+
+    team = await Team.create(
+        druks_db, name="Engineering", member_ids=[second.id, first.id], apps=[]
+    )
+
+    assert [member.id for member in team.members] == [first.id, second.id]
