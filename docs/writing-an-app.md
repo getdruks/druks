@@ -1347,6 +1347,12 @@ the message a second time.
 
 - A workflow that a Slack chat started shows its status in the thread or the
   direct message of that chat.
+- A workflow that a web chat started shows its status in that conversation on the
+  Chat page, at the place where the workflow started. Each report replaces the
+  status there, and the status stays after the workflow ends or fails. The page
+  reads the status again every two seconds. A workflow that does not report shows
+  only a line below the messages while it is active. See
+  [Read replies and tool calls](chat.md#read-replies-and-tool-calls).
 - A workflow that no chat started shows its status where its approvals go: the
   Slack channel that its account chose, else the account's direct message. See
   [Notifications](configuration.md#notifications).

@@ -6,12 +6,12 @@ import { Route, Router } from 'wouter'
 
 import { chatApi } from '../chat/api'
 import { api } from '../api/client'
-import type { Account, Agent, Field } from '../api/types'
-import type { Conversation, ConversationAction, Message, Question } from '../chat/state'
+import type { Account, Agent, App, Block, Field } from '../api/types'
+import type { Conversation, ConversationAction, Message, Question, RunStatus } from '../chat/state'
 import { UserPreferencesProvider } from '../lib/preferences'
 import { ChatPage } from './ChatPage'
 
-vi.mock('../chat/api', () => ({ chatApi: { list: vi.fn(), get: vi.fn(), listActiveRuns: vi.fn(), create: vi.fn(), send: vi.fn(), retry: vi.fn(), stop: vi.fn(), setPinned: vi.fn() } }))
+vi.mock('../chat/api', () => ({ chatApi: { list: vi.fn(), get: vi.fn(), listActiveRuns: vi.fn(), listStatuses: vi.fn(), create: vi.fn(), send: vi.fn(), retry: vi.fn(), stop: vi.fn(), setPinned: vi.fn() } }))
 
 class Socket {
   static instances: Socket[] = []
@@ -63,6 +63,7 @@ beforeEach(() => {
   vi.mocked(chatApi.list).mockResolvedValue([conversation])
   vi.mocked(chatApi.get).mockResolvedValue(conversation)
   vi.mocked(chatApi.listActiveRuns).mockResolvedValue([])
+  vi.mocked(chatApi.listStatuses).mockResolvedValue([])
   vi.mocked(chatApi.send).mockResolvedValue({ ...message, id: '11', body: 'Then check failures', state: 'pending' })
   vi.mocked(chatApi.retry).mockResolvedValue({ ...message, id: '11', state: 'pending' })
   vi.mocked(chatApi.create).mockResolvedValue(conversation)
@@ -619,5 +620,97 @@ describe('Chat questions', () => {
     expect((await screen.findByRole('alert')).textContent).toContain('Message was not saved.')
     expect(submit.disabled).toBe(false)
     expect((screen.getByRole('textbox', { name: /Title/ }) as HTMLInputElement).value).toBe('Fix the gate')
+  })
+})
+
+describe('Run statuses', () => {
+  const reply: Message = { ...message, id: '11', role: 'assistant', body: 'I started the summary.', state: null, replyTo: '10', createdAt: '2026-09-18T10:24:40Z' }
+  const next: Message = { ...message, id: '12', body: 'Anything else?', state: 'replied', createdAt: '2026-09-18T10:30:00Z' }
+  const thread: Conversation = { ...conversation, activeMessageId: null, messages: [{ ...message, state: 'replied' }, reply, next] }
+  const reportedRun = { id: '01995a3c-0000-7000-8000-000000000002', label: 'Summarize', state: 'running' as const, subjectKey: 'note 7', agentLabel: 'Identify', phase: null, phaseEndsAt: null }
+  const unreportedRun = { ...reportedRun, id: '01995a3c-0000-7000-8000-000000000003', label: 'Build', subjectKey: 'acme/api', state: 'parked' as const }
+
+  function markdown(text: string): Block {
+    return { block: 'markdown', text }
+  }
+
+  function runStatus(blocks: Block[], status: Partial<RunStatus> = {}): RunStatus {
+    return { id: '01995a3c-0000-7000-8000-0000000000a1', run: reportedRun.id, app: 'field_notes', blocks, startedAt: '2026-09-18T10:24:30Z', ...status }
+  }
+
+  // Each status shows its text, and each turn its label.
+  function shown() {
+    return screen.getAllByRole('article').map((article) => article.getAttribute('aria-label') === 'Run status' ? article.textContent : article.getAttribute('aria-label'))
+  }
+
+  // React Query reports a read on a timer that the fake clock starts one millisecond later.
+  async function advance(milliseconds: number) {
+    await act(async () => { await vi.advanceTimersByTimeAsync(milliseconds + 1) })
+  }
+
+  async function open() {
+    mount()
+    await advance(0)
+    act(() => Socket.instances.at(-1)!.onopen?.())
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.mocked(chatApi.get).mockResolvedValue(thread)
+  })
+
+  it('places each status after every turn that started at or before its run, also when its first report comes late', async () => {
+    const reminder: Message = { ...message, id: '13', role: 'assistant', body: 'Time to deploy.', state: null, replyTo: null, createdAt: '2026-09-18T10:26:00Z' }
+    vi.mocked(chatApi.get).mockResolvedValue({ ...thread, messages: [{ ...message, state: 'replied' }, reply, reminder, next] })
+    await open()
+    expect(shown()).toEqual(['Message and reply', 'Agent message', 'Message and reply'])
+
+    vi.mocked(chatApi.listStatuses).mockResolvedValue([
+      runStatus([markdown('Release')], { id: '01995a3c-0000-7000-8000-0000000000a4', startedAt: next.createdAt }),
+      runStatus([markdown('Build B')], { id: '01995a3c-0000-7000-8000-0000000000a2', startedAt: message.createdAt }),
+      runStatus([markdown('Deploy')], { id: '01995a3c-0000-7000-8000-0000000000a3', startedAt: '2026-09-18T10:25:00Z' }),
+      runStatus([markdown('Build A')], { id: '01995a3c-0000-7000-8000-0000000000a1', startedAt: message.createdAt }),
+    ])
+    await advance(2000)
+
+    expect(shown()).toEqual(['Message and reply', 'Build A', 'Build B', 'Deploy', 'Agent message', 'Message and reply', 'Release'])
+    expect(within(screen.getAllByRole('article')[0]!).getByText('I started the summary.')).toBeTruthy()
+  })
+
+  it('changes one status in place as the run reports and fails', async () => {
+    const failed: Block = { block: 'callout', tone: 'danger', title: '', text: 'Failed.', controls: [] }
+    vi.mocked(chatApi.listActiveRuns).mockResolvedValue([reportedRun, unreportedRun])
+    vi.mocked(chatApi.listStatuses).mockResolvedValue([runStatus([markdown('Reading the note.')])])
+    await open()
+    expect(shown()).toEqual(['Message and reply', 'Reading the note.', 'Message and reply'])
+    expect(screen.getByText('Build acme/api waits for an answer')).toBeTruthy()
+    expect(screen.queryByText('Summarize note 7: Identify')).toBeNull()
+
+    vi.mocked(chatApi.listStatuses).mockResolvedValue([runStatus([markdown('Writing the gist.')])])
+    await advance(2000)
+    expect(shown()).toEqual(['Message and reply', 'Writing the gist.', 'Message and reply'])
+
+    vi.mocked(chatApi.listActiveRuns).mockResolvedValue([unreportedRun])
+    vi.mocked(chatApi.listStatuses).mockResolvedValue([runStatus([markdown('Writing the gist.'), failed])])
+    await advance(2000)
+    expect(shown()).toEqual(['Message and reply', 'Writing the gist.Failed.', 'Message and reply'])
+    expect(screen.getByText('Build acme/api waits for an answer')).toBeTruthy()
+  })
+
+  it('resolves a link of a status through the pages of its app, and leaves it unresolved with no app', async () => {
+    const roster = [{ name: 'field_notes', icon: 'notebook', description: '', builtin: false, subjectTypes: ['note'], hasFrontend: false, navigation: [], operations: [], pages: [
+      { name: 'note', label: 'Note', path: '/field_notes/notes/{note_id}', parent: '', subjectType: '', order: 0 },
+    ] }] as App[]
+    const link = (label: string): Block => ({ block: 'link', label, page: 'note', arguments: { note_id: '7' }, url: '', subject: null })
+    vi.spyOn(api, 'listApps').mockResolvedValue(roster)
+    vi.mocked(chatApi.listStatuses).mockResolvedValue([
+      runStatus([link('Open the note')]),
+      runStatus([link('Open the old note')], { id: '01995a3c-0000-7000-8000-0000000000a2', app: '' }),
+    ])
+    await open()
+
+    expect(screen.getByRole('link', { name: 'Open the note' }).getAttribute('href')).toBe('/field_notes/notes/7')
+    expect(screen.getByText('Open the old note').closest('a')).toBeNull()
+    expect(screen.getByText('Open the old note').className).toContain('dui-link-broken')
   })
 })

@@ -17,6 +17,8 @@ from druks.notifications.exceptions import InvalidChoiceError
 from druks.ui.blocks import iter_parts
 
 if TYPE_CHECKING:
+    from sqlalchemy import Row
+
     from druks.durable.models import Run
 
 
@@ -196,6 +198,25 @@ class Notification(Base, Uuid7Pk):
                 cls.run_id.in_(retry_chain(run_id)), cls.reason == constants.STATUS_REASON
             )
         )
+
+    @classmethod
+    async def list_statuses(
+        cls, session: AsyncSession, conversation_id: str
+    ) -> "list[Row[Notification, Run]]":
+        """The status of each run that the conversation started, with the run that has it
+        now. The list holds the status of a run that ended, and a status whose send
+        failed."""
+        # druks.durable loads the chat models, which import this module.
+        from druks.durable.models import Run  # noqa: PLC0415
+
+        rows = await session.execute(
+            select(cls, Run)
+            .join(Run, Run.id == cls.run_id)
+            .where(cls.conversation_id == conversation_id, cls.reason == constants.STATUS_REASON)
+            # uuid7 ids are time-ordered, so the oldest status comes first.
+            .order_by(cls.id)
+        )
+        return list(rows.all())
 
     @classmethod
     async def get_for_token(cls, session: AsyncSession, token: str) -> "Notification | None":

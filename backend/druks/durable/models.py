@@ -452,6 +452,16 @@ class Run(Base):
         endpoint = get_settings().urls.endpoint.rstrip("/")
         return f"{endpoint}/runs/{self.id}" if endpoint else None
 
+    async def get_first_started_at(self) -> datetime:
+        """When the first run of the retry chain started: this run, or the first run that
+        it retries."""
+        if self.retry_from:
+            # A retry starts after the run that it retries, so the first run is the oldest.
+            return await self.session.scalar(
+                select(func.min(Run.created_at)).where(Run.id.in_(retry_chain(self.id)))
+            )
+        return self.created_at
+
     async def get_ask(self) -> dict[str, Any]:
         # The parked ask with its label and its artifact. An in-app review's ask names
         # neither — a parked run can't produce new artifacts, so the latest resolves

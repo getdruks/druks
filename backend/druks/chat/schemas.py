@@ -3,7 +3,7 @@ from datetime import datetime
 from pydantic import AliasPath, ConfigDict, Field
 
 from druks.schemas import Schema
-from druks.ui.blocks import FileSummary
+from druks.ui.blocks import Block, FileSummary
 from druks.ui.fields import Field as FormField
 
 from .enums import ConversationSource, MessageRole, MessageState
@@ -61,6 +61,17 @@ class MessageResponse(Schema):
 
 class ConversationDetailResponse(ConversationResponse):
     messages: list[MessageResponse]
+
+
+class RunStatusResponse(Schema):
+    # The status that a run reported, as its message shows it.
+    id: str
+    run: str
+    # The app that declares the run's workflow. Empty when no loaded app declares it.
+    app: str
+    blocks: list[Block]
+    # When the first run of the retry chain started. The status shows at that place.
+    started_at: datetime
 
 
 class ReminderResponse(Schema):

@@ -77,13 +77,13 @@ from druks.testing import (
     seed_run,
 )
 from druks.user_settings.models import InstallationSettings, SettingsOverride
-from druks.workflows import _CONVERSATION_INPUT_KEY, FatalError, Subject
+from druks.workflows import _CONVERSATION_INPUT_KEY, FatalError, Subject, _replace_status
 from druks_field_notes.app import FieldNotes
 from druks_field_notes.models import Note
 from druks_field_notes.workflows import Summarize
 from fastapi import WebSocket, WebSocketDisconnect
 from pydantic_core import to_json
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 
 AGENT = {
     "name": "Security engineer",
@@ -1778,6 +1778,105 @@ async def test_a_conversation_lists_the_runs_it_started_that_are_still_active(
             "phaseEndsAt": None,
         }
     ]
+
+
+async def start_run(session, conversation_id, *, state="running", kind=Summarize.kind):
+    """A run in ``state``, which the conversation of ``conversation_id`` started if any."""
+    run = await seed_run(session, kind=kind, state=state)
+    run.conversation_id = conversation_id
+    await session.flush()
+    return run
+
+
+def dump_blocks(*blocks):
+    """The blocks as the API gives them."""
+    return [block.model_dump(mode="json", by_alias=True) for block in blocks]
+
+
+async def read_statuses(conversation, tmp_path):
+    """The statuses of the conversation, as its owner reads them."""
+    api = configure_app_for_test(
+        settings=make_settings(tmp_path, identity={"mode": "header", "header": "X-User"}),
+        authenticated=False,
+    )
+    async with asgi_client(api) as client:
+        response = await client.get(
+            f"/api/chat/conversations/{conversation.id}/statuses",
+            headers={"X-User": "owner@example.com"},
+        )
+    return response.json()
+
+
+async def test_a_conversation_lists_the_status_of_each_run_that_it_started(
+    druks_db, conversation, tmp_path
+):
+    work = ui.Markdown("Writing the gist.")
+    drawn = {"running": [work], "failed": [work, ui.Callout("Failed.", tone="danger")]}
+    expected = []
+    for state, blocks in drawn.items():
+        run = await start_run(druks_db, conversation.id, state=state)
+        await _replace_status(run.id, None, ui.Stack([work]))
+        status = await Notification.get_status(druks_db, run.id)
+        expected.append(
+            {
+                "id": status.id,
+                "run": run.id,
+                "app": "field_notes",
+                "blocks": dump_blocks(*blocks),
+                "startedAt": run.created_at.isoformat().replace("+00:00", "Z"),
+            }
+        )
+    # The status of the run that ended stays after its channel refused it.
+    await status.mark_failed("Slack is down.")
+    # The run's question in the conversation is not a status.
+    await Notification.create(
+        druks_db,
+        conversation_id=conversation.id,
+        reason="gate.parked",
+        body="Approve the gist?",
+        run_id=run.id,
+    )
+    other = await Conversation.create(druks_db, account_id=conversation.account_id, body="Hi")
+    for conversation_id in (other.id, None):
+        run = await start_run(druks_db, conversation_id)
+        await _replace_status(run.id, None, ui.Stack([work]))
+
+    assert await read_statuses(conversation, tmp_path) == expected
+
+
+async def test_a_retry_keeps_the_place_of_the_status(druks_db, conversation, tmp_path):
+    first = await start_run(druks_db, conversation.id, state="failed")
+    first.created_at = Base.utc_now() - timedelta(hours=1)
+    await druks_db.flush()
+    await _replace_status(first.id, None, ui.Stack([ui.Markdown("Writing the gist.")]))
+    status = await Notification.get_status(druks_db, first.id)
+    retry = await start_run(druks_db, conversation.id)
+    await druks_db.execute(
+        update(workflow_status)
+        .where(workflow_status.c.workflow_uuid == retry.id)
+        .values(forked_from=first.id)
+    )
+    # notifications.refresh_status gives the status to the retry, which runs.
+    await status.follow(retry, state="running")
+
+    [retried] = await read_statuses(conversation, tmp_path)
+
+    assert (retried["id"], retried["run"], retried["startedAt"]) == (
+        status.id,
+        retry.id,
+        first.created_at.isoformat().replace("+00:00", "Z"),
+    )
+
+
+async def test_the_status_of_a_workflow_that_no_app_declares_has_no_app(
+    druks_db, conversation, tmp_path
+):
+    run = await start_run(druks_db, conversation.id, kind="retired.build")
+    await _replace_status(run.id, None, ui.Stack([ui.Markdown("Building.")]))
+
+    [status] = await read_statuses(conversation, tmp_path)
+
+    assert (status["app"], status["blocks"]) == ("", dump_blocks(ui.Markdown("Building.")))
 
 
 async def test_a_cancel_from_the_chat_that_started_the_run_queues_no_report(

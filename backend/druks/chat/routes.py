@@ -18,6 +18,7 @@ from druks.api.dependencies import SessionDep
 from druks.durable.reads import list_active_runs_for_conversation
 from druks.durable.schemas import ActiveRunResponse
 from druks.exceptions import PermissionDenied
+from druks.notifications.models import Notification
 from druks.redis import get_client
 from druks.sandbox.constants import SANDBOX_HOST_LEASE_SECONDS
 from druks.sandbox.exceptions import SandboxUploadError
@@ -40,6 +41,7 @@ from .schemas import (
     ConversationResponse,
     MessageResponse,
     ReminderResponse,
+    RunStatusResponse,
 )
 from .service import blocks_key, cancel_turn, deliver, publish, question_key, upload_file
 from .workflows import RunInstruction
@@ -121,6 +123,32 @@ async def list_active_runs(
     if not conversation:
         raise HTTPException(404, "Conversation not found.")
     return await list_active_runs_for_conversation(session, conversation.id)
+
+
+@router.get(
+    "/conversations/{conversation_id}/statuses",
+    response_model=list[RunStatusResponse],
+    response_model_by_alias=True,
+)
+async def list_statuses(
+    conversation_id: str, session: SessionDep, account: Account = Depends(current_session_account)
+) -> list[RunStatusResponse]:
+    conversation = await Conversation.get_for_account(session, conversation_id, account)
+    if not conversation:
+        raise HTTPException(404, "Conversation not found.")
+    statuses = []
+    for status, run in await Notification.list_statuses(session, conversation.id):
+        stack = await status.draw(run)
+        statuses.append(
+            RunStatusResponse(
+                id=status.id,
+                run=run.id,
+                app=run.workflow.app if run.workflow else "",
+                blocks=stack.blocks,
+                started_at=await run.get_first_started_at(),
+            )
+        )
+    return statuses
 
 
 @router.patch(
