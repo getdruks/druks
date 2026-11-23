@@ -9,7 +9,9 @@ WELCOME_KEY = "chat:slack:welcome:{user}"
 JOINED_THREAD_SECONDS = 24 * 60 * 60
 # How much of a thread the agent reads.
 THREAD_MESSAGES = 200
-LINK_MESSAGE = "Connect your Slack account to Druks, and I answer your message: {url}"
+LINK_MESSAGE = (
+    "I answer your message after you connect your Slack account to Druks. Connect it here: {url}"
+)
 UNLINKED_REPLY = (
     "<@{user}>, your Slack account is not connected to Druks yet. "
     "I sent you a direct message with the link to connect it."
@@ -48,7 +50,14 @@ BUTTON_URL_LIMIT = 3000
 TABLE_ROWS_LIMIT = 200
 TABLE_COLUMNS_LIMIT = 20
 MESSAGE_CELL_TEXT_LIMIT = 20_000
-# Slack takes no empty cell. An empty cell or column label of a data table shows this.
+# Slack takes no empty cell or label. An empty one in a data table or a chart shows this.
 EMPTY_CELL_TEXT = "—"
-# What a button that opens a link sends as its action, so that a click on it answers nothing.
+# Slack's limits for a chart, from the Block Kit reference.
+MESSAGE_CHARTS_LIMIT = 2
+CHART_SERIES_LIMIT = 12
+CHART_POINTS_LIMIT = 20
+CHART_LABEL_LIMIT = 20
+CHART_TITLE_LIMIT = 50
+CHART_AXIS_TITLE_LIMIT = 50
+# What a button that opens a link sends as its action. A click on it answers no notification.
 LINK_BUTTON_ACTION_ID = "link"
