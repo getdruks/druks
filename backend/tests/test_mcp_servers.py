@@ -8,7 +8,12 @@ from druks.db import db_session
 from druks.harnesses.claude import ClaudeHarness
 from druks.harnesses.codex import CodexHarness
 from druks.mcp.catalog import load_mcp_catalog, mcp_server_registry
-from druks.mcp.constants import BEARER_HEADER, BROWSER_SERVER_NAME, DRUKS_SERVER_NAME
+from druks.mcp.constants import (
+    BEARER_HEADER,
+    BROWSER_SERVER_NAME,
+    DRUKS_SERVER_NAME,
+    DRUKS_TOOL_TIMEOUT_SECONDS,
+)
 from druks.mcp.exceptions import (
     InvalidCatalogError,
     InvalidServerNameError,
@@ -20,6 +25,7 @@ from druks.mcp.helpers import get_bearer_token_env_var
 from druks.mcp.inbound import get_druks_mcp_server
 from druks.mcp.models import McpServer
 from druks.sandbox import SandboxMcpServer
+from druks.sandbox.datastructures import McpServer as BoxMcpServer
 from druks.sandbox.models import SecretRef
 from druks.secrets.datastructures import Audience
 from druks.secrets.enums import SecretKind
@@ -845,3 +851,40 @@ async def test_two_accounts_hold_their_own_tokens(druks_db, monkeypatch):
         for account_id in (first.id, second.id)
     ]
     assert holders == [first.id, second.id]
+
+
+# --- the wait for a tool call: only Druks' own server asks for a longer one --------
+
+
+def test_a_server_with_a_tool_timeout_reaches_the_claude_config_in_milliseconds():
+    slow = BoxMcpServer(name="druks", url="https://druks.test/mcp", tool_timeout_seconds=5400)
+    plain = BoxMcpServer(name="other", url="https://other.test/mcp")
+
+    flags = ClaudeHarness(model="claude-x", fast_mode=False, effort=None)._mcp_flags((slow, plain))
+
+    entries = json.loads(flags[1])["mcpServers"]
+    assert entries["druks"]["timeout"] == 5_400_000
+    assert "timeout" not in entries["other"]
+
+
+def test_a_server_with_a_tool_timeout_reaches_the_codex_config_in_seconds():
+    slow = BoxMcpServer(name="druks", url="https://druks.test/mcp", tool_timeout_seconds=5400)
+    plain = BoxMcpServer(name="other", url="https://other.test/mcp")
+    harness = CodexHarness(model=CodexHarness.default_model, fast_mode=False, effort=None)
+
+    flags = harness._mcp_flags((slow, plain))
+
+    assert "mcp_servers.druks.tool_timeout_sec=5400" in flags
+    assert not any("mcp_servers.other.tool_timeout_sec" in flag for flag in flags)
+
+
+async def test_only_the_druks_server_of_a_box_waits_longer_for_a_tool(druks_db, monkeypatch):
+    await McpServer.create(druks_db, name="linear", url=_LINEAR_URL, secret_headers=_BEARER)
+    workspace = _declaring_druks(monkeypatch)
+    account = await Account.get_or_create(druks_db, "op@example.com")
+
+    servers, _ = await workspace.get_all_mcp_servers(db_session(), None, account.id)
+
+    waits = {server.name: server.tool_timeout_seconds for server in servers}
+    assert waits[DRUKS_SERVER_NAME] == DRUKS_TOOL_TIMEOUT_SECONDS
+    assert waits["linear"] is None

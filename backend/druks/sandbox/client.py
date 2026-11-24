@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import asyncssh
-from drukbox_sdk import Issuer, SandboxAPI, SandboxHost, Secret
+from drukbox_sdk import Issuer, SandboxAPI, SandboxHost, SandboxRun, Secret
 from drukbox_sdk.exceptions import (
     SandboxAPIError,
     SandboxCapacityError,
@@ -166,6 +166,31 @@ class Client:
                 yield host
             finally:
                 await host.aclose()
+        finally:
+            await api.aclose()
+
+    async def run_command(
+        self,
+        *,
+        repo_url: str,
+        commit: str,
+        command: str,
+        patch: str,
+        timeout_seconds: int | None = None,
+        secrets: dict[str, Issuer] | None = None,
+    ) -> SandboxRun:
+        """Run one command on a box that exists only for it: the repo at the commit with
+        the patch on top. Drukbox deletes the box before it answers."""
+        api = self._api()
+        try:
+            return await api.run_command(
+                repo_url=repo_url,
+                commit=commit,
+                command=command,
+                patch=patch,
+                timeout_seconds=timeout_seconds,
+                secrets=secrets,
+            )
         finally:
             await api.aclose()
 

@@ -935,8 +935,30 @@ those. A request then cannot select another repo or identity.
 
 A workspace defines the box from the subject alone, before the box
 exists. It does so through `get_secrets(subject)`, `get_mcp_servers(subject)`,
-and `get_skills(subject)`. `get_skills(subject)` names the skills that the box
-gets beside the enabled catalog.
+`get_skills(subject)`, and `get_checks(subject)`. `get_skills(subject)` names
+the skills that the box gets beside the enabled catalog.
+
+`get_checks(subject)` names the commands that an agent may run on another box.
+It returns a tuple of commands, empty by default. The agent calls the
+`core_run_check` tool with the id of its run and one of the commands, written as
+you declare it. Druks refuses any other command. The tool needs a `RepoWorkspace`
+and a subject with a `repo`. It reads the repo, the commit where the agent's
+checkout left the default branch, and the agent's uncommitted and untracked
+changes from the agent's box. Drukbox then clones the repo at that commit,
+applies the changes, runs the command, and deletes its box. The tool waits for
+the end of the command and answers with the exit code, the end of the output,
+and the duration. The agent's own box is not touched.
+
+```python
+class BuildWorkspace(RepoWorkspace):
+    @classmethod
+    async def get_checks(cls, subject) -> tuple[str, ...]:
+        return ("make test", "make lint")
+```
+
+Druks raises the wait for the tool call to 90 minutes in the harnesses that take
+a setting for it (Claude Code and Codex). OpenCode and Pi keep their own limit,
+which can end a check that runs longer than it allows.
 
 `prepare()` readies the box when the box runs:
 read rows, call a service, upload a file, write a wrapper, run a command on
