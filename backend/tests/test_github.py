@@ -195,8 +195,9 @@ async def test_create_branch_starts_at_the_head_of_a_given_base() -> None:
     repos = SimpleNamespace(async_get=AsyncMock())
     client = _TestGitHubClient(SimpleNamespace(rest=SimpleNamespace(repos=repos, git=git)))
 
-    await client.create_branch("ClawHaven/example", "agent/ACME-6", base="agent/ACME-5")
+    tip = await client.create_branch("ClawHaven/example", "agent/ACME-6", base="agent/ACME-5")
 
+    assert tip == "def456"
     repos.async_get.assert_not_awaited()
     git.async_get_ref.assert_awaited_once_with("ClawHaven", "example", "heads/agent/ACME-5")
     git.async_create_ref.assert_awaited_once_with(
@@ -454,14 +455,6 @@ async def test_a_failed_check_for_stacks_raises() -> None:
     assert raised.value is error
 
 
-async def test_the_default_branch_is_the_repositorys() -> None:
-    repository = SimpleNamespace(parsed_data=SimpleNamespace(default_branch="trunk"))
-    repos = SimpleNamespace(async_get=AsyncMock(return_value=repository))
-    client = _TestGitHubClient(SimpleNamespace(rest=SimpleNamespace(repos=repos)))
-
-    assert await client.get_default_branch("ClawHaven/example") == "trunk"
-
-
 async def test_a_pull_request_takes_another_base() -> None:
     pulls = SimpleNamespace(async_update=AsyncMock())
     client = _TestGitHubClient(SimpleNamespace(rest=SimpleNamespace(pulls=pulls)))
@@ -531,10 +524,11 @@ async def test_a_branch_moves_onto_the_new_tip_with_the_merge_starting_from_its_
     base instead: a commit there with the new tip's tree, and the branch merged into it."""
     client, git, repos = _rebasing_client()
 
-    await client.rebase_branch(
+    tip = await client.rebase_branch(
         "ClawHaven/example", "agent/ACME-2", onto="agent/ACME-1", since="old-base"
     )
 
+    assert tip == "heads/agent/ACME-1-sha"
     git.async_create_commit.assert_any_await(
         "ClawHaven",
         "example",
@@ -572,10 +566,11 @@ async def test_a_branch_that_holds_the_new_tip_already_is_left_alone() -> None:
     onto a tip that C holds."""
     client, git, repos = _rebasing_client(behind_by=0)
 
-    await client.rebase_branch(
+    tip = await client.rebase_branch(
         "ClawHaven/example", "agent/ACME-2", onto="agent/ACME-1", since="old-base"
     )
 
+    assert tip == "heads/agent/ACME-1-sha"
     repos.async_merge.assert_not_awaited()
     git.async_create_ref.assert_not_awaited()
     git.async_update_ref.assert_not_awaited()

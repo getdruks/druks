@@ -606,24 +606,23 @@ async def test_the_blocker_that_the_build_starts_on_carries_its_branch(druks_db)
     ]
 
 
-async def test_create_branch_starts_at_the_given_base(druks_db, monkeypatch) -> None:
+async def test_create_branch_starts_at_the_given_base_and_gives_the_commit_it_starts_on(
+    druks_db, monkeypatch
+) -> None:
     item = await make_test_work_item(repo="o/r", title="t", source="linear", ticket_key="ACME-65")
-    bases = []
 
     async def has_branch(repo, name):
         return False
 
     async def create_branch(repo, name, base=None):
-        bases.append(base)
+        return f"tip of {base}"
 
     async def get_client(repo):
         return SimpleNamespace(has_branch=has_branch, create_branch=create_branch)
 
     monkeypatch.setattr("druks.contrib.software_factory.models.Github.get_client", get_client)
 
-    await item.create_branch(base="agent/ACME-60")
-
-    assert bases == ["agent/ACME-60"]
+    assert await item.create_branch(base="agent/ACME-60") == "tip of agent/ACME-60"
 
 
 async def test_dispatch_waits_while_several_open_prs_in_its_repo_could_be_its_base(
@@ -733,7 +732,7 @@ async def test_dispatch_waits_for_the_merges_when_two_blockers_have_work_in_its_
 
 async def _set_up_a_stack(monkeypatch, *, base: str):
     """A blocker and a dependent, both with open PRs, and a GitHub client whose PR of the
-    dependent targets ``base``. The blocker's PR targets main."""
+    dependent targets ``base`` and is in a stack. The blocker's PR targets main."""
     settings = await SoftwareFactory.settings()
     blocker = await make_test_work_item(
         repo="o/r", title="t", ticket_key="ACME-80", source=settings.tracker
@@ -759,7 +758,9 @@ async def _set_up_a_stack(monkeypatch, *, base: str):
 
     dependent_base = base
     github = SimpleNamespace(
-        list_open_pull_requests=list_open_pull_requests, rebase_branch=AsyncMock()
+        list_open_pull_requests=list_open_pull_requests,
+        get_stack=AsyncMock(return_value={"number": 5}),
+        rebase_branch=AsyncMock(),
     )
 
     async def get_client(repo):
@@ -797,6 +798,19 @@ async def test_a_push_to_a_blocker_leaves_a_pr_that_targets_another_branch(
     druks_db, monkeypatch
 ) -> None:
     github = await _set_up_a_stack(monkeypatch, base="main")
+
+    await _push_to_the_blocker()
+
+    github.rebase_branch.assert_not_awaited()
+
+
+async def test_a_push_to_a_blocker_leaves_a_pr_that_has_not_joined_the_stack(
+    druks_db, monkeypatch
+) -> None:
+    """Its build moves it when it joins: an earlier push can have left its branch on a tip
+    that is not the one this push replaced."""
+    github = await _set_up_a_stack(monkeypatch, base="agent/ACME-80")
+    github.get_stack.return_value = None
 
     await _push_to_the_blocker()
 

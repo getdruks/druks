@@ -73,14 +73,17 @@ async def _list_blocked_items(blocker: WorkItem) -> list[WorkItem]:
 async def blocker_push_updates_the_prs_built_on_it(
     *, repo: str, pr_number: int, payload: dict
 ) -> None:
-    """New commits on a blocker's branch move each PR that targets that branch onto them,
-    with a rebase, because GitHub merges a stack only when its history is linear. A
-    conflict stops that ticket's build and leaves its PR as it is."""
+    """New commits on a blocker's branch move each PR that is stacked on that branch onto
+    them, with a rebase, because GitHub merges a stack only when its history is linear. A
+    conflict stops that ticket's build and leaves its PR as it is. A PR that has not joined
+    the stack yet is its build's to move: only the build knows the commit that the branch
+    was cut from."""
     blocker = await WorkItem.get_for_pr(repo=repo, pr_number=pr_number)
     if blocker and blocker.has_open_pr:
         github = await Github.get_client(repo)
         for number in await github.list_open_pull_requests(repo, base=payload["branch"]):
-            if item := await WorkItem.get_for_pr(repo=repo, pr_number=number):
+            item = await WorkItem.get_for_pr(repo=repo, pr_number=number)
+            if item and await github.get_stack(repo, number):
                 try:
                     await github.rebase_branch(
                         repo, item.branch, onto=payload["branch"], since=payload["before"]

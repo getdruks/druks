@@ -29,9 +29,8 @@ BLOCKER_TTL_SECONDS = 14 * 24 * 60 * 60
 # minutes. The run asks again this often until the merge is no longer pending.
 MERGE_POLL_SECONDS = 10
 # GitHub answers 409 to a stack call while it changes the stack, after a merge below. The
-# build tries again this often, for this many tries.
+# build tries again this often.
 STACK_RETRY_SECONDS = 10
-STACK_ATTEMPTS = 3
 # A suite that passed or did not apply.
 CI_GREEN_CONCLUSIONS = frozenset({"success", "neutral", "skipped"})
 # A Linear issue in a state of these types is finished or dropped, so it blocks nothing.

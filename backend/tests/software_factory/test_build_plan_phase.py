@@ -1,3 +1,4 @@
+from itertools import cycle
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -7,7 +8,6 @@ from druks.contrib.software_factory.constants import (
     BLOCKER_POLL_SECONDS,
     BLOCKER_TTL_SECONDS,
     MERGE_POLL_SECONDS,
-    STACK_ATTEMPTS,
     STACK_RETRY_SECONDS,
 )
 from druks.contrib.software_factory.contracts import (
@@ -1240,44 +1240,59 @@ async def test_a_refused_merge_with_green_checks_parks_the_work_for_review(monke
     assert approval.parked == [True]
 
 
-def _building_on_a_blockers_branch(monkeypatch, *, blocker_state: str) -> SimpleNamespace:
+@pytest.mark.parametrize(
+    ("pull_request", "state"),
+    [
+        ({"state": "open", "merged": False}, "open"),
+        ({"state": "closed", "merged": True}, "merged"),
+        ({"state": "closed", "merged": False}, "closed"),
+    ],
+)
+async def test_the_build_reads_the_state_of_the_blockers_pr_that_it_started_on(
+    monkeypatch, pull_request, state
+):
     flow = Build()
-    flow._base_branch = "agent/ACME-1"
+    flow._base_pr_number = 7
     flow.subject = SimpleNamespace(repo="org/repo")
-    monkeypatch.setattr(flow, "_get_base_pr_number", AsyncMock(return_value=7))
-    github = SimpleNamespace(get_pull_request=AsyncMock(return_value={"state": blocker_state}))
+    github = SimpleNamespace(get_pull_request=AsyncMock(return_value=pull_request))
     monkeypatch.setattr(
         "druks.contrib.software_factory.workflows.Github.get_client",
         AsyncMock(return_value=github),
     )
-    return SimpleNamespace(flow=flow)
+
+    assert await Build._read_base_state.__wrapped__(flow) == state
+
+    github.get_pull_request.assert_awaited_once_with("org/repo", 7)
 
 
-async def test_a_blockers_pr_that_is_open_is_a_base(monkeypatch):
-    build = _building_on_a_blockers_branch(monkeypatch, blocker_state="open")
+@pytest.mark.parametrize(("state", "is_open"), [("open", True), ("merged", False)])
+async def test_a_blockers_pr_is_a_base_while_it_is_open(monkeypatch, state, is_open):
+    flow = Build()
+    monkeypatch.setattr(flow, "_read_base_state", AsyncMock(return_value=state))
 
-    assert await Build._is_base_open.__wrapped__(build.flow) is True
-
-
-async def test_a_blockers_pr_that_merged_meanwhile_is_no_base(monkeypatch):
-    build = _building_on_a_blockers_branch(monkeypatch, blocker_state="closed")
-
-    assert await Build._is_base_open.__wrapped__(build.flow) is False
+    assert await flow._is_base_open() is is_open
 
 
-async def test_a_branch_starts_on_the_base_that_it_is_given():
-    created = []
+async def test_a_blockers_pr_that_closed_without_a_merge_fails_the_build(monkeypatch):
+    """The blocker's change is on no branch then, and the default branch does not hold it."""
+    flow = Build()
+    flow._base_pr_number = 7
+    flow.input = Build._run_input_model(base_ticket="ACME-1")
+    monkeypatch.setattr(flow, "_read_base_state", AsyncMock(return_value="closed"))
 
+    with pytest.raises(FatalError, match=r"ACME-1 \(#7\) closed without a merge"):
+        await flow._is_base_open()
+
+
+async def test_a_branch_starts_on_the_base_that_it_is_given_and_gives_the_commit_it_starts_on():
     async def create_branch(*, base=None):
-        created.append(base)
+        return f"tip of {base}"
 
     flow = Build()
     flow.subject = SimpleNamespace(repo="org/repo", create_branch=create_branch)
 
-    await Build._create_branch.__wrapped__(flow, "agent/ACME-1")
-    await Build._create_branch.__wrapped__(flow, None)
-
-    assert created == ["agent/ACME-1", None]
+    assert await Build._create_branch.__wrapped__(flow, "agent/ACME-1") == "tip of agent/ACME-1"
+    assert await Build._create_branch.__wrapped__(flow, None) == "tip of None"
 
 
 async def test_a_blocker_that_merged_meanwhile_leaves_the_build_on_the_default_branch(
@@ -1296,36 +1311,58 @@ async def test_a_blocker_that_merged_meanwhile_leaves_the_build_on_the_default_b
     assert "join_stack" not in calls
 
 
-async def test_a_build_on_a_blockers_branch_joins_its_stack_after_the_first_delivery(monkeypatch):
-    flow, calls = _implementing_build(
-        monkeypatch,
-        max_revisions=5,
-        heads=["a", "b"],
-        conclusions=["green", "green"],
-        decisions=["request_changes", "approve"],
-    )
+def _implementing_build_on_a_blocker(monkeypatch, **delivered) -> tuple[Build, list[str]]:
+    """``_implementing_build``, on the branch of a blocker whose PR is open. The checks of
+    the PR's head are green."""
+    flow, calls = _implementing_build(monkeypatch, conclusions=[], **delivered)
     flow._base_branch = "agent/ACME-1"
-    monkeypatch.setattr(flow, "_is_base_open", AsyncMock(return_value=True))
+    flow._base_pr_number = 7
 
     async def join_stack():
         calls.append("join_stack")
 
+    async def wait_for_checks_of_the_head():
+        calls.append("checks of the head")
+        return CiReport(head_sha="rebased", conclusion="green")
+
+    monkeypatch.setattr(flow, "_is_base_open", AsyncMock(return_value=True))
     monkeypatch.setattr(flow, "_join_stack", join_stack)
+    monkeypatch.setattr(flow, "_wait_for_checks_of_the_head", wait_for_checks_of_the_head)
+    return flow, calls
+
+
+async def test_a_build_on_a_blockers_branch_joins_its_stack_after_the_first_delivery(monkeypatch):
+    flow, calls = _implementing_build_on_a_blocker(
+        monkeypatch, max_revisions=5, heads=["a", "b"], decisions=["request_changes", "approve"]
+    )
 
     await flow._implement_phase()
 
     assert flow._create_branch.created == ["agent/ACME-1"]
+    assert flow._base_tip == "tip of agent/ACME-1"
     assert calls.count("join_stack") == 1
     assert calls[:2] == ["implement", "join_stack"]
+
+
+async def test_a_build_on_a_blockers_branch_waits_for_the_checks_of_its_prs_head(monkeypatch):
+    """A rebase onto the blocker gives the PR a head that the implementer did not deliver."""
+    flow, calls = _implementing_build_on_a_blocker(
+        monkeypatch, max_revisions=1, heads=["a"], decisions=["approve"]
+    )
+
+    await flow._implement_phase()
+
+    assert calls == ["implement", "join_stack", "checks of the head", "review", "work_gate"]
 
 
 def _refusal(status_code: int, message: str = "must form a stack") -> dict:
     return {"status_code": status_code, "message": f"org/repo#9 on #7: {status_code} {message}"}
 
 
-def _joining_build(monkeypatch, *answers, base_open: bool = True):
+def _joining_build(monkeypatch, *answers, base_open=(True,)):
     """A build that asks GitHub to stack its PR, and gets each of ``answers`` in turn: None
-    for a PR that joined, or GitHub's refusal."""
+    for a PR that joined, or GitHub's refusal. The blocker's PR is open, or ``base_open``
+    answers in turn."""
     flow = Build()
     flow._base_branch = "agent/ACME-1"
     flow.sleeps = []
@@ -1335,8 +1372,9 @@ def _joining_build(monkeypatch, *answers, base_open: bool = True):
         return False
 
     monkeypatch.setattr(flow, "sleep", sleep)
+    monkeypatch.setattr(flow, "_rebase_onto_blocker", AsyncMock(return_value="blocker tip"))
     monkeypatch.setattr(flow, "_stack_on_blocker", AsyncMock(side_effect=list(answers)))
-    monkeypatch.setattr(flow, "_is_base_open", AsyncMock(return_value=base_open))
+    monkeypatch.setattr(flow, "_is_base_open", AsyncMock(side_effect=cycle(base_open)))
     monkeypatch.setattr(flow, "_move_to_default_branch", AsyncMock())
     return flow
 
@@ -1356,9 +1394,22 @@ async def test_a_pr_that_github_will_not_stack_fails_the_build_with_the_reason(m
 async def test_a_pr_whose_blocker_merged_before_it_joined_moves_onto_the_default_branch(
     monkeypatch,
 ):
-    """GitHub refuses a PR on a merged PR's branch, and nothing would move it. The blocker's
-    change is on the default branch now, so the PR goes there."""
-    flow = _joining_build(monkeypatch, _refusal(422), base_open=False)
+    """Nothing would move a PR on a merged PR's branch. The blocker's change is on the
+    default branch now, so the PR goes there, and GitHub is not asked to stack it."""
+    flow = _joining_build(monkeypatch, base_open=(False,))
+
+    await flow._join_stack()
+
+    flow._stack_on_blocker.assert_not_awaited()
+    flow._move_to_default_branch.assert_awaited_once_with()
+    assert flow._base_branch is None
+
+
+async def test_a_pr_whose_blocker_merges_while_it_joins_moves_onto_the_default_branch(
+    monkeypatch,
+):
+    """GitHub refuses a PR on a merged PR's branch. That refusal does not fail the build."""
+    flow = _joining_build(monkeypatch, _refusal(422), base_open=(True, False, False))
 
     await flow._join_stack()
 
@@ -1366,48 +1417,54 @@ async def test_a_pr_whose_blocker_merged_before_it_joined_moves_onto_the_default
     assert flow._base_branch is None
 
 
-async def test_a_pr_that_joins_the_stack_stays_on_its_blockers_branch(monkeypatch):
-    flow = _joining_build(monkeypatch, None)
+async def test_a_branch_moves_onto_the_blockers_tip_before_and_after_its_pr_joins_the_stack(
+    monkeypatch,
+):
+    """Until the PR is in the stack, only its build moves it. The blocker can change before
+    the join, and between the move and the join."""
+    flow = _joining_build(monkeypatch)
+    calls = []
+
+    async def rebase_onto_blocker():
+        calls.append("rebase")
+        return "blocker tip"
+
+    async def stack_on_blocker():
+        calls.append("stack")
+
+    monkeypatch.setattr(flow, "_rebase_onto_blocker", rebase_onto_blocker)
+    monkeypatch.setattr(flow, "_stack_on_blocker", stack_on_blocker)
 
     await flow._join_stack()
 
+    assert calls == ["rebase", "stack", "rebase"]
+    assert flow._base_tip == "blocker tip"
     flow._move_to_default_branch.assert_not_awaited()
     assert flow._base_branch == "agent/ACME-1"
 
 
 async def test_a_stack_that_github_is_changing_is_tried_again_after_a_wait(monkeypatch):
     """GitHub answers 409 while it rebases the stack after a merge below."""
-    flow = _joining_build(monkeypatch, _refusal(409, "stack is being modified"), None)
+    busy = _refusal(409, "stack is being modified")
+    flow = _joining_build(monkeypatch, busy, busy, busy, busy, None)
 
     await flow._join_stack()
 
-    assert flow.sleeps == [STACK_RETRY_SECONDS]
+    assert flow.sleeps == [STACK_RETRY_SECONDS] * 4
     assert flow._base_branch == "agent/ACME-1"
-
-
-async def test_a_stack_that_stays_busy_fails_the_build_with_the_last_reason(monkeypatch):
-    busy = _refusal(409, "stack is being modified")
-    flow = _joining_build(monkeypatch, *[busy] * STACK_ATTEMPTS)
-
-    with pytest.raises(FatalError, match="being modified"):
-        await flow._join_stack()
-
-    assert flow.sleeps == [STACK_RETRY_SECONDS] * (STACK_ATTEMPTS - 1)
 
 
 def _moving_build(monkeypatch, *, conflict: bool):
     flow = Build()
     flow._base_branch = "agent/ACME-1"
+    flow._base_tip = "cut tip"
     flow.subject = SimpleNamespace(repo="org/repo", branch="agent/ACME-2")
     monkeypatch.setattr(Build, "pr_number", property(lambda self: 42))
-    monkeypatch.setattr(flow, "_get_base_pr_number", AsyncMock(return_value=7))
     github = SimpleNamespace(
-        get_default_branch=AsyncMock(return_value="main"),
-        get_pull_request=AsyncMock(return_value={"head": {"sha": "a1b2"}}),
+        get_repository=AsyncMock(return_value={"default_branch": "main"}),
         rebase_branch=AsyncMock(
-            side_effect=GitHubMergeConflictError("o/r: agent/ACME-2 onto main")
-            if conflict
-            else None
+            return_value="new tip",
+            side_effect=GitHubMergeConflictError("o/r: agent/ACME-2") if conflict else None,
         ),
         update_pull_request_base=AsyncMock(),
     )
@@ -1418,14 +1475,34 @@ def _moving_build(monkeypatch, *, conflict: bool):
     return flow, github
 
 
-async def test_moving_a_pr_to_the_default_branch_rebases_it_from_the_blockers_tip(monkeypatch):
-    """The commit was built on the tip of the blocker's PR, and the merge starts there."""
+async def test_a_branch_that_fell_behind_moves_onto_the_blockers_tip_from_where_it_was_cut(
+    monkeypatch,
+):
+    flow, github = _moving_build(monkeypatch, conflict=False)
+
+    assert await Build._rebase_onto_blocker.__wrapped__(flow) == "new tip"
+
+    github.rebase_branch.assert_awaited_once_with(
+        "org/repo", "agent/ACME-2", onto="agent/ACME-1", since="cut tip"
+    )
+
+
+async def test_a_branch_that_conflicts_with_its_blocker_fails_the_build(monkeypatch):
+    flow, _ = _moving_build(monkeypatch, conflict=True)
+
+    with pytest.raises(FatalError, match="conflicts with agent/ACME-1"):
+        await Build._rebase_onto_blocker.__wrapped__(flow)
+
+
+async def test_moving_a_pr_to_the_default_branch_rebases_it_from_the_tip_it_sits_on(monkeypatch):
+    """The blocker can change after the branch is cut, so the head of the merged PR is not
+    always that tip."""
     flow, github = _moving_build(monkeypatch, conflict=False)
 
     await Build._move_to_default_branch.__wrapped__(flow)
 
     github.rebase_branch.assert_awaited_once_with(
-        "org/repo", "agent/ACME-2", onto="main", since="a1b2"
+        "org/repo", "agent/ACME-2", onto="main", since="cut tip"
     )
     github.update_pull_request_base.assert_awaited_once_with("org/repo", 42, base="main")
 
@@ -1495,6 +1572,7 @@ def _implementing_build(
 
     async def create_branch(base):
         create_branch.created.append(base)
+        return f"tip of {base}"
 
     create_branch.created = []
 

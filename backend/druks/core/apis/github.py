@@ -380,27 +380,24 @@ class GitHubClient:
                 return
             raise
 
-    async def rebase_branch(self, repo: str, branch: str, onto: str, *, since: str) -> None:
-        """Move the one commit of ``branch`` from ``since``, the tip it was built on, onto the tip
-        of ``onto``, so that a stack keeps the linear history that GitHub requires to merge it.
-        GitHub refuses to update the branch of a stacked PR, and has no call that rebases a
-        stack. A plain merge of the new tip into the branch starts from the branch's own old
-        copy of the lower commits, and reports a conflict when that commit was amended or
-        squashed. So the merge starts from ``since``: a scratch branch holds a commit on
-        ``since`` with the tree of ``onto``, and the branch merges into it. The result goes on
-        ``onto`` as one commit with the branch's message. GitHub answers a real conflict
+    async def rebase_branch(self, repo: str, branch: str, onto: str, *, since: str) -> str:
+        """Move the commit of ``branch`` from ``since``, the tip it was built on, onto the tip
+        of ``onto``, and return that tip. GitHub has no call that rebases a stacked PR. A plain
+        merge of ``onto`` starts from the branch's old copy of the lower commits, and conflicts
+        when one of them was amended or squashed. So a scratch branch starts at ``since`` with
+        the tree of ``onto``, and the branch merges into it. GitHub answers a real conflict
         with 409."""
         owner, name = repo.split("/", 1)
         git = self._github.rest.git
-        # Behind by nothing: the branch holds the new tip already, as it does when GitHub
-        # rebased the chain itself.
+        onto_tip = (await git.async_get_ref(owner, name, f"heads/{onto}")).parsed_data.object_.sha
+        # Behind by nothing: the branch holds the tip already, as it does when GitHub rebased
+        # the chain itself.
         comparison = await self._github.rest.repos.async_compare_commits(
-            owner, name, basehead=f"{onto}...{branch}"
+            owner, name, basehead=f"{onto_tip}...{branch}"
         )
         if not comparison.parsed_data.behind_by:
-            return
+            return onto_tip
         tip = (await git.async_get_ref(owner, name, f"heads/{branch}")).parsed_data.object_.sha
-        onto_tip = (await git.async_get_ref(owner, name, f"heads/{onto}")).parsed_data.object_.sha
         onto_tree = (await git.async_get_commit(owner, name, onto_tip)).parsed_data.tree.sha
         original = (await git.async_get_commit(owner, name, tip)).parsed_data
         anchor = await git.async_create_commit(
@@ -440,6 +437,7 @@ class GitHubClient:
             )
         finally:
             await git.async_delete_ref(owner, name, f"heads/{scratch}")
+        return onto_tip
 
     async def merge_when_ready(self, repo: str, pr_number: int) -> bool:
         """Whether GitHub accepted ownership of the merge."""
@@ -618,24 +616,23 @@ class GitHubClient:
 
         return True
 
-    async def get_default_branch(self, repo: str) -> str:
-        owner, name = repo.split("/", 1)
-        repository = await self._github.rest.repos.async_get(owner, name)
-        return repository.parsed_data.default_branch
-
     async def update_pull_request_base(self, repo: str, pr_number: int, *, base: str) -> None:
         owner, name = repo.split("/", 1)
         await self._github.rest.pulls.async_update(owner, name, pr_number, base=base)
 
-    async def create_branch(self, repo: str, branch: str, *, base: str | None = None) -> None:
-        """Create ``branch`` at the head of ``base``, or of the default branch."""
+    async def create_branch(self, repo: str, branch: str, *, base: str | None = None) -> str:
+        """Create ``branch`` at the head of ``base``, or of the default branch, and return
+        that head."""
         owner, name = repo.split("/", 1)
         if not base:
-            base = await self.get_default_branch(repo)
+            repository = await self._github.rest.repos.async_get(owner, name)
+            base = repository.parsed_data.default_branch
         head = await self._github.rest.git.async_get_ref(owner, name, f"heads/{base}")
+        sha = head.parsed_data.object_.sha
         await self._github.rest.git.async_create_ref(
-            owner, name, ref=f"refs/heads/{branch}", sha=head.parsed_data.object_.sha
+            owner, name, ref=f"refs/heads/{branch}", sha=sha
         )
+        return sha
 
     async def delete_branch(self, repo: str, branch: str) -> bool:
         owner, name = repo.split("/", 1)

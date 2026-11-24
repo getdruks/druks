@@ -800,31 +800,32 @@ A build that starts on a blocker's open pull request works on the branch of that
 pull request and opens its pull request against that branch. A branch holds the
 change of one blocker, so a ticket with a second blocker in its repository waits
 until the blockers have merged. A stack is a line, so a blocker that blocks two
-tickets in one repository makes both wait until it has merged. If the blocker has
-merged by the time the build creates its branch, the build starts on the default
-branch.
+tickets in one repository makes both wait until it has merged. If the blocker
+has merged by the time the build creates its branch, the build starts on the
+default branch.
 
 A chain needs GitHub's stacked pull requests, which are a preview. Druks asks
-GitHub whether the repository has them. A repository without them keeps the old
-rule: a ticket waits until its blocker has merged. A chain merges only with
+GitHub whether the repository has them. In a repository without them, a ticket
+waits until its blocker has merged. A chain merges only with
 `on_approval: merge`. With the default, the build ends at the approval, and a
 person merges.
 
-The build adds its pull request to the stack of the pull request below it, and
-GitHub moves each pull request to the branch below it merged into. When a change
-reaches the pull request below, Druks force-pushes the branch of each pull request
-above it, which folds the commits of that branch into one and keeps the last
-message, because GitHub merges a stack only when its history is linear. If that change cannot apply, Druks cancels that
-ticket's build and leaves its pull request as it is. When a blocker's pull request
-closes without a merge, the builds of the tickets that it blocks stop.
+The build adds its pull request to the stack of the pull request below it. When
+the pull request below merges, GitHub moves the next one to the branch that it
+merged into. GitHub merges a stack only when its history is linear. So when a
+change reaches the pull request below, Druks force-pushes the branch of each
+pull request above it. That folds the commits of the branch into one and keeps
+the last message. If the change cannot apply, that ticket's build stops, and its
+pull request stays as it is. When a blocker's pull request closes without a
+merge, the builds of the tickets that it blocks stop.
 
 When a person approves a pull request that has another below it, Druks waits for
 the pull request below to merge, then for the checks to finish on the new head,
 and then asks GitHub to merge. GitHub decides. If it refuses and the checks are
-red, the work goes back to the implementer. A review that asks for changes in the
-meantime goes to triage, as it does at the review gate. Changes on a pull request
-below start no second agent review of the ones above: GitHub runs their checks
-again.
+red, the work goes back to the implementer. A review that asks for changes in
+the meantime goes to triage, as it does at the review gate. Changes on a pull
+request below start no second agent review of the ones above: GitHub runs their
+checks again.
 
 A chain builds each ticket on code that no person has approved yet. Keep
 `gates.implementation_approval` at its default, `human`, for a repository that
