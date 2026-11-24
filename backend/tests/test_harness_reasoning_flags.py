@@ -119,6 +119,49 @@ async def test_claude_refuses_the_first_result_of_a_hooked_call():
     assert _written(inv.args[2])[_HOOK] == _HOOK_BODY
 
 
+async def test_claude_resumes_a_session_as_a_fork_with_the_long_cache():
+    harness = ClaudeHarness(model="anthropic/claude-x", fast_mode=False, effort=None)
+    inv = await harness.build_invocation(
+        _MANIFEST,
+        prompt="the check result",
+        schema={"type": "object"},
+        run_id="run-2",
+        ssh_username="exedev",
+        resumable=True,
+        resume_session="run-1",
+    )
+
+    parts = shlex.split(inv.args[2])
+    start = parts.index("--resume")
+    assert parts[start : start + 4] == ["--resume", "run-1", "--fork-session", "--session-id"]
+    assert parts[start + 4] == "run-2"
+    assert inv.env == {"CLAUDE_CODE_PROMPT_CACHE_TTL": "1h"}
+
+
+async def test_claude_writes_the_long_cache_in_the_call_that_may_be_resumed():
+    harness = ClaudeHarness(model="anthropic/claude-x", fast_mode=False, effort=None)
+    kwargs = {"prompt": "p", "schema": {}, "run_id": "run-1", "ssh_username": "exedev"}
+
+    resumable = await harness.build_invocation(_MANIFEST, resumable=True, **kwargs)
+    plain = await harness.build_invocation(_MANIFEST, **kwargs)
+
+    assert resumable.env == {"CLAUDE_CODE_PROMPT_CACHE_TTL": "1h"}
+    assert "--resume" not in resumable.args[2]
+    assert plain.env is None
+
+
+def test_a_resumed_claude_call_records_only_its_own_cost():
+    # A resumed session reports the totals since it began, and the resumed call takes off
+    # what the call before it reported.
+    first = {"input_tokens": 100, "output_tokens": 10}
+    reported = {"input_tokens": 160, "output_tokens": 25}
+
+    cost, own = ClaudeHarness.get_own_cost(0.8, reported, 0.5, first)
+
+    assert round(cost, 6) == 0.3
+    assert (own["input_tokens"], own["output_tokens"]) == (60, 15)
+
+
 async def test_codex_build_invocation_carries_every_flag():
     """The Codex invocation carries the complete supported flag set."""
     server = McpServer(name="github", url="https://api.example/mcp/", bearer_token_env_var="TOK")
