@@ -400,7 +400,6 @@ async def test_an_operator_answers_a_run_that_a_call_parked(druks_db, twilio):
 
 async def test_a_caller_hears_only_that_a_run_waits_for_its_approver_s_review(druks_db, twilio):
     conversation = await call(druks_db, await link(druks_db))
-    approver = await Account.get_or_create(druks_db, "paulo@example.com")
     run = await seed_run(
         druks_db,
         kind=Summarize.kind,
@@ -410,7 +409,7 @@ async def test_a_caller_hears_only_that_a_run_waits_for_its_approver_s_review(dr
             "presentation": "in_app",
             "controls": [{"id": "approve", "note_required": False}],
             "questions": [],
-            "approver_id": approver.id,
+            "approver": "paulo@example.com",
         },
     )
     run.conversation_id = conversation.id

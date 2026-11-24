@@ -354,10 +354,7 @@ class Gate(BaseModel):
     class.
 
     Every reply carries ``answered_by``, the username of the account that answered in
-    Druks. A public number's admin answers as the number's bot admin account, whose
-    username names no person. It is empty when no account answered: an answer from
-    outside Druks, a link, or a click by a person who has no linked account. Druks
-    stores the account's id, and the reply gets its username."""
+    Druks. It is empty when no account answered."""
 
     name: ClassVar[str] = ""
     answered_by: str = ""
@@ -384,10 +381,10 @@ class Gate(BaseModel):
         workflow: type["Workflow"],
         **reply,
     ) -> None:
-        if taken := sorted(reply.keys() & {"answered_by", "answered_by_id"}):
+        if "answered_by" in reply:
             raise WorkflowError(
-                f"{cls.__name__}.answer() sets {', '.join(taken)}, and only Druks names who "
-                "answered. Leave them out."
+                f"{cls.__name__}.answer() sets answered_by, and only Druks names who "
+                "answered. Leave it out."
             )
         workflow._validate_subject(subject)
         if parked_run := await Run.get_latest_for_subject(
@@ -499,13 +496,11 @@ async def _park(
                 {"id": control, "note_required": control == "request_changes" and not is_guided}
                 for control in input_request.get("controls", get_args(action.annotation))
             ]
-        if approver := input_request.pop("approver", ""):
-            # The ask names the approver by username, and Druks stores the account's id.
-            input_request["approver_id"] = await DBOS.run_step_async(
-                StepOptions(name=f"{gate.name}.approver"),
-                _get_approver_id,
-                workflow.app,
-                approver,
+        if approver := input_request.get("approver"):
+            # The ask keeps the username as the account spells it. Each answer then
+            # compares it exactly.
+            input_request["approver"] = await DBOS.run_step_async(
+                StepOptions(name=f"{gate.name}.approver"), workflow._get_approver, approver
             )
     requested_at = datetime.now(UTC)
     await _emit_run_event(
@@ -535,43 +530,15 @@ async def _park(
     payload = await DBOS.recv_async(gate.name, timeout_seconds=ttl_seconds)
     if payload is None:
         raise GateTimeout(gate.name)
-    answer = {**payload, "answered_by": ""}
-    if answered_by_id := answer.pop("answered_by_id", ""):
-        # An answer that no account gave runs no step. A run that such an answer resumed
-        # thus replays the steps that it recorded.
-        answer["answered_by"] = await DBOS.run_step_async(
-            StepOptions(name=f"{gate.name}.answered_by"), _get_username, answered_by_id
-        )
-    reply = gate.model_validate(answer)
+    reply = gate.model_validate(payload)
     await _emit_run_event(
         workflow.workflow_id,
         RunState.RUNNING,
         subject=workflow._subject,
         facts={**_GATE_CLEARED, "answer_parked_at": Run.input_requested_at},
-        result={
-            **reply.model_dump(mode="json", exclude={"answered_by"}),
-            "answered_by_id": answered_by_id,
-        },
+        result=reply,
     )
     return reply
-
-
-async def _get_approver_id(app_name: str, username: str) -> str:
-    """The id of the approver's account. The approver must be able to use the app,
-    because no other account can answer."""
-    async with step_session() as session:
-        account = await Account.get(session, username=username)
-        if await account.can_use_app(get_app(app_name)):
-            return account.id
-        raise PermissionDenied(
-            f"The approver {account.username} cannot use the app {app_name}. Ask an admin to "
-            f"add {account.username} to a team that lists the app, or name another approver."
-        )
-
-
-async def _get_username(account_id: str) -> str:
-    async with step_session() as session:
-        return (await session.get(Account, account_id)).username
 
 
 async def _notify_account(workflow_id: str, subject: dict) -> None:
@@ -587,14 +554,14 @@ async def _notify_account(workflow_id: str, subject: dict) -> None:
                 return
             if run.conversation_id:
                 conversation = await session.get(Conversation, run.conversation_id)
-                if run.is_answerable_by(conversation.account_id):
+                if run.is_answerable_by(conversation.account):
                     return
+            if approver := ask.get("approver"):
+                account_id = (await Account.get_for_username(session, approver)).id
+            else:
+                account_id = run.account_id
             return await create_park_notification(
-                session,
-                run,
-                subject=subject,
-                account_id=ask.get("approver_id") or run.account_id,
-                deep_link=run.get_link(),
+                session, run, subject=subject, account_id=account_id, deep_link=run.get_link()
             )
 
     notification_id = await DBOS.run_step_async(
@@ -621,7 +588,7 @@ async def _notify_conversation(workflow_id: str, subject: dict) -> bool:
                     channel
                     and channel.has_buttons
                     and ask.get("presentation") == "in_app"
-                    and run.is_answerable_by(conversation.account_id)
+                    and run.is_answerable_by(conversation.account)
                 ):
                     return await create_park_notification(
                         session,
@@ -1280,6 +1247,18 @@ class Workflow:
         )
         self.journal.add(reply)
         return reply
+
+    async def _get_approver(self, username: str) -> str:
+        """The approver of an ask: the username, as the account spells it. The account must
+        be able to use the workflow's app, because no other account can answer."""
+        async with step_session() as session:
+            account = await Account.get(session, username=username)
+            if await account.can_use_app(get_app(self.app)):
+                return account.username
+            raise PermissionDenied(
+                f"The approver {account.username} cannot use the app {self.app}. Add the "
+                "account to a team that lists the app, or name another approver."
+            )
 
     async def wait(self, topic: str, *, label: str, ttl_seconds: float = GATE_TTL_SECONDS) -> dict:
         """Wait for the facts that ``answer`` delivers on ``topic``, and return them. The run

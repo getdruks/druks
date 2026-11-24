@@ -41,12 +41,11 @@ from druks.notifications.services import respond_to_notification
 from druks.secrets.datastructures import Audience
 from druks.secrets.models import VaultSecret
 from druks.settings import Settings, configure_settings, get_settings
-from druks.teams.models import Team
 from druks.testing import configure_app_for_test, init_db, make_settings
 from druks.workflows import Gate, OperatorReply, Run, Workflow
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, Field
-from sqlalchemy import NullPool, create_engine, delete, select, text
+from sqlalchemy import NullPool, create_engine, select, text
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.orm import Session
 
@@ -105,7 +104,7 @@ def _build_park_flows():
     class InAppFlow(Workflow):
         subject = NotificationProbe
 
-        async def run_multistep(self) -> None:
+        async def run_multistep(self, approver: str = "") -> None:
             reply = await self.review(
                 questions=[
                     _Question(
@@ -113,15 +112,10 @@ def _build_park_flows():
                         prompt="Which database?",
                         options=[{"id": "postgres", "label": "Postgres"}],
                     )
-                ]
+                ],
+                approver=approver,
             )
             _REVIEW_REPLIES.append(reply)
-
-    class ApproverFlow(Workflow):
-        subject = NotificationProbe
-
-        async def run_multistep(self, approver: str) -> None:
-            _REVIEW_REPLIES.append(await self.review(approver=approver))
 
     class ExternalFlow(Workflow):
         subject = NotificationProbe
@@ -163,15 +157,7 @@ def _build_park_flows():
             _FAILED_EXECUTIONS.append(self.workflow_id)
             raise RuntimeError("the disk is full")
 
-    return (
-        InAppFlow,
-        ApproverFlow,
-        ExternalFlow,
-        SubjectlessFlow,
-        ExternalUrlFlow,
-        DoubleParkFlow,
-        FailingFlow,
-    )
+    return InAppFlow, ExternalFlow, SubjectlessFlow, ExternalUrlFlow, DoubleParkFlow, FailingFlow
 
 
 # The topic that a status flow waits on after each round of its reports, until the test sends.
@@ -242,8 +228,6 @@ async def rt():
                 9017,
                 9018,
                 9019,
-                9020,
-                9022,
                 9023,
             )
         )
@@ -255,7 +239,6 @@ async def rt():
     configure_session(engine)
     (
         in_app_flow,
-        approver_flow,
         external_flow,
         subjectless_flow,
         external_url_flow,
@@ -280,7 +263,6 @@ async def rt():
             engine=engine,
             schema_engine=schema_engine,
             InAppFlow=in_app_flow,
-            ApproverFlow=approver_flow,
             ExternalFlow=external_flow,
             SubjectlessFlow=subjectless_flow,
             ExternalUrlFlow=external_url_flow,
@@ -1151,7 +1133,7 @@ async def test_a_review_asks_its_approver_and_only_their_answer_resumes_it(rt, d
     approver_id, requester_id, conversation_id = await _seed(rt, create)
     reset = current_conversation_id.set(conversation_id)
     try:
-        workflow_id = await rt.ApproverFlow.start(
+        workflow_id = await rt.InAppFlow.start(
             subject=NotificationProbe(id=9019), approver="Paulo@example.com"
         )
     finally:
@@ -1203,7 +1185,7 @@ async def test_a_chat_of_the_approver_s_own_account_asks_in_the_chat(rt, deliver
     username, conversation_id = await _seed(rt, create)
     reset = current_conversation_id.set(conversation_id)
     try:
-        workflow_id = await rt.ApproverFlow.start(
+        workflow_id = await rt.InAppFlow.start(
             subject=NotificationProbe(id=9023), approver=username
         )
     finally:
@@ -1218,44 +1200,6 @@ async def test_a_chat_of_the_approver_s_own_account_asks_in_the_chat(rt, deliver
     )
     assert clicked == "ok"
     await _wait_run(rt, workflow_id, lambda run: run.state == RunState.FINISHED)
-
-
-async def test_a_review_whose_approver_has_no_account_fails_the_run(rt, deliver_spy):
-    workflow_id = await rt.ApproverFlow.start(
-        subject=NotificationProbe(id=9020), approver="nobody@example.com"
-    )
-
-    run = await _wait_run(rt, workflow_id, lambda run: run.state == RunState.FAILED)
-    assert "No account with username nobody@example.com" in run.failure_message()
-
-
-async def test_a_review_whose_approver_cannot_use_the_app_fails_the_run(rt, deliver_spy):
-    async def create():
-        await Account.get_or_create(db_session(), "outsider@example.com")
-        # Team.create takes only an installed app, and the module's app is not installed.
-        team = Team(
-            name="Probes",
-            members=[await Account.get_default(db_session())],
-            apps=[NotificationsDurable.name],
-        )
-        db_session().add(team)
-        await db_session().flush()
-        return team.id
-
-    team_id = await _seed(rt, create)
-
-    async def remove():
-        await db_session().execute(delete(Team).where(Team.id == team_id))
-
-    try:
-        workflow_id = await rt.ApproverFlow.start(
-            subject=NotificationProbe(id=9022), approver="outsider@example.com"
-        )
-        run = await _wait_run(rt, workflow_id, lambda run: run.state == RunState.FAILED)
-    finally:
-        # The module shares one database, and the team binds every later run of the app.
-        await _seed(rt, remove)
-    assert "cannot use the app notifications_durable" in run.failure_message()
 
 
 async def test_concurrent_responds_resolve_to_one_answer(rt, deliver_spy):

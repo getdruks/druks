@@ -1245,7 +1245,7 @@ async def test_a_review_s_approver_answers_in_place_of_the_number_s_admin(druks_
             "presentation": "in_app",
             "controls": [{"id": "approve", "note_required": False}],
             "questions": [],
-            "approver_id": approver.id,
+            "approver": approver.username,
         },
     )
     run.conversation_id = conversation.id

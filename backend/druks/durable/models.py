@@ -397,7 +397,7 @@ class Run(Base):
             func.left(cls.input_request["label"].as_string(), 240).label("request_label"),
             cls.input_request["presentation"].as_string().label("presentation"),
             cls.input_request["url"].as_string().label("request_url"),
-            cls.input_request["approver_id"].as_string().label("approver_id"),
+            cls.input_request["approver"].as_string().label("approver"),
             state,
             func.row_number()
             .over(
@@ -479,10 +479,10 @@ class Run(Base):
             **ask,
         }
 
-    def is_answerable_by(self, account_id: str | None) -> bool:
+    def is_answerable_by(self, account: Account) -> bool:
         """Whether the account may answer the ask that the run waits on. When the ask
         names an approver, only that account may."""
-        return self.input_request.get("approver_id") in (None, account_id)
+        return self.input_request.get("approver") in (None, account.username)
 
     async def close_park_notifications(self) -> None:
         """Queue the close of the messages that ask the question this run is parked on, in

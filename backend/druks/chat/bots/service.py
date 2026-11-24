@@ -6,7 +6,6 @@ from pydantic_core import to_json
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from druks.accounts.enums import AccountKind
-from druks.accounts.models import Account
 from druks.chat.constants import (
     PARKED_BUTTONS_MESSAGE,
     PARKED_FOR_APPROVER_MESSAGE,
@@ -265,11 +264,10 @@ async def ask_for_answer(session: AsyncSession, run: Run) -> str | None:
         return
     conversation = await session.get(Conversation, run.conversation_id)
     request = to_json(await read_ask(session, run)).decode()
-    if not run.is_answerable_by(conversation.account_id):
+    if not run.is_answerable_by(conversation.account):
         if conversation.account.kind == AccountKind.OPERATOR:
-            approver = await session.get(Account, run.input_request["approver_id"])
             body = PARKED_FOR_APPROVER_MESSAGE.format(
-                run=run.id, approver=approver.username, request=request
+                run=run.id, approver=run.input_request["approver"], request=request
             )
         else:
             # A Bot serves people outside Druks. They read neither the ask nor the

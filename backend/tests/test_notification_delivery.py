@@ -1670,7 +1670,7 @@ async def test_an_approval_input_shows_the_start_of_a_long_label_and_keeps_each_
     cut = "O" * 74 + "…"
     assert select["element"]["options"] == [_option(cut, first_id), _option(cut, second_id)]
     assert replies == [
-        {"action": "approve", "answers": {question: second_id}, "note": "", "answered_by_id": ""}
+        {"action": "approve", "answers": {question: second_id}, "note": "", "answered_by": ""}
     ]
 
 

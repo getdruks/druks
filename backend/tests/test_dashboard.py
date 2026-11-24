@@ -362,7 +362,7 @@ async def test_a_waiting_review_that_names_an_approver_needs_the_approver_alone(
         kind=Summarize.kind,
         state="parked",
         input_gate="review",
-        input_request={**review, "approver_id": operator.id},
+        input_request={**review, "approver": operator.username},
         account_id=other.id,
     )
     for starter in (operator, service):
@@ -371,7 +371,7 @@ async def test_a_waiting_review_that_names_an_approver_needs_the_approver_alone(
             kind=Summarize.kind,
             state="parked",
             input_gate="review",
-            input_request={**review, "approver_id": other.id},
+            input_request={**review, "approver": other.username},
             account_id=starter.id,
         )
     # A run that failed while it waited keeps its ask, and shows to its account.
@@ -380,7 +380,7 @@ async def test_a_waiting_review_that_names_an_approver_needs_the_approver_alone(
         kind=Summarize.kind,
         state="failed",
         input_gate="review",
-        input_request={**review, "approver_id": other.id},
+        input_request={**review, "approver": other.username},
         account_id=operator.id,
     )
 

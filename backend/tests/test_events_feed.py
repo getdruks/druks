@@ -50,37 +50,6 @@ async def test_feed_carries_what_a_row_is_worded_from(druks_db, druks_client):
     assert "kind" not in by_topic["summarized"]["payload"]
 
 
-async def test_feed_shows_the_approver_and_the_answerer_by_username(druks_db, druks_client):
-    paulo = await Account.get_or_create(druks_db, "paulo@example.com")
-    note = await Note.create(body="the pump ran hot")
-    review = {"subject": note.identity, "key": note.key, "app": "field_notes", "run": "wf1"}
-    await Event.emit(
-        druks_db,
-        type="workflow.parked",
-        facts={"input_request": {"presentation": "in_app", "approver_id": paulo.id}},
-        **review,
-    )
-    await Event.emit(
-        druks_db,
-        type="workflow.running",
-        facts={"result": {"action": "approve", "answered_by_id": paulo.id}},
-        **review,
-    )
-    await druks_db.flush()
-
-    items = (await druks_client.get("/api/events")).json()["items"]
-    by_topic = {row["topic"]: row["payload"] for row in items}
-
-    assert by_topic["workflow.parked"]["input_request"] == {
-        "presentation": "in_app",
-        "approver": "paulo@example.com",
-    }
-    assert by_topic["workflow.running"]["result"] == {
-        "action": "approve",
-        "answered_by": "paulo@example.com",
-    }
-
-
 async def test_every_subject_shows_itself(druks_db, druks_client):
     # A subject that declares a handle reads as it; one that doesn't reads by
     # identity. Either way it is snapshotted, so the row survives the row itself.

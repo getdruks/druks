@@ -250,15 +250,9 @@ async def validate_in_app_answer(
     # control flow. The answering account comes from the identity of the caller, never
     # from the client.
     account = await session.get(Account, account_id) if account_id else None
-    # A person whom Druks cannot name can still answer on the run's page, as the account
-    # that signed in.
-    link = None if account else run.get_link()
-    if approver_id := run.input_request.get("approver_id"):
-        if not run.is_answerable_by(account_id):
-            approver = await session.get(Account, approver_id)
-            raise AnswerNotAllowedError(
-                APPROVER_ONLY_MESSAGE.format(approver=approver.username), link=link
-            )
+    if approver := run.input_request.get("approver"):
+        if not (account and run.is_answerable_by(account)):
+            raise AnswerNotAllowedError(APPROVER_ONLY_MESSAGE.format(approver=approver))
     elif run.conversation_id:
         conversation = await session.get(Conversation, run.conversation_id)
         if not conversation.is_answerable_by(account_id):
@@ -272,7 +266,10 @@ async def validate_in_app_answer(
     app = get_app(workflow.app)
     # A person with no account is on no team.
     if await Team.exists_for_app(session, app) and not (account and await account.can_use_app(app)):
-        raise AnswerNotAllowedError(TEAM_ONLY_MESSAGE.format(app=app.name), link=link)
+        reason = TEAM_ONLY_MESSAGE.format(app=app.name)
+        if run_link := run.get_link():
+            reason += f" Open it in Druks: {run_link}"
+        raise AnswerNotAllowedError(reason)
     ask = await run.get_ask()
     offered = await get_offered_control(ask, control)
     if offered["note_required"] and not note.strip():
@@ -307,7 +304,7 @@ async def validate_in_app_answer(
         "action": control,
         "answers": answers,
         "note": note,
-        "answered_by_id": account_id or "",
+        "answered_by": account.username if account else "",
     }
 
 
@@ -416,11 +413,9 @@ async def respond_to_notification(
         raise AlreadyAcknowledgedError()
     await run.resume(**resume_payload)
     if notification.conversation_id:
-        # Only the chat's person answers in its thread, and the message says so.
-        answer = {key: value for key, value in resume_payload.items() if key != "answered_by_id"}
         await conversation.create_message(
             session,
-            CLICK_ANSWER_MESSAGE.format(run=run.id, answer=to_json(answer).decode()),
+            CLICK_ANSWER_MESSAGE.format(run=run.id, answer=to_json(resume_payload).decode()),
             is_internal=True,
         )
     return notification

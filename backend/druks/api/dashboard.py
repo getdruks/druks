@@ -76,13 +76,13 @@ async def get_overview(
     my_runs = (
         select(Run.id).join(Run.account).where((Account.id == account.id) | Account.is_default)
     )
-    # A waiting review that names an approver needs that account alone, whoever started
+    # A waiting ask that names an approver needs that account alone, whoever started
     # the run.
-    approver_id = current_runs.c.approver_id
+    approver = current_runs.c.approver
     is_mine = case(
         (
-            (current_runs.c.state == RunState.PARKED) & approver_id.is_not(None),
-            approver_id == account.id,
+            (current_runs.c.state == RunState.PARKED) & approver.is_not(None),
+            approver == account.username,
         ),
         else_=current_runs.c.run_id.in_(my_runs),
     )

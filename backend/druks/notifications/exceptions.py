@@ -16,10 +16,7 @@ class InvalidChoiceError(NotificationError):
 
 
 class AnswerNotAllowedError(NotificationError):
-    def __init__(self, reason: str, *, link: str | None = None) -> None:
-        if link:
-            reason = f"{reason} Open it in Druks: {link}"
-        super().__init__(reason)
+    pass
 
 
 class AlreadyAcknowledgedError(NotificationError):

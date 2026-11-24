@@ -28,7 +28,6 @@ from druks.notifications.services import (
     get_rendered_ask,
     respond_to_notification,
 )
-from druks.settings import configure_settings
 from druks.teams.models import Team
 from druks.testing import configure_app_for_test, make_settings, seed_dbos_status, seed_run
 from druks_field_notes.workflows import Summarize
@@ -366,13 +365,7 @@ async def test_respond_resumes_and_marks_acknowledged(druks_db, resume_spy):
     )
 
     assert resume_spy == [
-        {
-            "id": run.id,
-            "action": "approve",
-            "answers": {"q1": "a"},
-            "note": "",
-            "answered_by_id": "",
-        }
+        {"id": run.id, "action": "approve", "answers": {"q1": "a"}, "note": "", "answered_by": ""}
     ]
     assert (await druks_db.get(Notification, notification.id)).state == "acknowledged"
 
@@ -410,7 +403,7 @@ async def test_a_click_that_answers_in_a_thread_tells_the_chat(druks_db, resume_
             "action": "approve",
             "answers": {},
             "note": "",
-            "answered_by_id": run.account_id,
+            "answered_by": "op@example.com",
         }
     ]
     internal = await druks_db.scalars(
@@ -418,7 +411,7 @@ async def test_a_click_that_answers_in_a_thread_tells_the_chat(druks_db, resume_
             Message.conversation_id == run.conversation_id, Message.is_internal
         )
     )
-    answer = '{"action":"approve","answers":{},"note":""}'
+    answer = '{"action":"approve","answers":{},"note":"","answered_by":"op@example.com"}'
     assert list(internal) == [CLICK_ANSWER_MESSAGE.format(run=run.id, answer=answer)]
 
 
@@ -450,13 +443,13 @@ async def test_a_click_with_inputs_in_a_thread_answers_the_run_without_the_agent
             "action": "request_changes",
             "answers": {"note": "mysql", "why": "Because."},
             "note": "Use a queue.",
-            "answered_by_id": run.account_id,
+            "answered_by": "op@example.com",
         }
     ]
     assert notification.is_acknowledged
     answer = (
         '{"action":"request_changes","answers":{"note":"mysql","why":"Because."},'
-        '"note":"Use a queue."}'
+        '"note":"Use a queue.","answered_by":"op@example.com"}'
     )
     click = CLICK_ANSWER_MESSAGE.format(run=run.id, answer=answer)
     assert await _list_messages(druks_db, notification) == [(click, True, "pending")]
@@ -504,7 +497,7 @@ async def test_a_control_that_needs_a_note_takes_an_answer_when_the_review_takes
             "action": "request_changes",
             "answers": {"q1": "a"},
             "note": "",
-            "answered_by_id": "",
+            "answered_by": "",
         }
     ]
 
@@ -607,38 +600,6 @@ async def test_a_click_on_a_chat_question_is_the_person_s_next_message(druks_db,
     assert question.is_acknowledged
     assert await _list_messages(druks_db, question) == [("MySQL", False, "pending")]
     started.assert_awaited_once_with(deliver, question.conversation_id)
-
-
-async def test_a_refusal_gives_the_run_s_page_only_to_a_click_that_names_nobody(tmp_path, druks_db):
-    # A person with no linked account clicks as nobody, the approver too. That person can
-    # answer on the run's page.
-    configure_settings(make_settings(tmp_path, urls={"endpoint": "https://druks.example"}))
-    approver = await Account.get_or_create(druks_db, "paulo@example.com")
-    run, notification = await _parked_notification(
-        druks_db, ask={**_IN_APP_ASK, "approver_id": approver.id}
-    )
-
-    with pytest.raises(AnswerNotAllowedError) as unnamed:
-        await respond_to_notification(
-            druks_db,
-            notification.correlation_token,
-            {"control": "approve"},
-            user_id="U7",
-            account_id=None,
-        )
-    with pytest.raises(AnswerNotAllowedError) as named:
-        await respond_to_notification(
-            druks_db,
-            notification.correlation_token,
-            {"control": "approve"},
-            user_id="U7",
-            account_id=run.account_id,
-        )
-
-    assert str(named.value) == "Only paulo@example.com can answer this run."
-    assert str(unnamed.value) == (
-        f"{named.value} Open it in Druks: https://druks.example/runs/{run.id}"
-    )
 
 
 async def test_a_link_answers_no_chat_question(druks_db, started):
@@ -880,7 +841,7 @@ async def test_the_respond_route_takes_answers_without_a_note(tmp_path, druks_db
             "action": "request_changes",
             "answers": {"q1": "a"},
             "note": "",
-            "answered_by_id": "",
+            "answered_by": "",
         }
     ]
 

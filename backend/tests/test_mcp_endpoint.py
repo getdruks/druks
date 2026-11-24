@@ -604,7 +604,7 @@ async def test_gate_cycle_reads_answers_and_reports_stale_rounds(
                 "action": "approve",
                 "answers": {},
                 "note": "",
-                "answered_by_id": run.account_id,
+                "answered_by": "op@example.com",
             }
         ]
 

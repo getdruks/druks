@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, Literal
 from sqlalchemy import Engine
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from druks.accounts.models import Account
 from druks.database import session_scope
 from druks.durable.activity import get_run_phase, get_run_phase_ends_at
 from druks.durable.exceptions import AgentCallNotFound
@@ -185,16 +184,12 @@ async def _timeline(runs: list[Run]) -> list[RunResponse]:
 async def read_ask(session: AsyncSession, run: Run) -> dict:
     """The ask that ``run`` is parked on, as Druks shows it. The run's app reads an ask
     whose context holds blocks, so that each status in them holds where the work on its
-    subject stands at this read. The approver of an ask shows as their username."""
+    subject stands at this read."""
     match run.input_request:
         # A context of text holds no blocks, and an ask with no blocks needs no app.
         case {"presentation": "in_app", "context": [_, *_]}:
-            ask = await get_app(run.app).read_ask(session, run)
-        case _:
-            ask = await run.get_ask()
-    if approver_id := ask.pop("approver_id", None):
-        ask["approver"] = (await session.get(Account, approver_id)).username
-    return ask
+            return await get_app(run.app).read_ask(session, run)
+    return await run.get_ask()
 
 
 async def get_run_response(run: Run) -> RunResponse:
