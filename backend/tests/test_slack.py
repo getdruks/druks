@@ -8,7 +8,9 @@ from urllib.parse import parse_qsl, urlparse
 import druks.chat.channels.slack.subscribers  # noqa: F401 — the webhook publishes to it
 import httpx
 import pytest
-from conftest import bind_ambient_session, install_service
+from aiohttp import web
+from aiohttp.test_utils import TestServer
+from conftest import Answer, bind_ambient_session, install_service
 from druks import ui
 from druks.accounts.models import Account, PersonalAccessToken
 from druks.agents.constants import PRIVATE_AGENT_MESSAGE
@@ -42,6 +44,7 @@ from druks.webhooks.router import match_webhook
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 from slack_sdk.errors import SlackApiError
+from slack_sdk.http_retry import BackoffRetryIntervalCalculator
 
 SLACK_AUDIENCE = Audience.service("slack")
 AUTHORITY = "https://slack.com/T1"
@@ -49,49 +52,36 @@ ANA = "U100"
 BOT = "U900"
 
 
+async def install_slack(druks_db, **grant) -> VaultSecret:
+    """The Slack install of the Acme workspace, with ``grant`` such as its scopes."""
+    bind_ambient_session(druks_db)
+    row = await install_service(
+        "slack",
+        access_token="xoxb-1",
+        identity={
+            "client_id": "c1",
+            "team": "Acme",
+            "team_id": "T1",
+            "bot_name": "druks",
+            "bot_user_id": BOT,
+        },
+        secrets={"client_secret": "cs", "signing_secret": "ss"},
+        **grant,
+    )
+    await druks_db.commit()
+    return row
+
+
 @pytest.fixture
 async def card(druks_db):
-    bind_ambient_session(druks_db)
-    row = await install_service(
-        "slack",
-        access_token="xoxb-1",
-        identity={
-            "client_id": "c1",
-            "team": "Acme",
-            "team_id": "T1",
-            "bot_name": "druks",
-            "bot_user_id": BOT,
-        },
-        secrets={"client_secret": "cs", "signing_secret": "ss"},
-    )
-    await druks_db.commit()
-    return row
-
-
-@pytest.fixture
-async def card_with_names(druks_db):
-    """The install after the workspace approved the app's custom names."""
-    bind_ambient_session(druks_db)
-    row = await install_service(
-        "slack",
-        access_token="xoxb-1",
-        identity={
-            "client_id": "c1",
-            "team": "Acme",
-            "team_id": "T1",
-            "bot_name": "druks",
-            "bot_user_id": BOT,
-        },
-        secrets={"client_secret": "cs", "signing_secret": "ss"},
-        scopes=("chat:write", "chat:write.customize"),
-    )
-    await druks_db.commit()
-    return row
+    return await install_slack(druks_db)
 
 
 @pytest.fixture
 def slack(monkeypatch):
-    """Slack's Web API, answered locally. Records each call's method and arguments."""
+    """Answer Slack's Web API and its upload host locally. Record each call's method and
+    arguments, and record an upload of bytes as POST, with its address and bytes. Slack
+    names each uploaded file F1."""
     calls = []
 
     async def api_call(client, api_method, *, params=None, json=None, **request):
@@ -101,9 +91,18 @@ def slack(monkeypatch):
             channel="D1",
             ts=f"{len(calls)}.0",
             bot={"id": "B500", "name": "Support form"},
+            file_id="F1",
+            upload_url="https://files.slack.example/upload/F1",
+            files=[{"id": "F1"}],
         )
 
+    async def upload_file(client, *, url, data, **request):
+        calls.append(("POST", {"url": url, "data": data}))
+        return SimpleNamespace(status=200, body="")
+
     monkeypatch.setattr(SlackClient, "api_call", api_call)
+    # The SDK sends the bytes of an upload to the address that Slack gives, not by api_call.
+    monkeypatch.setattr(SlackClient, "_upload_file", upload_file)
     return calls
 
 
@@ -284,8 +283,10 @@ FACTS = [
 @pytest.mark.usefixtures("tmp_data_dir")
 @pytest.mark.parametrize("blocks", [None, FACTS], ids=["text", "blocks"])
 async def test_an_agents_reply_shows_its_name_and_picture_and_the_bots_shows_neither(
-    card_with_names, druks_db, slack, blocks
+    druks_db, slack, blocks
 ):
+    # The workspace approved the app's custom names.
+    card = await install_slack(druks_db, scopes=("chat:write", "chat:write.customize"))
     ana = await Account.get_or_create(druks_db, "ana@example.com")
     agent = await create_agent(druks_db, ana, "Security engineer")
     picture = await File.create(
@@ -306,8 +307,8 @@ async def test_an_agents_reply_shows_its_name_and_picture_and_the_bots_shows_nei
         picture=picture.id,
     )
 
-    await reply_in_slack(druks_db, card_with_names, ana, agent.id, blocks=blocks)
-    await reply_in_slack(druks_db, card_with_names, ana, None, blocks=blocks)
+    await reply_in_slack(druks_db, card, ana, agent.id, blocks=blocks)
+    await reply_in_slack(druks_db, card, ana, None, blocks=blocks)
 
     assert [(sent.get("username"), sent.get("icon_url")) for _, sent in slack] == [
         ("Security engineer", f"{get_settings().urls.webhook_base}/media/{picture.id}"),
@@ -345,6 +346,32 @@ async def test_a_reply_with_blocks_goes_out_as_one_message_of_its_text_and_slack
     assert (reply.reply_to, reply.blocks) == (message.id, FACTS)
     # The blocks answer the person, so Druks does not ask the agent again.
     assert not await conversation.get_unanswered_message(druks_db)
+
+
+@pytest.mark.usefixtures("tmp_data_dir")
+async def test_a_reply_shows_a_druks_image_of_its_blocks_as_the_slack_file_it_uploads(
+    card, druks_db, slack
+):
+    ana = await Account.get_or_create(druks_db, "ana@example.com")
+    rack = await File.create(
+        name="rack.png",
+        content_type="image/png",
+        content=b"png bytes",
+        app="chat",
+        uploaded_by=None,
+    )
+    image = ui.Image(url=rack.url, alternative_text="Rack 3.")
+
+    await reply_in_slack(
+        druks_db, card, ana, None, blocks=[image.model_dump(mode="json", by_alias=True)]
+    )
+
+    *_, (method, post) = slack
+    assert method == "chat.postMessage"
+    assert post["blocks"] == [
+        {"type": "markdown", "text": "Done"},
+        {"type": "image", "slack_file": {"id": "F1"}, "alt_text": "Rack 3."},
+    ]
 
 
 async def test_an_agents_reply_comes_from_the_app_until_the_workspace_approves_names(
@@ -393,10 +420,9 @@ async def test_delivery_reacts_with_eyes_to_each_message_from_slack(
     assert failures == [messages[0].id]
 
 
-@pytest.fixture
-def slack_oauth(monkeypatch):
-    """Slack's token endpoint and ``auth.test``, answered locally for Ana's consent."""
-
+async def test_connect_slack_asks_for_user_scopes_and_keeps_the_token_from_authed_user(
+    card, druks_db, tmp_path, monkeypatch
+):
     def token_endpoint(request: httpx.Request) -> httpx.Response:
         exchange = dict(parse_qsl(request.content.decode()))
         assert exchange["client_id"] == "c1"
@@ -414,11 +440,6 @@ def slack_oauth(monkeypatch):
         lambda: httpx.AsyncClient(transport=httpx.MockTransport(token_endpoint)),
     )
     monkeypatch.setattr(SlackClient, "auth_test", auth_test)
-
-
-async def test_connect_slack_asks_for_user_scopes_and_keeps_the_token_from_authed_user(
-    card, druks_db, tmp_path, slack_oauth
-):
     await close_client()
     settings = make_settings(tmp_path, urls={"endpoint": "https://druks.example"})
     with TestClient(configure_app_for_test(settings=settings)) as client:
@@ -474,7 +495,7 @@ def test_the_manifest_sends_button_clicks_to_the_interactivity_webhook():
     interactivity = Slack.get_manifest()["settings"]["interactivity"]
 
     path = urlparse(interactivity["request_url"]).path.removeprefix("/_external/")
-    assert interactivity["is_enabled"] is True
+    assert interactivity["is_enabled"]
     assert match_webhook(path)[0] is SlackInteractivity
 
 
@@ -482,23 +503,8 @@ def room_event(user=ANA, text=f"<@{BOT}> read my runs", ts="10.0", channel="C1",
     return message_event(user, text, ts, channel=channel, channel_type="channel", **event)
 
 
-class Answer(dict):
-    """One page of a Slack answer, which iterates over itself and holds its data as the
-    SDK's does."""
-
-    @property
-    def data(self) -> dict:
-        return self
-
-    def __aiter__(self):
-        return self.pages()
-
-    async def pages(self):
-        yield self
-
-
 def thread_reads(monkeypatch, messages):
-    """``conversations.replies`` and ``users.info``, answered locally. Records each read."""
+    """Answer ``conversations.replies`` and ``users.info`` locally, and record each read."""
     names = {ANA: "Ana", BOT: "Druks", "U200": "Ben"}
     reads = []
 
@@ -526,6 +532,14 @@ async def thread_conversation(session, card, account, *, thread_id="C1:10.0", ag
         thread_id=thread_id,
         agent_id=agent_id,
     )
+
+
+def conversation_api(tmp_path, path: str, route, **options) -> FastAPI:
+    """An API that serves ``route`` at ``path`` to a caller that names its conversation."""
+    configure_app_for_test(settings=make_settings(tmp_path), authenticated=False)
+    api = FastAPI(dependencies=[Depends(request_session)])
+    api.add_api_route(path, route, dependencies=[Depends(current_conversation)], **options)
+    return api
 
 
 async def test_each_person_who_tags_the_bot_gets_their_own_conversation_for_the_thread(
@@ -926,7 +940,7 @@ async def test_the_bot_welcomes_a_room_when_it_joins_and_ignores_other_joins(car
 
 
 async def test_the_agent_reads_its_thread_and_knows_who_wrote_what(card, druks_db, monkeypatch):
-    """Ben's agent answers in the same thread as the same bot: only the replies this
+    """Ben's agent answers in the same thread as the same bot: only the replies that this
     conversation recorded are the agent's own. A reply that asked posted as its
     question's message. The tool lists each file on a message by its id."""
     ana = await Account.get_or_create(druks_db, "ana@example.com")
@@ -1065,11 +1079,7 @@ async def test_the_agent_reads_an_alerts_attachments_and_blocks_as_text(
 async def test_chat_read_thread_reads_the_callers_own_conversation(
     card, druks_db, tmp_path, monkeypatch
 ):
-    configure_app_for_test(settings=make_settings(tmp_path), authenticated=False)
-    api = FastAPI(dependencies=[Depends(request_session)])
-    api.add_api_route(
-        "/thread", read_thread, methods=["GET"], dependencies=[Depends(current_conversation)]
-    )
+    api = conversation_api(tmp_path, "/thread", read_thread, methods=["GET"])
     ana = await Account.get_or_create(druks_db, "ana@example.com")
     thread_reads(monkeypatch, [{"ts": "10.0", "user": ANA, "text": "hi"}])
     conversation = await thread_conversation(druks_db, card, ana)
@@ -1097,16 +1107,10 @@ async def test_chat_read_thread_reads_the_callers_own_conversation(
 async def test_chat_read_file_puts_a_thread_file_in_the_agents_workspace(
     card, druks_db, tmp_path, monkeypatch
 ):
-    """The tool fetches the file from Slack once Slack confirms it is shared where the
-    thread lives, and uploads it to the conversation's folder in the caller's sandbox."""
-    configure_app_for_test(settings=make_settings(tmp_path), authenticated=False)
-    api = FastAPI(dependencies=[Depends(request_session)])
-    api.add_api_route(
-        "/thread/files/{file_id}",
-        read_file,
-        methods=["GET"],
-        dependencies=[Depends(current_conversation)],
-    )
+    """The tool fetches the file from Slack once Slack confirms that it is shared where the
+    thread lives. The tool then uploads it to the conversation's folder in the caller's
+    sandbox."""
+    api = conversation_api(tmp_path, "/thread/files/{file_id}", read_file, methods=["GET"])
     rooms = {"F1": ["C1"], "F2": ["C2"]}
 
     async def api_call(client, api_method, *, params=None, json=None, **request):
@@ -1143,14 +1147,7 @@ async def test_chat_read_file_answers_502_when_the_upload_to_the_sandbox_fails(
     card, druks_db, tmp_path, monkeypatch
 ):
     """A failed upload answers which file failed and why, not a bare 500."""
-    configure_app_for_test(settings=make_settings(tmp_path), authenticated=False)
-    api = FastAPI(dependencies=[Depends(request_session)])
-    api.add_api_route(
-        "/thread/files/{file_id}",
-        read_file,
-        methods=["GET"],
-        dependencies=[Depends(current_conversation)],
-    )
+    api = conversation_api(tmp_path, "/thread/files/{file_id}", read_file, methods=["GET"])
 
     async def api_call(client, api_method, *, params=None, json=None, **request):
         shared = {**shared_file(params["file"]), "channels": ["C1"], "groups": []}
@@ -1178,15 +1175,7 @@ async def test_chat_read_file_answers_502_when_the_upload_to_the_sandbox_fails(
 async def test_a_person_who_requires_a_tag_is_answered_only_when_they_tag(
     card, druks_db, slack, delivery, tmp_path
 ):
-    configure_app_for_test(settings=make_settings(tmp_path), authenticated=False)
-    api = FastAPI(dependencies=[Depends(request_session)])
-    api.add_api_route(
-        "/thread/tag",
-        require_tag,
-        methods=["PUT"],
-        status_code=204,
-        dependencies=[Depends(current_conversation)],
-    )
+    api = conversation_api(tmp_path, "/thread/tag", require_tag, methods=["PUT"], status_code=204)
     ana = await Account.get_or_create(druks_db, "ana@example.com")
     await link_person(druks_db, ana)
     await receive(room_event())
@@ -1283,3 +1272,31 @@ async def test_a_file_a_linked_person_sends_is_a_druks_file_on_their_message(
     ]
     assert {token for token, _ in downloads} == {"xoxb-1"}
     assert delivery.await_count == 2
+
+
+async def test_the_client_posts_a_message_again_when_slack_still_scans_its_file(monkeypatch):
+    # The test waits no time before the second post.
+    monkeypatch.setattr(BackoffRetryIntervalCalculator, "calculate_sleep_duration", lambda *_: 0)
+    # The SDK sends a message again inside its HTTP call. A local server thus stands in for Slack.
+    answers = iter(
+        [
+            {
+                "ok": False,
+                "error": "invalid_blocks",
+                "errors": ["invalid slack file [json-pointer:/blocks/0/slack_file.id/slack_file]"],
+            },
+            {"ok": True, "channel": "C1", "ts": "1.0"},
+        ]
+    )
+
+    async def post_message(request):
+        return web.json_response(next(answers))
+
+    api = web.Application()
+    api.router.add_post("/chat.postMessage", post_message)
+    async with TestServer(api) as server:
+        client = SlackClient(token="xoxb-1")
+        client.base_url = str(server.make_url("/"))
+        posted = await client.chat_postMessage(channel="C1", text="Rack 3.")
+
+    assert posted["ts"] == "1.0"

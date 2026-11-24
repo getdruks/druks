@@ -90,7 +90,7 @@ def test_a_markdown_text_area_stays_source_on_the_wire():
     (block,) = wire(
         Form(
             action=Action(label="Save", operation="write_note"),
-            fields=[TextAreaField(name="body", label="Note", markdown=True, rows=8)],
+            fields=[TextAreaField(name="body", label="Note", is_markdown=True, rows=8)],
         )
     )
 
@@ -104,7 +104,7 @@ def test_a_markdown_text_area_stays_source_on_the_wire():
             "helpText": "",
             "isRequired": False,
             "rows": 8,
-            "markdown": True,
+            "isMarkdown": True,
         }
     ]
 

@@ -64,9 +64,8 @@ async def _hydrate_file(session, monkeypatch, *, name="home.png", content=b"imag
     return output.shots[0].image
 
 
-async def test_create_stores_an_upload_against_its_account(druks_db):
-    """File.create stores the bytes and the account that sent them."""
-
+async def test_create_stores_an_upload_and_its_record(druks_db):
+    """File.create stores the bytes of an upload, and a record with its app and digest."""
     file = await File.create(
         name="shopfront.jpg",
         content_type="image/jpeg",
@@ -88,7 +87,7 @@ async def test_create_stores_an_upload_against_its_account(druks_db):
         None,
     )
     assert record.sha256 == hashlib.sha256(b"jpeg bytes").hexdigest()
-    assert await file.open() == b"jpeg bytes"
+    assert await file.read_bytes() == b"jpeg bytes"
 
 
 async def test_create_refuses_an_oversized_upload(monkeypatch):
@@ -103,25 +102,6 @@ async def test_create_refuses_an_oversized_upload(monkeypatch):
             app="site_builder",
             uploaded_by=None,
         )
-
-
-async def test_uploaded_file_delete_and_reap(druks_db, tmp_path):
-    """The reaper removes the bytes of a deleted upload. Its tombstone stays."""
-    file = await File.create(
-        name="shopfront.jpg",
-        content_type="image/jpeg",
-        content=b"jpeg bytes",
-        app="site_builder",
-        uploaded_by=None,
-    )
-    await file.delete()
-    record = await druks_db.get(FileRecord, file.id)
-    record.deleted_at = Base.utc_now() - timedelta(days=2)
-    await druks_db.flush()
-
-    assert await reap_deleted_file_bytes(druks_db) == 1
-    assert await druks_db.get(FileRecord, file.id) is record
-    assert not LocalFileStorage(tmp_path / "files").path(file.id).exists()
 
 
 def test_file_contract_is_a_strict_nested_workspace_path():
@@ -148,7 +128,7 @@ async def test_hydration_pulls_and_stores_a_nested_file(druks_db, tmp_path, monk
     assert await druks_db.get(AgentCall, record.agent_call_id)
     assert not record.uploaded_by
     assert record.sha256 == hashlib.sha256(b"png bytes").hexdigest()
-    assert await file.open() == b"png bytes"
+    assert await file.read_bytes() == b"png bytes"
 
 
 async def test_a_deleted_agent_call_leaves_its_file_without_a_source(
@@ -163,7 +143,7 @@ async def test_a_deleted_agent_call_leaves_its_file_without_a_source(
     await druks_db.refresh(record)
 
     assert not record.agent_call_id
-    assert await file.open() == b"image"
+    assert await file.read_bytes() == b"image"
 
 
 async def test_an_upload_holds_its_uploader(druks_db):
@@ -188,7 +168,7 @@ async def test_an_upload_holds_its_uploader(druks_db):
 async def test_hydration_leaves_no_canonical_bytes_when_a_later_pull_fails(
     druks_db, tmp_path, monkeypatch
 ):
-    """A failed batch removes every staged byte before any canonical file exists."""
+    """A failed batch removes every staged byte before a canonical file exists."""
     workspace_files: list[File] = []
     SurveyOutput.model_validate(
         {
@@ -272,4 +252,4 @@ async def test_delete_and_reaper_leave_the_tombstone(druks_db, tmp_path, monkeyp
     assert reference.image.id == file.id
     assert not LocalFileStorage(tmp_path / "files").path(file.id).exists()
     with pytest.raises(FileUnavailableError, match="deleted or does not exist"):
-        await file.open()
+        await file.read_bytes()

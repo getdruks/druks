@@ -102,7 +102,7 @@ async def connect_anthropic_subscription(email: str) -> VaultSecret:
 
 
 async def connect_service(slug: str, *, identity: dict, secrets: dict) -> VaultSecret:
-    """Seed the vault row a finished connect flow would leave for a service."""
+    """Seed the vault row that a finished connect flow leaves for a service."""
     return await VaultSecret.store(
         db_session(),
         service_registry.get(slug).secret_kind,
@@ -120,8 +120,8 @@ async def install_service(
     secrets: dict | None = None,
     scopes: tuple[str, ...] = (),
 ) -> VaultSecret:
-    """Seed the rows a finished install would leave: the service's row and its own grant,
-    with the scopes the install granted."""
+    """Seed the rows that a finished install leaves: the service's row and its own grant,
+    with the scopes that the install granted."""
     row = await connect_service(slug, identity=identity, secrets=secrets or {})
     await VaultSecret.connect(
         db_session(),
@@ -143,7 +143,8 @@ async def installation_key() -> VaultSecret:
 
 def capture_spans(settings: Settings) -> Callable[[], tuple[ReadableSpan, ...]]:
     """Trace into memory, through the privacy boundary of a real installation, until
-    reset_tracing(). The reader returns the spans that would leave the process."""
+    reset_tracing(). The reader returns the spans that a real installation sends out of the
+    process."""
     exporter = InMemorySpanExporter()
     # The exporter in memory takes the place of the collector that the endpoint names.
     traces = Traces(endpoint="https://collector.example.com/v1/traces")
@@ -169,8 +170,8 @@ def reset_tracing() -> None:
 
 @pytest.fixture
 def declared_services():
-    # Service subclasses self-register at class definition; tests declare
-    # inside this fixture and leave the registry as found.
+    # A Service subclass registers itself when Python defines it. A test declares its
+    # services inside this fixture and leaves the registry as found.
     saved = dict(service_registry._items)
     yield
     service_registry._items.clear()
@@ -199,9 +200,9 @@ async def _redis(druks_redis):
 
 @pytest.fixture(autouse=True)
 def _no_durable_dispatch(request, monkeypatch):
-    # Routes start durable work and agent runs push/read a DBOS phase event;
-    # tests that don't stand up DBOS get a no-op so those calls don't reach an
-    # engine that isn't there. The *_durable tests run the real engine.
+    # Routes start durable work, and agent runs push and read a DBOS phase event. A
+    # test that runs no DBOS engine gets a no-op for each of those calls. The *_durable
+    # tests run the real engine.
     if "durable" in request.module.__name__:
         return
 
@@ -212,8 +213,8 @@ def _no_durable_dispatch(request, monkeypatch):
         pass
 
     async def _dbos_cancel(workflow_id: str) -> None:
-        # DBOS's half of Run.cancel(): without a launched engine the real call
-        # raises, and derived state needs the terminal status it would write.
+        # DBOS's half of Run.cancel(). Without a launched engine, the real call raises. The
+        # derived state needs the terminal status that the real call writes.
         await db_session().execute(
             update(workflow_status)
             .where(workflow_status.c.workflow_uuid == workflow_id)
@@ -234,7 +235,7 @@ def _no_durable_dispatch(request, monkeypatch):
 @pytest.fixture(scope="session", autouse=True)
 def _reset_test_database():
     # The repository suite owns its scratch database and starts from a clean
-    # application and DBOS schema; the shipped fixtures never destroy schemas. This
+    # application and DBOS schema. The shipped fixtures never destroy schemas. This
     # runs before any test, so the shipped session fixture builds onto the fresh one.
     engine = create_engine_from_url(TEST_DATABASE_URL)
     with engine.connect() as connection:
@@ -248,9 +249,9 @@ def _reset_test_database():
 
 @pytest.fixture
 def registry_state():
-    # Catalog loads and test registrations mutate the process-global MCP
-    # registry; snapshot and restore so a test's entries don't leak into the
-    # rest of the suite.
+    # Catalog loads and test registrations change the MCP registry of the process. The
+    # fixture restores it, so the entries of a test do not leak into the rest of the
+    # suite.
     saved = dict(mcp_server_registry._items)
     yield
     mcp_server_registry._items.clear()
@@ -258,8 +259,8 @@ def registry_state():
 
 
 def snapshot_apps() -> Callable[[], None]:
-    # An App class files itself, with what it declares, when Python defines it. A
-    # test that defines one calls what this returns, and the apps are as found.
+    # An App class files itself, with what it declares, when Python defines it. A test
+    # that defines one calls the returned function, and the apps are then as found.
     classes, packages = dict(_app_classes), dict(_app_packages)
 
     def restore() -> None:
@@ -279,12 +280,12 @@ def declared_apps():
     restore()
 
 
-# These modules manage their own engine + database and commit for real — the DBOS
-# durable tests (their own per-test database + worker connections that read across
-# the commit) and the alembic migration test (its own AUTOCOMMIT engine, DDL it
-# drops itself). The rollback model would hide or never see their writes, so they
-# opt out and reset themselves. Everything else — including the durable *unit*
-# tests that use the fixtures here — gets transaction rollback.
+# These modules manage their own engine and database, and commit for real. Each DBOS
+# durable test has its own database, with worker connections that read across the
+# commit. The alembic migration test has its own AUTOCOMMIT engine and drops the DDL
+# that it makes. The rollback model hides their writes, or does not see them, so they
+# opt out and reset themselves. Every other module gets transaction rollback, the
+# durable unit tests that use the fixtures here included.
 _OWN_DATABASE_MODULES = {
     "test_durable_sdk",
     "test_notifications_durable",
@@ -315,11 +316,11 @@ def _reset_app_overrides():
 
 @pytest.fixture(autouse=True)
 def _no_druks_namespace_fetches(monkeypatch):
-    """Default every ``.druks`` namespace fetch to 404. ``render_prompt``
-    with a ``repo`` (and app-config resolution) would otherwise hit
-    GitHub, which needs App creds tests don't have — prompts fall back to
-    bundled templates, configs to their model defaults. Tests that
-    exercise the override/config path patch ``fetch_file`` themselves."""
+    """Answer every fetch from a ``.druks`` namespace with no file, as a 404 does.
+    Without the fixture, ``render_prompt`` with a ``repo`` and the read of an app's config
+    call GitHub, which needs App credentials that tests do not have. Prompts then use the
+    bundled templates, and configs use their model defaults. A test of the override or
+    config path patches ``fetch_file`` itself."""
 
     async def _none(**_kwargs):
         return None
@@ -344,27 +345,35 @@ def bind_ambient_session(session) -> None:
     db_session.registry.set(session)
 
 
+def set_endpoint(endpoint: str) -> None:
+    """Give the installation the address ``endpoint``."""
+    settings = get_settings()
+    urls = settings.urls.model_copy(update={"endpoint": endpoint})
+    configure_settings(settings.model_copy(update={"urls": urls}))
+
+
 def make_jwt(claims: dict) -> str:
-    """An unsigned JWT carrying ``claims``; the providers read claims without a signature check."""
+    """An unsigned JWT that carries ``claims``. The providers read claims with no signature
+    check."""
     header = base64.urlsafe_b64encode(b'{"alg":"none"}').rstrip(b"=").decode()
     payload = base64.urlsafe_b64encode(json.dumps(claims).encode()).rstrip(b"=").decode()
     return f"{header}.{payload}.sig"
 
 
 async def connect_provider(
-    provider_cls,
+    provider,
     payload: dict,
     *,
     provider_email: str = "op@example.com",
     refresh_token_expires_at: datetime | None = None,
 ):
-    """Seed the vault row a finished OAuth connect flow would leave for a subscription."""
+    """Seed the vault row that a finished OAuth connect flow leaves for a subscription."""
     account = await Account.get_or_create(db_session(), provider_email)
-    _, expires_at = provider_cls._refresh_state(payload)
+    _, expires_at = provider._refresh_state(payload)
     return await VaultSecret.store(
         db_session(),
         SecretKind.SUBSCRIPTION,
-        Audience.provider(provider_cls.id),
+        Audience.provider(provider.id),
         account_id=account.id,
         secrets=payload,
         identity={"email": provider_email},
@@ -374,8 +383,8 @@ async def connect_provider(
 
 
 def make_agent_result(output, *, agent="agent", error=None, cost_usd=None, cost_metadata=None):
-    # An AgentResult to return from a faked run_agent, so the agent call records/parses it.
-    # Status follows the error, as the sandbox does it — a failed result always says why.
+    # An AgentResult that a faked run_agent returns, so the agent call records and parses it.
+    # The status follows the error, as in the sandbox: a failed result always says why.
     return AgentResult(
         output=output,
         run_id="run-test",
@@ -391,7 +400,7 @@ def make_agent_result(output, *, agent="agent", error=None, cost_usd=None, cost_
 
 
 async def finish_agent_run(call, *, status=None, last_error=None):
-    # Mark a seeded AgentCall finished (prod builds finished rows via AgentCall.record).
+    # Mark a seeded AgentCall finished. In production, AgentCall.record builds the finished row.
     call.status = (status or AgentCallStatus.SUCCEEDED).value
     call.last_error = last_error
     call.finished_at = Base.utc_now()
@@ -400,13 +409,13 @@ async def finish_agent_run(call, *, status=None, last_error=None):
 
 
 async def make_test_note(body: str = "a note"):
-    """The platform suite's subject. It belongs to the proof app, not to software_factory —
-    platform behavior must hold for any app's rows."""
+    """The platform suite's subject. It belongs to the proof app, not to software_factory,
+    because the behavior of the platform must hold for the rows of any app."""
     return await Note.create(body=body)
 
 
 async def seed_note_run(session, *, note=None, state: str = "running", **kwargs):
-    """A run on a note, seeding one if the caller has none."""
+    """A run on a note. The function seeds a note when the caller gives none."""
     subject = note or await make_test_note()
     return await seed_run(session, kind=Summarize.kind, subject=subject, state=state, **kwargs)
 
@@ -441,7 +450,22 @@ async def summarize(druks_db, direct_steps):
 
 
 async def seed_note_agent_run(*, agent: str = "implement", model: str = "openai/gpt-5.5", **kwargs):
-    """A run on a fresh note with one agent call on it — the call is what the caller wants."""
+    """The one agent call of a run on a new note."""
     session = db_session()
     run = await seed_note_run(session, **kwargs)
     return await seed_call(session, run, agent, status="running", model=model)
+
+
+class Answer(dict):
+    """One page of a Slack answer, which iterates over itself and holds its data as the
+    SDK's does."""
+
+    @property
+    def data(self) -> dict:
+        return self
+
+    def __aiter__(self):
+        return self.pages()
+
+    async def pages(self):
+        yield self
