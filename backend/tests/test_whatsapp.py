@@ -815,8 +815,8 @@ async def test_the_bot_row_saves_and_resolves_like_an_agent_row(druks_db, druks_
     response = await druks_client.patch(
         "/api/settings/apps",
         json={
-            "agentEfforts": {"helpdesk.bot": "low"},
-            "agentTimeouts": {"helpdesk.bot": 120},
+            "instructionEfforts": {"helpdesk.bot": "low"},
+            "instructionTimeouts": {"helpdesk.bot": 120},
         },
     )
 
@@ -828,8 +828,8 @@ async def test_the_bot_row_saves_and_resolves_like_an_agent_row(druks_db, druks_
         settings=settings,
         overrides=await SettingsOverride.list_by_key(druks_db),
     )
-    assert (row.effort, row.effort_source) == ("low", "agent")
-    assert (row.timeout, row.timeout_source) == (120, "agent")
+    assert (row.effort, row.effort_source) == ("low", "override")
+    assert (row.timeout, row.timeout_source) == (120, "override")
 
 
 async def test_the_one_time_code_makes_its_sender_the_number_admin(druks_db, helpdesk):

@@ -686,20 +686,20 @@ function ResolvedInstructionRow({
           className="instructions-cell"
           style={{ '--fam': harnessColor[agent.harness] } as CSSProperties}
         >
-          {agent.harnessSource === 'agent' && <span className="ov-dot" />}
+          {agent.harnessSource === 'override' && <span className="ov-dot" />}
           {agent.harness}
         </span>
       </div>
-      <div>{cell(agent.model, agent.source === 'agent')}</div>
+      <div>{cell(agent.model, agent.source === 'override')}</div>
       <div>
         <span className={'instructions-cell' + (locked ? ' instructions-locked' : '')}>
-          {agent.billingSource === 'agent' && !locked && <span className="ov-dot" />}
+          {agent.billingSource === 'override' && !locked && <span className="ov-dot" />}
           {billingLabel(agent.billing)}
           {locked && ' ⚬'}
         </span>
       </div>
-      <div>{cell(agent.effort, agent.effortSource === 'agent')}</div>
-      <div>{cell(agent.timeout + 's', agent.timeoutSource === 'agent')}</div>
+      <div>{cell(agent.effort, agent.effortSource === 'override')}</div>
+      <div>{cell(agent.timeout + 's', agent.timeoutSource === 'override')}</div>
     </div>
   )
 }
@@ -3618,34 +3618,34 @@ function AgentRecords({
     <div className="agent-records">
       {agents.map((agent) => {
         const harnessOverride = override(
-          edits.agentHarnesses,
+          edits.instructionHarnesses,
           agent.name,
-          agent.harnessSource === 'agent' ? agent.harness : null,
+          agent.harnessSource === 'override' ? agent.harness : null,
         )
         const harness = harnessOverride ?? defaults.defaultHarness
         const modelOverride = override(
-          edits.agentModels,
+          edits.instructionModels,
           agent.name,
-          agent.source === 'agent' ? agent.model : null,
+          agent.source === 'override' ? agent.model : null,
         )
         const model = modelOverride ?? defaults.defaultModel
         const locked = keyOnly(harnessByName[harness])
         const billingOverride = override(
-          edits.agentBillings,
+          edits.instructionBillings,
           agent.name,
-          agent.billingSource === 'agent' ? agent.billing : null,
+          agent.billingSource === 'override' ? agent.billing : null,
         )
         const billing: Billing = locked ? 'api_key' : (billingOverride ?? defaults.defaultBilling)
         const effortOverride = override(
-          edits.agentEfforts,
+          edits.instructionEfforts,
           agent.name,
-          agent.effortSource === 'agent' ? agent.effort : null,
+          agent.effortSource === 'override' ? agent.effort : null,
         )
         const effort = effortOverride ?? defaults.defaultEffort
         const timeoutOverride = override(
-          edits.agentTimeouts,
+          edits.instructionTimeouts,
           agent.name,
-          agent.timeoutSource === 'agent' ? agent.timeout : null,
+          agent.timeoutSource === 'override' ? agent.timeout : null,
         )
         const timeout =
           timeoutOverride ??
