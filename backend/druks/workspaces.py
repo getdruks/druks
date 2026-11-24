@@ -309,13 +309,20 @@ class RepoWorkspace(Workspace):
         await self.clone()
         return await self.host.exec(command, cwd=self.repo_path, timeout=timeout)
 
-    async def get_diff(self) -> str:
-        """The checkout's change since it left the default branch, untracked files included."""
+    async def get_diff(self, *, binary: bool = False) -> str:
+        """The checkout's changes since it diverged from the default branch,
+        including untracked files.
+
+        `binary` includes the contents of changed binary files so that
+        `git apply` can apply the diff to another checkout. By default,
+        binary content is omitted to keep the prompt small.
+        """
+        flags = "--binary " if binary else ""
         # A scratch index, so the agent's own index stays as it is.
         script = (
             'index=$(mktemp) && cp "$(git rev-parse --git-path index)" "$index" && '
             'GIT_INDEX_FILE="$index" git add --intent-to-add --all && '
-            'GIT_INDEX_FILE="$index" git diff "$(git merge-base HEAD origin/HEAD)"; '
+            f'GIT_INDEX_FILE="$index" git diff {flags}"$(git merge-base HEAD origin/HEAD)"; '
             'status=$?; rm -f "$index"; exit $status'
         )
         result = await self.host.exec(["sh", "-c", script], cwd=self.repo_path, timeout=60.0)
