@@ -47,7 +47,7 @@ async def prepare_sandbox_templates(
             continue
         print(f"{label}: building on {template.base_image}")
         started = time.monotonic()
-        template = await wait_for_build(sandbox, template)
+        template = await wait_for_build(template)
         if template.status != "available":
             raise TemplateUnavailable(
                 f"sandbox template {label} failed to build: {template.last_error}"
@@ -55,12 +55,29 @@ async def prepare_sandbox_templates(
         print(f"{label}: available after {time.monotonic() - started:.0f}s")
 
 
-async def wait_for_build(sandbox: Sandbox, template: SandboxTemplate) -> SandboxTemplate:
-    base_image = sandbox.get_base_image()
+async def wait_for_build(template: SandboxTemplate) -> SandboxTemplate:
     while template.status == "building":
         await asyncio.sleep(_TEMPLATE_POLL_SECONDS)
         template = await sandbox_client.get_template(
-            base_image=base_image, setup_script_hash=sandbox.setup_script_hash
+            base_image=template.base_image, setup_script_hash=template.setup_script_hash
+        )
+    return template
+
+
+async def build_template(sandbox: Sandbox, *, label: str) -> SandboxTemplate:
+    """The available template of the sandbox's script. A failed build raises."""
+    template = await sandbox_client.create_template(
+        setup_script=sandbox.read_setup_script().decode("utf-8"),
+        provider=sandbox.provider,
+        base_image=sandbox.get_base_image() or None,
+        label=label,
+    )
+    if template.status == "building":
+        await set_run_phase("sandbox_building")
+        template = await wait_for_build(template)
+    if template.status != "available":
+        raise TemplateUnavailable(
+            f"sandbox template {label} has status {template.status!r}: {template.last_error}"
         )
     return template
 
@@ -79,7 +96,7 @@ async def get_template_id(sandbox: Sandbox, *, wait: bool = True) -> str:
 
     if template.status == "building" and wait:
         await set_run_phase("sandbox_building")
-        template = await wait_for_build(sandbox, template)
+        template = await wait_for_build(template)
 
     if template.status == "available":
         return template.id

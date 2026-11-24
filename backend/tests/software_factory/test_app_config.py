@@ -52,6 +52,34 @@ class TestResolveAppConfig:
         with pytest.raises(AppConfigError, match="invalid software_factory config"):
             await RepoPolicy.resolve(REPO)
 
+    @pytest.mark.parametrize(
+        "setup", ["setup.sh", "/etc/setup.sh", ".druks/software_factory/../setup.sh"]
+    )
+    async def test_a_setup_script_outside_the_config_folder_fails_loudly(self, monkeypatch, setup):
+        """The folder is cleared on a push, so a change to the script rebuilds the template."""
+        _fake_fetch(
+            monkeypatch,
+            {
+                (REPO, ".druks/software_factory/config.yml"): (
+                    f"verification:\n  sandbox:\n    setup: {setup}\n"
+                )
+            },
+        )
+        with pytest.raises(AppConfigError, match="setup must be a path in"):
+            await RepoPolicy.resolve(REPO)
+
+    async def test_a_setup_script_in_the_config_folder_is_read(self, monkeypatch):
+        _fake_fetch(
+            monkeypatch,
+            {
+                (REPO, ".druks/software_factory/config.yml"): (
+                    "verification:\n  sandbox:\n    setup: .druks/software_factory/setup.sh\n"
+                )
+            },
+        )
+        policy = await RepoPolicy.resolve(REPO)
+        assert policy.verification.sandbox.setup == ".druks/software_factory/setup.sh"
+
     async def test_no_file_yields_defaults(self, monkeypatch):
         _fake_fetch(monkeypatch, {})
         policy = await RepoPolicy.resolve(REPO)
