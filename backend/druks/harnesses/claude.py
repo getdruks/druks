@@ -290,6 +290,10 @@ class ClaudeHarness(Harness):
                 entry: dict[str, object] = {"type": "http", "url": server.url}
                 if headers:
                     entry["headers"] = headers
+                if server.tool_timeout_seconds:
+                    # Claude Code aborts a call that is silent for a while, and a hard limit
+                    # per call. This key raises both for this server.
+                    entry["timeout"] = server.tool_timeout_seconds * 1000
                 entries[server.name] = entry
             return ("--mcp-config", json.dumps({"mcpServers": entries}))
         return ()

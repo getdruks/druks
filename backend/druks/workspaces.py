@@ -12,7 +12,7 @@ from druks.core.services import Github
 from druks.durable.engine import step_session
 from druks.durable.exceptions import WorkflowError
 from druks.mcp import models as mcp_models
-from druks.mcp.constants import TOKEN_ENV_PREFIX
+from druks.mcp.constants import DRUKS_SERVER_NAME, DRUKS_TOOL_TIMEOUT_SECONDS, TOKEN_ENV_PREFIX
 from druks.mcp.enums import Credential, IdentityMode, Toolkit
 from druks.mcp.exceptions import MissingGrantError, MissingTokenError
 from druks.mcp.helpers import get_bearer_token_env_var
@@ -51,6 +51,12 @@ class Workspace:
     @classmethod
     async def get_skills(cls, subject: Any) -> tuple[str, ...]:
         # The skills the box gets beside the enabled catalog; the manifest records them.
+        return ()
+
+    @classmethod
+    async def get_checks(cls, subject: Any) -> tuple[str, ...]:
+        # The commands an agent may run on another box through the run tool, each
+        # written as the agent passes it. Read from the subject alone. Base: none.
         return ()
 
     async def prepare(self) -> None:
@@ -157,7 +163,14 @@ class Workspace:
         for server in workspace_servers:
             variable = get_bearer_token_env_var(server.name)
             servers.append(
-                McpServer(name=server.name, url=server.url, bearer_token_env_var=variable)
+                McpServer(
+                    name=server.name,
+                    url=server.url,
+                    bearer_token_env_var=variable,
+                    tool_timeout_seconds=(
+                        DRUKS_TOOL_TIMEOUT_SECONDS if server.name == DRUKS_SERVER_NAME else None
+                    ),
+                )
             )
             if server.secret_id:
                 secret_id = server.secret_id
@@ -261,6 +274,10 @@ class RepoWorkspace(Workspace):
         ]
 
     @property
+    def repo_url(self) -> str:
+        return f"https://github.com/{self.subject.repo}"
+
+    @property
     def repo_path(self) -> str:
         return get_repo_root(self.host.ssh_username)
 
@@ -270,7 +287,7 @@ class RepoWorkspace(Workspace):
         ensure = functools.partial(
             checkout.ensure,
             self.host,
-            repo_url=f"https://github.com/{repo}",
+            repo_url=self.repo_url,
             ref=ref,
             target_path=self.repo_path,
         )
@@ -308,6 +325,19 @@ class RepoWorkspace(Workspace):
     async def exec(self, command: list[str], *, timeout: float) -> subprocess.CompletedProcess[str]:
         await self.clone()
         return await self.host.exec(command, cwd=self.repo_path, timeout=timeout)
+
+    async def get_base_commit(self) -> str:
+        """The commit the checkout's change starts from: where it left the default branch."""
+        result = await self.host.exec(
+            ["git", "merge-base", "HEAD", "origin/HEAD"], cwd=self.repo_path, timeout=30.0
+        )
+        if result.returncode:
+            raise ExecFailed(
+                f"failed to read the workspace base commit: "
+                f"exit={result.returncode} stderr={result.stderr.strip()}",
+                exit_code=result.returncode,
+            )
+        return result.stdout.strip()
 
     async def get_diff(self, *, binary: bool = False) -> str:
         """The checkout's changes since it diverged from the default branch,

@@ -139,6 +139,8 @@ class McpServer:
     headers: dict[str, str] = field(default_factory=dict)
     # Secret declared headers: header name -> the env var carrying its value.
     env_headers: dict[str, str] = field(default_factory=dict)
+    # How long the agent waits on one call to the server; None keeps the harness's own limit.
+    tool_timeout_seconds: int | None = None
 
     def get_request_headers(self) -> dict[str, str]:
         """The headers a request to the server carries, each secret one as a ${VAR} placeholder."""

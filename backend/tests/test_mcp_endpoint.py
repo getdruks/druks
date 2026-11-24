@@ -224,6 +224,7 @@ async def test_tools_list_pins_platform_and_app_tools(app, pat_token, mode):
         "chat_list_reminders",
         "chat_create_reminder",
         "chat_cancel_reminder",
+        "core_run_check",
         "software_factory_start",
         "software_factory_review",
     ]
