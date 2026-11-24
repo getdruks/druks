@@ -1195,8 +1195,10 @@ Druks sends these notifications:
   run's page. A run that a chat started reports its failure in that chat.
 - **Run waits for an answer.** A run with a subject, which no chat started, parked
   on a gate. For a gate that you answer in Druks, the notification has buttons
-  and a link to the run. A run that a chat started asks in that chat. Failure to
-  deliver the notification does not unpark or fail the run.
+  and a link to the run. A run that a chat started asks in that chat. A question
+  that names an [approver](writing-an-app.md#wait-for-input) notifies the approver
+  instead, also when another account's chat started the run. Failure to deliver
+  the notification does not unpark or fail the run.
 - **Status.** A workflow that no chat started, and that reports its status, keeps
   it in one message that Druks edits as the work goes on. See
   [Report status](writing-an-app.md#report-status).

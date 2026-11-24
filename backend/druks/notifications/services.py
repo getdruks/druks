@@ -17,6 +17,7 @@ from druks.durable.models import Artifact, Run
 from druks.durable.reads import read_ask
 from druks.exceptions import ObjectNotFound
 from druks.notifications.constants import (
+    APPROVER_ONLY_MESSAGE,
     NOTE_FIELD,
     NOTE_REQUIRED_MESSAGE,
     QUESTION_FIELD_PREFIX,
@@ -239,14 +240,20 @@ async def validate_in_app_answer(
     has_note_input: bool = False,
 ) -> dict:
     # The in-app answer contract, shared by the runs resume route, the answer_gate
-    # tool, and the respond path of notifications. Only the admin of an app's channel
-    # answers a question that a chat on that channel asked. Only the team and the admins
-    # answer a run of an app that a team lists.
+    # tool, and the respond path of notifications. Only the approver answers an ask
+    # that names one. Otherwise, only the admin of an app's channel answers a question
+    # that a chat on that channel asked. Only the team and the admins answer a run of an
+    # app that a team lists.
     #
     # The control must be one that the ask offered. The workflow owns the vocabulary.
     # Druks never reads it from the client. A spoofed control thus cannot change the
-    # control flow.
-    if run.conversation_id:
+    # control flow. The answering account comes from the identity of the caller, never
+    # from the client.
+    account = await session.get(Account, account_id) if account_id else None
+    if approver := run.input_request.get("approver"):
+        if not (account and run.is_answerable_by(account)):
+            raise AnswerNotAllowedError(APPROVER_ONLY_MESSAGE.format(approver=approver))
+    elif run.conversation_id:
         conversation = await session.get(Conversation, run.conversation_id)
         if not conversation.is_answerable_by(account_id):
             raise AnswerNotAllowedError(
@@ -258,13 +265,11 @@ async def validate_in_app_answer(
         raise ObjectNotFound("run", {"id": run.id})
     app = get_app(workflow.app)
     # A person with no account is on no team.
-    if await Team.exists_for_app(session, app):
-        account = await session.get(Account, account_id) if account_id else None
-        if not account or not await account.can_use_app(app):
-            reason = TEAM_ONLY_MESSAGE.format(app=app.name)
-            if run_link := run.get_link():
-                reason += f" Open it in Druks: {run_link}"
-            raise AnswerNotAllowedError(reason)
+    if await Team.exists_for_app(session, app) and not (account and await account.can_use_app(app)):
+        reason = TEAM_ONLY_MESSAGE.format(app=app.name)
+        if run_link := run.get_link():
+            reason += f" Open it in Druks: {run_link}"
+        raise AnswerNotAllowedError(reason)
     ask = await run.get_ask()
     offered = await get_offered_control(ask, control)
     if offered["note_required"] and not note.strip():
@@ -295,7 +300,12 @@ async def validate_in_app_answer(
                 f"The answer to {question_id!r} is blank. Write an answer, or remove the "
                 "question from the answers."
             )
-    return {"action": control, "answers": answers, "note": note}
+    return {
+        "action": control,
+        "answers": answers,
+        "note": note,
+        "answered_by": account.username if account else "",
+    }
 
 
 async def respond_to_notification(

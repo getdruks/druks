@@ -197,7 +197,10 @@ approve, request changes, or cancel. The owner system answers an external gate.
 If no notification arrived:
 
 - A run that a chat started asks in that chat. Any other run sends its notification to
-  the run's account. See [Notifications](configuration.md#notifications).
+  the run's account. A question that names an
+  [approver](writing-an-app.md#wait-for-input) sends its notification to the
+  approver instead, also when another account's chat started the run. See
+  [Notifications](configuration.md#notifications).
 - Read the notification through the API and examine its recorded delivery error.
   If the bot is not in the channel, invite it. If Slack finds no channel, check
   the channel ID.

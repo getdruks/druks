@@ -43,6 +43,15 @@ PARKED_MESSAGE = (
     "[Internal: Run {run} waits for an answer. The request:\n{request}\nTell the person "
     "what it waits for and where to answer it.]"
 )
+PARKED_FOR_APPROVER_MESSAGE = (
+    "[Internal: Run {run} waits for an answer from {approver}. Druks asked {approver}, and "
+    "only they can answer it. The request:\n{request}\nTell the person what the run waits "
+    "for, and that only {approver} can answer it.]"
+)
+PARKED_FOR_REVIEW_MESSAGE = (
+    "[Internal: Run {run} waits for a review by someone Druks asked. Tell the person that "
+    "the run waits for a review.]"
+)
 # The thread's buttons answer the run. A click that cannot carry the whole answer reaches
 # the agent as the person's message, so the agent asks for the rest.
 PARKED_BUTTONS_MESSAGE = (

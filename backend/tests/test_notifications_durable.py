@@ -104,7 +104,7 @@ def _build_park_flows():
     class InAppFlow(Workflow):
         subject = NotificationProbe
 
-        async def run_multistep(self) -> None:
+        async def run_multistep(self, approver: str = "") -> None:
             reply = await self.review(
                 questions=[
                     _Question(
@@ -112,7 +112,8 @@ def _build_park_flows():
                         prompt="Which database?",
                         options=[{"id": "postgres", "label": "Postgres"}],
                     )
-                ]
+                ],
+                approver=approver,
             )
             _REVIEW_REPLIES.append(reply)
 
@@ -226,6 +227,8 @@ async def rt():
                 9016,
                 9017,
                 9018,
+                9019,
+                9023,
             )
         )
         session.commit()
@@ -965,7 +968,7 @@ async def test_a_cancelled_run_closes_the_question_s_message(rt, deliver_spy):
     assert edit["outcome"] == CLOSED_MESSAGE
 
 
-async def _respond_in_own_session(rt, token, choice, *, user_id=None, **click):
+async def _respond_in_own_session(rt, token, choice, *, user_id=None, account_id=None, **click):
     # Each caller is its own task, so the scoped registry gives each its own
     # session — a real request-shaped transaction. (The HTTP layer itself is
     # pinned by the unit route tests; driving DBOS's send through a TestClient
@@ -974,7 +977,7 @@ async def _respond_in_own_session(rt, token, choice, *, user_id=None, **click):
     db_session.registry.set(session)
     try:
         await respond_to_notification(
-            session, token, choice, user_id=user_id, account_id=None, **click
+            session, token, choice, user_id=user_id, account_id=account_id, **click
         )
         await session.commit()
         return "ok"
@@ -1092,7 +1095,13 @@ async def test_a_slack_chat_s_review_offers_its_buttons_in_its_thread(rt, delive
     )
     assert clicked == "ok"
     await _wait_run(rt, workflow_id, lambda run: run.state == RunState.FINISHED)
-    reply = OperatorReply(action="request_changes", answers={"q1": "postgres"}, note="Use a queue.")
+    # The person of the chat answers as the chat's account.
+    reply = OperatorReply(
+        action="request_changes",
+        answers={"q1": "postgres"},
+        note="Use a queue.",
+        answered_by="op@example.com",
+    )
     assert reply in _REVIEW_REPLIES
     session = get_session(rt.engine)
     try:
@@ -1106,6 +1115,91 @@ async def test_a_slack_chat_s_review_offers_its_buttons_in_its_thread(rt, delive
         assert list(bodies) == []
     finally:
         await session.close()
+
+
+async def test_a_review_asks_its_approver_and_only_their_answer_resumes_it(rt, deliver_spy):
+    async def create():
+        await _install_slack()
+        approver = await Account.get_or_create(db_session(), "paulo@example.com")
+        await approver.update_preferences(notification_channel_id="C-paulo")
+        requester = await Account.get_default(db_session())
+        conversation = Conversation(
+            account_id=requester.id, source=ConversationSource.SLACK, user_id="U1"
+        )
+        db_session().add(conversation)
+        await db_session().flush()
+        return approver.id, requester.id, conversation.id
+
+    approver_id, requester_id, conversation_id = await _seed(rt, create)
+    reset = current_conversation_id.set(conversation_id)
+    try:
+        workflow_id = await rt.InAppFlow.start(
+            subject=NotificationProbe(id=9019), approver="Paulo@example.com"
+        )
+    finally:
+        current_conversation_id.reset(reset)
+
+    notification = await _wait_notification(rt, workflow_id, "delivered")
+    # The approver gets the question, and the requester's chat gets no buttons.
+    assert [row.id for row in await _notifications_for_run(rt, workflow_id)] == [notification.id]
+    assert notification.account_id == approver_id
+    (call,) = deliver_spy.calls
+    assert (call["channel"], call["actions"]) == ("C-paulo", notification.actions)
+    session = get_session(rt.engine)
+    try:
+        (told,) = await session.scalars(
+            select(Message.body).where(Message.conversation_id == conversation_id)
+        )
+    finally:
+        await session.close()
+    # The requester's chat hears the approver, as the account spells the name.
+    assert "paulo@example.com" in told
+
+    token = notification.correlation_token
+    by_requester = await _respond_in_own_session(
+        rt, token, {"control": "approve"}, user_id="U1", account_id=requester_id
+    )
+    by_approver = await _respond_in_own_session(
+        rt, token, {"control": "approve"}, user_id="U2", account_id=approver_id
+    )
+
+    assert (by_requester, by_approver) == ("AnswerNotAllowedError", "ok")
+    await _wait_run(rt, workflow_id, lambda run: run.state == RunState.FINISHED)
+    assert OperatorReply(action="approve", answered_by="paulo@example.com") in _REVIEW_REPLIES
+
+
+async def test_a_chat_of_the_approver_s_own_account_asks_in_the_chat(rt, deliver_spy):
+    async def create():
+        await _install_slack()
+        account = await Account.get_default(db_session())
+        conversation = Conversation(
+            account_id=account.id,
+            source=ConversationSource.SLACK,
+            user_id="U1",
+            thread_id="C9:1700000000.000900",
+        )
+        db_session().add(conversation)
+        await db_session().flush()
+        return account.username, conversation.id
+
+    username, conversation_id = await _seed(rt, create)
+    reset = current_conversation_id.set(conversation_id)
+    try:
+        workflow_id = await rt.InAppFlow.start(
+            subject=NotificationProbe(id=9023), approver=username
+        )
+    finally:
+        current_conversation_id.reset(reset)
+
+    notification = await _wait_notification(rt, workflow_id, "delivered")
+    # The thread's buttons answer as the approver, so the approver gets no second question.
+    assert [row.id for row in await _notifications_for_run(rt, workflow_id)] == [notification.id]
+    assert (notification.account_id, notification.conversation_id) == (None, conversation_id)
+    clicked = await _respond_in_own_session(
+        rt, notification.correlation_token, {"control": "approve"}, user_id="U1"
+    )
+    assert clicked == "ok"
+    await _wait_run(rt, workflow_id, lambda run: run.state == RunState.FINISHED)
 
 
 async def test_concurrent_responds_resolve_to_one_answer(rt, deliver_spy):
