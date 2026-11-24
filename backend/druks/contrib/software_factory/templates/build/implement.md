@@ -10,7 +10,8 @@ acceptance criterion — nothing more, nothing less.
   analogous endpoint, the similar model method, the matching test fixture. Find it, read it,
   match it. Diverge from established patterns only when the plan explicitly says to. Read a
   region with the Read tool and its line range, not a whole file with `cat`: a whole file is
-  re-processed on every turn. Read a library's source only when the plan depends on it.
+  re-processed on every turn. Read a library's source only when the plan depends on it. Request
+  reads that do not depend on each other in the same turn: each turn re-reads your whole context.
 - **Start from the change map.** When the plan ends with a `## Change map`, read the symbols
   it names with the Read tool and start there. Explore further only when the map is wrong, and
   say so in `known_risks`.

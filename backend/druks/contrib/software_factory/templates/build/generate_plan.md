@@ -18,7 +18,8 @@ request to your acceptance criteria. Wrong shape here compounds into every step 
   explore: over-reading costs money, under-reading costs a bad plan.
 - **Verify what the ticket claims.** A named call site may have moved or gone since it was
   written, so confirm each one at HEAD before you plan on it. Read the cited regions rather
-  than whole files — a whole file is re-processed on every turn.
+  than whole files — a whole file is re-processed on every turn. Request the regions that do not
+  depend on each other in the same turn.
 - **Preserve operator decisions verbatim; author none of your own.** Exact field shapes,
   endpoint contracts, template strings, and do/don't decisions stated in the description and
   especially operator refinement comments are binding — copy them into the plan as written.

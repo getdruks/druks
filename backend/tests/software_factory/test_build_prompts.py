@@ -119,6 +119,13 @@ async def test_generate_plan_prompt_asks_for_a_change_map_from_files_it_opened()
     assert "never by line range" in " ".join(prompt.split())
 
 
+async def test_generate_plan_prompt_asks_for_independent_reads_in_one_turn():
+    prompt = await _generate_plan_prompt()
+
+    flat = " ".join(prompt.split())
+    assert "Request the regions that do not depend on each other in the same turn" in flat
+
+
 async def test_implement_prompt_starts_from_the_plans_change_map():
     prompt = await render_prompt(
         "software_factory/build/implement.md",
@@ -251,6 +258,19 @@ async def test_implement_prompt_reads_regions_not_whole_files():
     flat = " ".join(prompt.split())
     assert "Read a region with the Read tool and its line range, not a whole file" in flat
     assert "only when the plan depends on it" in flat
+
+
+async def test_implement_prompt_asks_for_independent_reads_in_one_turn():
+    prompt = await render_prompt(
+        "software_factory/build/implement.md",
+        build=_build(),
+        verification="VERIFICATION-BLOCK",
+        workspace=_workspace(),
+        can_resume=False,
+    )
+
+    flat = " ".join(prompt.split())
+    assert "Request reads that do not depend on each other in the same turn" in flat
 
 
 async def test_implement_prompt_has_no_previous_round_on_the_first_round():
