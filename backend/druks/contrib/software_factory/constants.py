@@ -24,6 +24,19 @@ CI_TTL_SECONDS = 60 * 60
 # A webhook wakes the CI wait early. The poll catches a check that finished before the
 # wait began, and a delivery that never came.
 CI_POLL_SECONDS = 60
+# The lockfiles at a repo's root that the sandbox template is keyed on, so that a changed
+# dependency builds a new template.
+LOCKFILES = (
+    "uv.lock",
+    "poetry.lock",
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+    "Gemfile.lock",
+    "go.sum",
+    "Cargo.lock",
+    "composer.lock",
+)
 # A suite that passed or did not apply.
 CI_GREEN_CONCLUSIONS = frozenset({"success", "neutral", "skipped"})
 # A Linear issue in a state of these types is finished or dropped, so it blocks nothing.
