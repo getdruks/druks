@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from druks.apps.config import resolve_app_config
 from druks.prompts import render_prompt
@@ -18,6 +18,27 @@ class Gates(BaseModel):
     implementation_approval: GateValue | None = None
 
 
+SETUP_FOLDER = ".druks/software_factory/"
+
+
+class VerificationSandbox(BaseModel):
+    """The computer that a repo's checks run on."""
+
+    model_config = {"frozen": True, "extra": "forbid"}
+
+    # The script that builds the repo's template, a path in the repo's default branch. It
+    # sits in the config folder, so a push to it re-profiles the repo.
+    setup: str
+
+    @field_validator("setup")
+    @classmethod
+    def setup_is_in_the_config_folder(cls, setup: str) -> str:
+        in_folder = setup.startswith(SETUP_FOLDER) and not setup.endswith("/")
+        if not in_folder or ".." in setup.split("/"):
+            raise ValueError(f"setup must be a path in {SETUP_FOLDER}, not {setup!r}")
+        return setup
+
+
 class VerificationProfile(BaseModel):
     model_config = {"frozen": True, "extra": "forbid"}
 
@@ -26,6 +47,7 @@ class VerificationProfile(BaseModel):
     test_commands: tuple[str, ...] | None = None
     lint_commands: tuple[str, ...] | None = None
     typecheck_commands: tuple[str, ...] | None = None
+    sandbox: VerificationSandbox | None = None
 
     def get_commands(self, *, detected: dict) -> dict:
         """The detected commands, with each list that the operator wrote in their place. A

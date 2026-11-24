@@ -1,3 +1,5 @@
+import hashlib
+import json
 import logging
 import time
 from collections.abc import Sequence
@@ -7,6 +9,7 @@ from pydantic import BaseModel, Field
 
 from druks import ui
 from druks.accounts import Account
+from druks.apps.fetcher import fetch_file
 from druks.contrib.software_factory.contracts import (
     CiReport,
     ImplementationOutput,
@@ -19,7 +22,7 @@ from druks.contrib.software_factory.ticketing.enums import TicketStatus
 from druks.core.services import Github
 from druks.db import db_session
 from druks.mcp.inbound import get_druks_mcp_server
-from druks.sandbox import SandboxMcpServer, SandboxSecret
+from druks.sandbox import Sandbox, SandboxMcpServer, SandboxSecret, TemplateUnavailable
 from druks.sandbox.layout import get_related_root, get_work_root
 from druks.services.exceptions import ServiceNotConnectedError
 from druks.settings import get_settings
@@ -35,10 +38,16 @@ from .constants import (
     CI_TTL_SECONDS,
     GITHUB_MCP_NAME,
     GITHUB_MCP_URL,
+    LOCKFILES,
     TICKET_TOOLS,
 )
 from .datastructures import PullRequest
-from .exceptions import TicketAlreadyMerged, TicketBlocked, TicketNotRoutable
+from .exceptions import (
+    SandboxSetupMissing,
+    TicketAlreadyMerged,
+    TicketBlocked,
+    TicketNotRoutable,
+)
 from .github import get_review_actor
 from .journal import BuildJournal
 from .policy import PlanGate, RepoPolicy
@@ -680,6 +689,35 @@ class Profile(Workflow):
             effective["verification"] = policy.verification.get_commands(
                 detected=baseline.get("verification") or {}
             )
+        if sandbox := policy.verification and policy.verification.sandbox:
+            repo = project_repo.full_name
+            setup_script = await fetch_file(repo=repo, path=sandbox.setup)
+            if not setup_script:
+                raise SandboxSetupMissing(repo, sandbox.setup)
+            # Drukbox keys a template by its script. The lockfiles go into the script, so a
+            # changed dependency builds a new template.
+            github = await Github.get_client(repo)
+            lockfiles = {
+                name: content
+                for name in LOCKFILES
+                if (content := await github.get_file_content(repo, name))
+            }
+            if lockfiles:
+                digest = hashlib.sha256(json.dumps(lockfiles, sort_keys=True).encode())
+                setup_script = f"{setup_script}\n# lockfiles {digest.hexdigest()}\n"
+            try:
+                template = await Sandbox(setup=sandbox.setup, script=setup_script).build(
+                    label=f"{repo}:{sandbox.setup}"
+                )
+            except TemplateUnavailable as error:
+                # A script that does not build leaves the last good template in place.
+                logger.warning("The sandbox template of %s did not build: %s", repo, error)
+                if previous := (project_repo.profile.get("effective") or {}).get(
+                    "sandbox_template"
+                ):
+                    effective["sandbox_template"] = previous
+            else:
+                effective["sandbox_template"] = template.id
         await project_repo.set_profile(baseline=baseline, effective=effective)
 
     async def get_prompt_context(self, **context: Any) -> dict[str, Any]:
