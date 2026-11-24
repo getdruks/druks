@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 from conftest import connect_provider
 from druks.accounts.models import Account
 from druks.harnesses import directory
+from druks.harnesses.datastructures import CompletedConnect
 from druks.harnesses.models import ProviderCatalog
 from druks.harnesses.providers import AnthropicProvider
 from druks.secrets.datastructures import Audience
@@ -315,3 +316,61 @@ def test_the_installation_offers_one_sign_in_method(tmp_path: Path, monkeypatch)
     assert paste.json()["detail"].startswith(
         "This installation signs in with oauth, not setup_token."
     )
+
+
+def _record_refreshes(monkeypatch):
+    """Replace the refresh with a recorder of the row it is ordered for. It also records
+    whether the session still holds a transaction, which is true until the new credential
+    is committed: a box that fetches before the commit reads the old value."""
+    ordered = []
+
+    async def request_refreshes(session, secret_id, **_):
+        ordered.append((secret_id, session.in_transaction()))
+
+    monkeypatch.setattr(
+        "druks.harnesses.routes.sandbox_client.request_refreshes", request_refreshes
+    )
+    return ordered
+
+
+async def test_a_pasted_token_orders_a_refresh_on_the_boxes_that_hold_the_old_one(
+    tmp_path: Path, druks_db, monkeypatch
+):
+    _sign_in_with(monkeypatch, tmp_path, "setup_token")
+    ordered = _record_refreshes(monkeypatch)
+    with _build_client(tmp_path) as client:
+        client.post("/api/providers/anthropic/sign-in/token", json={"token": "sk-ant-oat01-x"})
+    account = await Account.get_or_create(druks_db, "op@example.com")
+    row = await VaultSecret.lookup(
+        druks_db, SecretKind.SUBSCRIPTION, Audience.provider("anthropic"), account.id
+    )
+    # The refresh comes after the commit, so the exchange reads the stored credential.
+    assert ordered == [(row.id, False)]
+
+
+async def test_a_reconnect_orders_a_refresh_on_the_boxes_that_hold_the_old_login(
+    tmp_path: Path, druks_db, monkeypatch
+):
+    _sign_in_with(monkeypatch, tmp_path, "oauth")
+    completed = CompletedConnect(
+        payload={"claudeAiOauth": {"accessToken": "new", "refreshToken": "r"}},
+        provider_email="op@example.com",
+        expires_at=datetime.now(UTC) + timedelta(hours=8),
+        refresh_token_expires_at=None,
+        account_id=None,
+    )
+    monkeypatch.setattr(AnthropicProvider, "complete_connection", AsyncMock(return_value=completed))
+    monkeypatch.setattr(AnthropicProvider, "refresh_catalog", AsyncMock())
+    monkeypatch.setattr(AnthropicProvider, "has_usage", classmethod(lambda cls, row: False))
+    ordered = _record_refreshes(monkeypatch)
+    with _build_client(tmp_path) as client:
+        response = client.post(
+            "/api/providers/anthropic/connection/complete",
+            json={"code": "code", "connectionId": "flow"},
+        )
+    assert response.status_code == 200, response.text
+    account = await Account.get_or_create(druks_db, "op@example.com")
+    row = await VaultSecret.lookup(
+        druks_db, SecretKind.SUBSCRIPTION, Audience.provider("anthropic"), account.id
+    )
+    assert ordered == [(row.id, False)]

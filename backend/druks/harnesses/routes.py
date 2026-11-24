@@ -12,6 +12,7 @@ from druks.accounts.dependencies import (
 from druks.accounts.models import Account
 from druks.accounts.schemas import AccountResponse
 from druks.api.dependencies import SessionDep
+from druks.sandbox.client import sandbox_client
 from druks.secrets.datastructures import Audience
 from druks.secrets.enums import SecretKind
 from druks.secrets.models import VaultSecret
@@ -185,6 +186,9 @@ async def sign_in_with_token(
         expires_at=expires_at,
     )
     await Instruction.wake_runs_waiting_for_quota(session)
+    await session.commit()
+    # A box that holds the old token keeps presenting it until the exchange fetches this one.
+    await sandbox_client.request_refreshes(session, subscription.id)
     return subscription
 
 
@@ -228,6 +232,8 @@ async def _store_connection(
         await provider.poll_usage(session, subscription)
     await Instruction.wake_runs_waiting_for_quota(session)
     await session.commit()
+    # A box that holds the old login keeps presenting it until the exchange fetches this one.
+    await sandbox_client.request_refreshes(session, subscription.id)
     try:
         # The flow is already spent, so a failed refresh only logs.
         await provider.refresh_catalog(session)
