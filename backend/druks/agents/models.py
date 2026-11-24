@@ -231,11 +231,11 @@ class Agent(Model, Uuid7Pk):
         """The harness must run the model, and Chat must run on it. A private agent also
         needs a harness that takes a subscription."""
         harness_class = await check_config(session, harness, model, billing="api_key")
-        if not harness_class.has_chat:
+        if not harness_class.adapter_command:
             adapters = ", ".join(
                 installed_harness.name
                 for installed_harness in get_harnesses()
-                if installed_harness.has_chat
+                if installed_harness.adapter_command
             )
             raise ValidationError(
                 f"An agent answers in Chat, and Chat runs on {adapters}. Pick one of them."

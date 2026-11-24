@@ -39,7 +39,6 @@ def test_get_harnesses_lists_the_registry(tmp_path: Path):
         "hasChat": True,
     }
     assert harnesses["codex"]["provider"] == "openai"
-    # Pi ships no adapter_command, so Chat does not run on it.
     assert harnesses["pi"] == {
         "name": "pi",
         "provider": None,

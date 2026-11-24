@@ -44,7 +44,7 @@ export function AgentsPage({ account }: { account: Account }) {
     .flatMap((collection) => collection.skills)
     .filter((skill) => skill.enabled)
   const harnesses = harnessesQuery.data ?? []
-  // An agent answers in Chat, so the form offers only the harnesses Chat runs on.
+  // An agent answers in Chat. The form offers only the harnesses that Chat runs on.
   const chatHarnesses = harnesses.filter((harness) => harness.hasChat)
   const catalogs = catalogsQuery.data ?? []
   const catalog = buildCatalog(

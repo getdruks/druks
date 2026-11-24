@@ -1,7 +1,7 @@
 from datetime import datetime
-from typing import TYPE_CHECKING, Annotated, Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, PositiveInt
+from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field, PositiveInt
 from pydantic.fields import FieldInfo
 
 from druks.accounts.enums import Theme
@@ -21,25 +21,15 @@ from druks.schemas import Schema
 
 from .datastructures import Effort
 
-if TYPE_CHECKING:
-    from druks.harnesses.base import Harness
-
 
 class HarnessResponse(Schema):
+    model_config = ConfigDict(from_attributes=True)
+
     name: str
     provider: str | None
     billing_options: SortedNames
-    # Whether Chat runs on this harness.
-    has_chat: bool
-
-    @classmethod
-    def from_harness(cls, harness: type["Harness"]) -> "HarnessResponse":
-        return cls(
-            name=harness.name,
-            provider=harness.provider,
-            billing_options=harness.billing_options,
-            has_chat=harness.has_chat,
-        )
+    # Chat runs on a harness that has an ACP adapter.
+    has_chat: Annotated[bool, BeforeValidator(bool)] = Field(validation_alias="adapter_command")
 
 
 class PersonalSettingsResponse(Schema):

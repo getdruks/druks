@@ -451,9 +451,9 @@ async def deliver_pending(session: AsyncSession, conversation: Conversation) -> 
                 raise ChatHarnessError(f"The agent cannot run: {error}") from error
             except HarnessNotConnectedError as error:
                 raise ChatHarnessNotConnectedError(f"The agent cannot run: {error}") from error
-            if not config.harness_class.has_chat:
+            if not config.harness_class.adapter_command:
                 adapters = ", ".join(
-                    harness.name for harness in get_harnesses() if harness.has_chat
+                    harness.name for harness in get_harnesses() if harness.adapter_command
                 )
                 raise ChatHarnessError(
                     f"Chat runs on {adapters}. The Bot's settings select "

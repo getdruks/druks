@@ -54,18 +54,10 @@ class Harness(ABC):
     first_byte_seconds: ClassVar[int | None] = 90
     # The argv of the ACP adapter a chat conversation runs on. Empty for a harness without one.
     adapter_command: ClassVar[tuple[str, ...]] = ()
-    # Whether Chat runs on this harness: true exactly when it ships an adapter_command.
-    has_chat: ClassVar[bool] = False
     # Where this CLI finds a person's skills, under the home. Empty for a CLI Druks gives none.
     skills_folder: ClassVar[str] = ""
     # The argv that answers one prompt and exits.
     reply_command: ClassVar[tuple[str, ...]]
-
-    def __init_subclass__(cls, **kwargs: object) -> None:
-        # Derive the chat capability from the one fact that carries it, so the form
-        # filter, the save check, and the chat guard read the same answer.
-        super().__init_subclass__(**kwargs)
-        cls.has_chat = bool(cls.adapter_command)
 
     def __init__(
         self,
