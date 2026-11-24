@@ -85,6 +85,10 @@
 .chat-question-form { display: flex; flex-direction: column; align-items: flex-start; }
 .chat-question-form .dui-field { align-self: stretch; }
 .chat-question-answer { display: flex; flex-direction: column; gap: 6px; padding-left: 12px; border-left: 2px solid var(--druks-color-border-default); }
+/* A run's status draws the dashboard's blocks, which read their radius tokens from an app page. */
+.chat-run-status { --dui-radius-surface: 8px; --dui-radius-large: 12px; min-inline-size: 0; max-inline-size: 75ch; padding: var(--druks-spacing-step-4); border: var(--druks-size-border-width) solid var(--druks-color-border-default); border-radius: var(--druks-radius-surface); background: var(--druks-color-surface); color: var(--druks-color-text-secondary); overflow-wrap: anywhere; overflow-x: auto; }
+.chat-run-status > :first-child { margin-block-start: 0; }
+.chat-run-status > :last-child { margin-block-end: 0; }
 .chat-agent-status { display: inline-flex; align-items: center; gap: var(--druks-spacing-content-gap); }
 .chat-interrupted { font-size: 14px; }
 .chat-interrupted p { margin: 0 0 12px; color: var(--druks-color-text-secondary); }

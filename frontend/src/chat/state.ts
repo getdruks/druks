@@ -1,6 +1,6 @@
 import type { PlanEntry, SessionNotification, SessionUpdate, ToolCall } from '@agentclientprotocol/sdk'
 
-import type { Field, FileSummary } from '../api/types'
+import type { Block, Field, FileSummary } from '../api/types'
 
 export interface ConversationSummary {
   id: string
@@ -53,6 +53,17 @@ export interface ActiveRun {
   phaseEndsAt: string | null
 }
 
+/** The status that a run of the conversation reported, as its message shows it. */
+export interface RunStatus {
+  id: string
+  run: string
+  /** The app of the run's workflow. Empty when no loaded app declares it. */
+  app: string
+  blocks: Block[]
+  /** When the first run of the retry chain started. */
+  startedAt: string
+}
+
 export interface Conversation extends ConversationSummary {
   messages: Message[]
 }
@@ -61,6 +72,10 @@ export type ReplyRow =
   | { type: 'text'; text: string }
   | { type: 'tool'; call: ToolCall }
   | { type: 'plan'; entries: PlanEntry[] }
+
+export type ThreadRow =
+  | { type: 'turn'; message: Message }
+  | { type: 'status'; status: RunStatus }
 
 interface LiveTurn {
   epoch: string
@@ -134,6 +149,22 @@ export function savedReplyRows(message: Message): ReplyRow[] {
     position = call.textOffset
   }
   if (position < characters.length) rows.push({ type: 'text', text: characters.slice(position).join('') })
+  return rows
+}
+
+/** The turns and the run statuses in page order: a status follows each turn that started at or before its run. */
+export function threadRows(messages: Message[], statuses: RunStatus[]): ThreadRow[] {
+  const waiting = statuses.toSorted((left, right) =>
+    Date.parse(left.startedAt) - Date.parse(right.startedAt) || left.id.localeCompare(right.id))
+  const rows: ThreadRow[] = []
+  for (const message of messages) {
+    if (message.role === 'assistant' && message.replyTo) continue
+    while (waiting.length > 0 && Date.parse(waiting[0]!.startedAt) < Date.parse(message.createdAt)) {
+      rows.push({ type: 'status', status: waiting.shift()! })
+    }
+    rows.push({ type: 'turn', message })
+  }
+  for (const status of waiting) rows.push({ type: 'status', status })
   return rows
 }
 

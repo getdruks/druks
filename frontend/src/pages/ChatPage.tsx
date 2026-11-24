@@ -12,12 +12,14 @@ import type { Account, Field } from '../api/types'
 import { appLabel } from '../apps/registry'
 import { chatApi } from '../chat/api'
 import {
-  compareConversations, conversationReducer, conversationTitle, formAnswer, formErrors, initialConversation, questionAnswer, savedReplyRows,
+  compareConversations, conversationReducer, conversationTitle, formAnswer, formErrors, initialConversation, questionAnswer, savedReplyRows, threadRows,
   type ActiveRun, type Conversation, type ConversationAction, type ConversationSummary, type Message, type Question, type ReplyRow,
 } from '../chat/state'
 import { Button, Select } from '../components/Control'
 import { Markdown } from '../components/Markdown'
 import { Page } from '../components/Page'
+import { AppPagesProvider } from '../druksui/AppPage'
+import { Blocks } from '../druksui/Blocks'
 import { Fields } from '../druksui/Fields'
 import { useFieldState } from '../druksui/Form'
 import { PageHeading } from '../components/PageHeading'
@@ -222,6 +224,8 @@ function ConversationThread({ id, account, showMilestone, summary, onPin, pinPen
   const chosenAgent = talkableAgents.find((agent) => agent.id === agentId)
   // A run's state sends no events, so the page reads its active runs again.
   const activeRuns = useQuery({ queryKey: ['chat', 'active-runs', id], queryFn: () => chatApi.listActiveRuns(id!), enabled: Boolean(id), refetchInterval: 2_000 })
+  // A report sends no events either, so the page reads the run statuses again.
+  const statuses = useQuery({ queryKey: ['chat', 'statuses', id], queryFn: () => chatApi.listStatuses(id!), enabled: Boolean(id), refetchInterval: 2_000 })
   const { scrollRef, contentRef, isAtBottom, scrollToBottom } = useStickToBottom({ initial: 'instant', resize: 'instant' })
 
   useEffect(() => {
@@ -341,6 +345,8 @@ function ConversationThread({ id, account, showMilestone, summary, onPin, pinPen
 
   const conversation = state.conversation
   const messages = conversation?.messages ?? []
+  // A run whose status shows needs no line of its own.
+  const reportedRuns = new Set(statuses.data?.map((status) => status.run))
   const replies = new Map(messages.filter((message) => message.role === 'assistant').map((message) => [message.replyTo, message]))
   const userMessages = messages.filter((message) => message.role === 'user')
   const lastReply = messages.findLast((message) => message.role === 'assistant')
@@ -384,10 +390,16 @@ function ConversationThread({ id, account, showMilestone, summary, onPin, pinPen
     <div className="chat-messages" ref={scrollRef} role="log" aria-label="Messages" aria-live="polite" hidden={!id}>
       <div className="chat-messages-content" ref={contentRef}>
         {id && !conversation && connection === 'opening' && <p className="chat-notice" role="status">Loading conversation…</p>}
-        {messages.map((message) => {
+        {threadRows(messages, statuses.data ?? []).map((row) => {
+          if (row.type === 'status') return <article className="chat-turn" key={row.status.id} aria-label="Run status">
+            <div className="chat-run-status">
+              <AppPagesProvider app={row.status.app}><Blocks blocks={row.status.blocks} /></AppPagesProvider>
+            </div>
+          </article>
+          const message = row.message
           if (message.role === 'assistant') {
             // A reply shows in the turn of the message it answers. A reminder answers none.
-            return !message.replyTo && <article className="chat-turn" key={message.id} aria-label="Agent message">
+            return <article className="chat-turn" key={message.id} aria-label="Agent message">
               <div className="chat-reply">
                 <div className="druks-chat-message">
                   <div className="druks-chat-message__meta">{conversation?.agentName ?? 'Agent'}
@@ -442,7 +454,7 @@ function ConversationThread({ id, account, showMilestone, summary, onPin, pinPen
           </article>
         })}
         <div className="chat-runs" role="status">
-          {activeRuns.data?.map((run) => <p className="chat-waiting" key={run.id}>
+          {activeRuns.data?.filter((run) => !reportedRuns.has(run.id)).map((run) => <p className="chat-waiting" key={run.id}>
             <span className="chat-activity-dot" />{runLine(run, format.timezone)}
           </p>)}
         </div>

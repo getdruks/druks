@@ -154,9 +154,21 @@ An agent plan shows the latest complete plan. A plan update replaces the
 previous list. Tool updates instead change only the fields that the adapter
 sends. Completed replies retain text and tool calls, not the live plan.
 
-While a run that the conversation started is active, the page shows one line
-for it below the messages. The line names the workflow and its subject, and
-says what the run does now: it is queued, it waits for an answer, or it runs a
+A run that the conversation started can report its status: see
+[Report status](writing-an-app.md#report-status). The page shows the status as a
+message of its own and draws its blocks as an app page draws them. Druks does not
+record which message started the run, so the page places the status by time: after
+each turn that started at or before the run. Each report replaces the status, and the
+page adds no message. While the run waits, and after it ends, the status also shows
+where the run stands, for example "Failed.". The status stays after the run ends. A
+retry of the run keeps the status and its place. The page reads the statuses again
+every two seconds, so the status follows the run with no reload. A link to an app page
+in the blocks opens that page of the run's app. When no installed app declares the
+run's workflow, such a link shows as text.
+
+While a run that the conversation started is active and shows no status, the page
+shows one line for it below the messages. The line names the workflow and its subject,
+and says what the run does now: it is queued, it waits for an answer, or it runs a
 step, such as an agent call or a wait for CI. The page reads the runs again
 every two seconds, so the line follows the run and goes when the run ends.
 Only the Chat page shows it.
@@ -359,7 +371,9 @@ that posts itself, adds a message that says it ended. The agent then tells you
 in its own words.
 In a Slack conversation, a workflow that reports its status keeps that status in
 one message of the thread or direct message, and Druks edits it as the work goes
-on. See [Report status](writing-an-app.md#report-status).
+on. See [Report status](writing-an-app.md#report-status). The Chat page shows the
+status in the conversation, whatever its channel: see
+[Read replies and tool calls](#read-replies-and-tool-calls).
 
 The sandbox receives credential placeholders. The Drukbox proxy exchanges
 them for real credentials. See [public URLs and access control](configuration.md#public-urls-and-access-control)

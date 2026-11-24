@@ -68,9 +68,12 @@ Chat uses `/chat`, `/chat/new`, and `/chat/<id>`. Its conversation list and
 thread share the platform shell. The thread receives ACP events through an
 owner-only WebSocket. Its reducer uses the ACP SDK types. The thread reads the
 conversation's active runs again every two seconds, because a run's state
-sends no events. `use-stick-to-bottom` keeps streamed replies visible until the
-operator scrolls up. See the [Chat guide](../docs/chat.md) for message states
-and recovery limits.
+sends no events. A run's report sends none either, so the thread also reads the
+conversation's run statuses again every two seconds. Each status draws its blocks
+with `Blocks` under the `AppPagesProvider` of its app. An active run that shows a
+status gets no line of its own. `use-stick-to-bottom` keeps streamed replies
+visible until the operator scrolls up. See the [Chat guide](../docs/chat.md) for
+message states and recovery limits.
 
 Settings use `/settings/<section>` routes. `/settings/personal` edits the current
 account's preferences through `/api/settings/personal`. `/settings/instructions` edits
