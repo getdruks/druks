@@ -46,6 +46,8 @@ def _build() -> SimpleNamespace:
         assignee_email=None,
         related_repos=[],
         blockers=[],
+        run_id="run-1",
+        checks=(),
         skills=[
             SimpleNamespace(
                 name="python-house-rules",
@@ -140,6 +142,35 @@ async def test_verification_profile_renders_ci_provenance_per_command():
         "**Tests:**",
         "- `pytest`",
     ]
+
+
+async def _implement_prompt(**build_fields) -> str:
+    build = _build()
+    for name, value in build_fields.items():
+        setattr(build, name, value)
+    return await render_prompt(
+        "software_factory/build/implement.md",
+        build=build,
+        verification="VERIFICATION-BLOCK",
+        workspace=_workspace(),
+    )
+
+
+async def test_the_implement_prompt_names_the_check_tool_and_the_run_when_checks_are_declared():
+    prompt = await _implement_prompt(run_id="run-42", checks=("make test",))
+
+    assert "`core_run_check`" in prompt
+    assert "`run_id` set to `run-42`" in prompt
+    assert "A command that you narrowed to some files is not a listed command" in prompt
+
+
+async def test_the_implement_prompt_without_declared_checks_never_mentions_the_tool():
+    prompt = await _implement_prompt(checks=())
+
+    assert "core_run_check" not in prompt
+    # The paragraph leaves no blank line behind where it would have been.
+    assert "\n\n\n" not in prompt.split("## Delivering your work")[0].splitlines()[-1]
+    assert "\n\n## Delivering your work" in prompt
 
 
 async def test_implement_prompt_renders_the_prior_review():

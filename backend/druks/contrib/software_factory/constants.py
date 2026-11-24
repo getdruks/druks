@@ -13,6 +13,11 @@ TICKET_TOOLS = (
 )
 # The steps of a build, in the order that its status shows them.
 BUILD_STEPS = ("Plan", "Implement", "Draft pull request", "Review")
+# The tool that runs one of the repo's declared test commands on another box. A build's box
+# always holds it: an account's key for Druks' server is revoked and minted again whenever
+# the tools differ, so a tool list that followed the repo would revoke the key of every other
+# running build of the account.
+CHECK_TOOLS = ("core_run_check",)
 # A repo with CI registers a check within this long of a push. With none by then, the
 # repo has no CI, and the build goes on as if CI were green.
 CI_REGISTER_SECONDS = 3 * 60

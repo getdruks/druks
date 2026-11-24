@@ -30,6 +30,7 @@ from druks.workspaces import RepoWorkspace
 from .app import SoftwareFactory
 from .constants import (
     BUILD_STEPS,
+    CHECK_TOOLS,
     CI_POLL_SECONDS,
     CI_TTL_SECONDS,
     GITHUB_MCP_NAME,
@@ -75,6 +76,27 @@ class BuildWorkspace(RepoWorkspace):
         ]
 
     @classmethod
+    async def get_checks(cls, subject: Any) -> tuple[str, ...]:
+        # The repo's test commands, which the agent may run on another box. A box that
+        # cannot reach Druks' server has no tool to run them with, so it declares none.
+        if not await cls._get_druks_server():
+            return ()
+        project_repo = await ProjectRepo.get_for_repo(subject.repo, raise_on_missing=True)
+        verification = project_repo.effective_profile.get("verification") or {}
+        return tuple(entry["command"] for entry in verification.get("test_commands", []))
+
+    @classmethod
+    async def _get_druks_server(cls) -> SandboxMcpServer | None:
+        tracker = (await SoftwareFactory.settings()).tracker
+        tools = (*TICKET_TOOLS, *CHECK_TOOLS) if tracker == "druks" else CHECK_TOOLS
+        urls = get_settings().urls
+        if tracker != "druks" and not (urls.mcp_url or urls.webhook_base):
+            # Any other tracker built without this server before it carried the check tool.
+            return None
+        # A board build with no address raises here, as it did before.
+        return get_druks_mcp_server(allowed_tools=tools)
+
+    @classmethod
     async def get_mcp_servers(cls, subject: Any) -> tuple[SandboxMcpServer, ...]:
         github = SandboxMcpServer(
             name=GITHUB_MCP_NAME,
@@ -82,8 +104,8 @@ class BuildWorkspace(RepoWorkspace):
             secret_id=(await cls.github.get()).id,
             resources=await get_project_repos(subject.repo),
         )
-        if (await SoftwareFactory.settings()).tracker == "druks":
-            return (github, get_druks_mcp_server(allowed_tools=TICKET_TOOLS))
+        if druks := await cls._get_druks_server():
+            return (github, druks)
         return (github,)
 
     async def prepare(self) -> None:
@@ -293,6 +315,8 @@ class Build(Workflow):
                 db_session(), self._profile.get("recommended_skills", [])
             ),
             blockers=self._blockers,
+            run_id=self.workflow_id,
+            checks=await self.workspace_class.get_checks(work_item),
             journal=self.journal,
         )
         return {
