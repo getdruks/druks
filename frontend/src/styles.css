@@ -1286,7 +1286,7 @@ textarea.set-textarea { background-image: none; height: auto; min-height: 96px; 
 .wic-op-row1 { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .wic-op-kind { font-size: 13px; color: var(--druks-color-text-primary); white-space: nowrap; }
 .wic-op-owner { font-family: var(--font-mono); font-size: 10.5px; color: var(--druks-color-text-tertiary); margin-left: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.wic-op-sub { font-family: var(--font-mono); font-size: 11px; color: var(--druks-color-text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wic-op-sub { font-family: var(--font-mono); font-size: 11px; color: var(--druks-color-text-tertiary); overflow-wrap: anywhere; }
 .wic-sub-running, .wic-sub-cancelling { color: var(--druks-color-status-info); }
 .wic-sub-parked { color: var(--wic-human); }
 .wic-sub-failed    { color: var(--wic-failed); }
@@ -1427,8 +1427,8 @@ textarea.set-textarea { background-image: none; height: auto; min-height: 96px; 
 .review-controls { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .review-error { margin-top: 8px; font-size: 12px; color: var(--druks-color-status-danger); }
 
-.ins .wic-op-sub { display: inline-flex; align-items: center; gap: 7px; }
-.ins .wic-op-sub-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--druks-color-text-tertiary); box-shadow: none; flex-shrink: 0; }
+.ins .wic-op-sub { display: inline-flex; align-items: flex-start; gap: 7px; }
+.ins .wic-op-sub-dot { width: 5px; height: 5px; margin-top: calc(0.5lh - 2.5px); border-radius: 50%; background: var(--druks-color-text-tertiary); box-shadow: none; flex-shrink: 0; }
 
 .landing { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 40px 20px; position: relative; overflow: hidden; }
 .landing::before { content: ""; position: absolute; inset: 0; background-image: linear-gradient(var(--druks-color-border-default) 1px, transparent 1px), linear-gradient(90deg, var(--druks-color-border-default) 1px, transparent 1px); background-size: 56px 56px; opacity: 0.28; mask-image: radial-gradient(120% 100% at 50% 42%, #000 0%, transparent 70%); }
