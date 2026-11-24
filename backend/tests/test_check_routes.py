@@ -1,0 +1,369 @@
+import asyncio
+from contextlib import asynccontextmanager
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
+from conftest import connect_service
+from drukbox_sdk import Issuer, SandboxRun
+from drukbox_sdk.exceptions import (
+    SandboxCapacityError,
+    SandboxProvisioningError,
+    SandboxUnavailableError,
+    SandboxValidationError,
+)
+from druks.accounts.models import Account
+from druks.core.routes import run_check
+from druks.db import db_session
+from druks.durable.models import AgentCall
+from druks.sandbox.exceptions import HostGone
+from druks.sandbox.models import SandboxIdentity
+from druks.testing import configure_app_for_test, make_settings, seed_call, seed_run
+from druks.workspaces import RepoWorkspace
+from fastapi.testclient import TestClient
+from sqlalchemy import select
+
+URL = "/api/core/checks/run"
+CHECK = "make test"
+
+
+@pytest.fixture
+def client(tmp_path: Path, druks_db):
+    with TestClient(configure_app_for_test(settings=make_settings(tmp_path))) as client:
+        yield client
+
+
+@pytest.fixture
+async def account(druks_db):
+    # configure_app_for_test sends each request as this account.
+    return await Account.get_or_create(druks_db, "op@example.com")
+
+
+class _Repo(RepoWorkspace):
+    @classmethod
+    async def get_checks(cls, subject):
+        # A real app reads the subject, so a deleted one cannot declare anything.
+        return (CHECK, "make lint") if subject else ()
+
+    @classmethod
+    async def get_secret_refs(cls, subject):
+        return []
+
+
+def _workflow(workspace_class):
+    return SimpleNamespace(
+        subject=SimpleNamespace(
+            get_or_none=AsyncMock(return_value=SimpleNamespace(repo="acme/app"))
+        ),
+        workspace_class=workspace_class,
+    )
+
+
+@pytest.fixture
+def box(monkeypatch):
+    """The agent's box, the sandbox client and the repo workspace, each a recorder."""
+    attached = []
+
+    @asynccontextmanager
+    async def attach(*, host_id):
+        attached.append(host_id)
+        yield SimpleNamespace(id=host_id)
+
+    run_command = AsyncMock(
+        return_value=SandboxRun(exit_code=0, timed_out=False, output="ok\n", duration_seconds=2.5)
+    )
+    get_diff = AsyncMock(return_value="the patch")
+    monkeypatch.setattr("druks.core.routes.sandbox_client.attach", attach)
+    monkeypatch.setattr("druks.core.routes.sandbox_client.run_command", run_command)
+    monkeypatch.setattr(RepoWorkspace, "get_diff", get_diff)
+    monkeypatch.setattr(RepoWorkspace, "get_base_commit", AsyncMock(return_value="abc123"))
+    monkeypatch.setattr("druks.core.routes.get_workflow", lambda kind: _workflow(_Repo))
+    return SimpleNamespace(attached=attached, run_command=run_command, get_diff=get_diff)
+
+
+async def _run(session, account, *, call_status="running", subject=True):
+    run = await seed_run(
+        session,
+        kind="anything",
+        state="running",
+        account_id=account.id,
+        subject=SimpleNamespace(identity={"type": "repo", "id": "1"}, key="acme/app")
+        if subject
+        else None,
+    )
+    await seed_call(session, run, "implement", status=call_status)
+    await session.commit()
+    return run
+
+
+def _ask(client, run, command=CHECK, **extra):
+    return client.post(URL, json={"run_id": run.id, "command": command, **extra})
+
+
+async def test_a_declared_check_runs_on_a_box_with_the_agents_work(client, account, druks_db, box):
+    run = await _run(druks_db, account)
+
+    response = _ask(client, run, timeout_seconds=900)
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "exit_code": 0,
+        "timed_out": False,
+        "output": "ok\n",
+        "duration_seconds": 2.5,
+    }
+    assert box.attached == [f"test-host-{run.id}"]
+    box.get_diff.assert_awaited_once_with(binary=True)
+    box.run_command.assert_awaited_once_with(
+        repo_url="https://github.com/acme/app",
+        commit="abc123",
+        command=CHECK,
+        patch="the patch",
+        timeout_seconds=900,
+        secrets={},
+    )
+
+
+async def test_a_failing_check_answers_with_its_exit_code(client, account, druks_db, box):
+    box.run_command.return_value = SandboxRun(
+        exit_code=None, timed_out=True, output="start\n", duration_seconds=900.0
+    )
+    run = await _run(druks_db, account)
+
+    body = _ask(client, run).json()
+
+    assert (body["exit_code"], body["timed_out"], body["output"]) == (None, True, "start\n")
+
+
+async def test_a_command_that_is_not_declared_is_refused_with_the_declared_ones(
+    client, account, druks_db, box
+):
+    run = await _run(druks_db, account)
+
+    response = _ask(client, run, command="rm -rf /")
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body["code"] == "CHECK_NOT_DECLARED"
+    assert "'make test'" in body["message"] and "'make lint'" in body["message"]
+    box.run_command.assert_not_awaited()
+
+
+async def test_a_run_that_declares_no_checks_says_so(client, account, druks_db, box, monkeypatch):
+    class _Nothing(_Repo):
+        @classmethod
+        async def get_checks(cls, subject):
+            return ()
+
+    monkeypatch.setattr("druks.core.routes.get_workflow", lambda kind: _workflow(_Nothing))
+    run = await _run(druks_db, account)
+
+    response = _ask(client, run)
+
+    assert (response.status_code, response.json()["code"]) == (422, "CHECK_NOT_DECLARED")
+    assert "declares no checks" in response.json()["message"]
+    box.run_command.assert_not_awaited()
+
+
+async def test_an_unknown_run_and_another_accounts_run_are_the_same_404(
+    client, account, druks_db, box
+):
+    other = await Account.get_or_create(druks_db, "someone@example.com")
+    theirs = await _run(druks_db, other)
+
+    foreign = _ask(client, theirs)
+    unknown = client.post(URL, json={"run_id": "nope", "command": CHECK})
+
+    assert (foreign.status_code, unknown.status_code) == (404, 404)
+    assert foreign.json()["code"] == unknown.json()["code"] == "RUN_NOT_FOUND"
+    box.run_command.assert_not_awaited()
+
+
+async def test_a_run_with_no_agent_running_is_refused(client, account, druks_db, box):
+    run = await _run(druks_db, account, call_status="succeeded")
+
+    response = _ask(client, run)
+
+    assert (response.status_code, response.json()["code"]) == (409, "RUN_NOT_RUNNING")
+    box.run_command.assert_not_awaited()
+
+
+async def test_a_repo_run_with_no_subject_is_refused_not_crashed(client, account, druks_db, box):
+    run = await _run(druks_db, account, subject=False)
+
+    response = _ask(client, run)
+
+    assert (response.status_code, response.json()["code"]) == (409, "RUN_HAS_NO_REPO")
+    box.run_command.assert_not_awaited()
+
+
+async def test_a_box_that_is_gone_is_refused(client, account, druks_db, box, monkeypatch):
+    @asynccontextmanager
+    async def gone(*, host_id):
+        raise HostGone(host_id)
+        yield
+
+    monkeypatch.setattr("druks.core.routes.sandbox_client.attach", gone)
+    run = await _run(druks_db, account)
+
+    response = _ask(client, run)
+
+    assert (response.status_code, response.json()["code"]) == (409, "BOX_GONE")
+    box.run_command.assert_not_awaited()
+
+
+async def test_a_refusal_of_the_check_box_carries_its_reason(client, account, druks_db, box):
+    box.run_command.side_effect = SandboxProvisioningError("the clone failed: exit=128")
+    run = await _run(druks_db, account)
+
+    response = _ask(client, run)
+
+    assert (response.status_code, response.json()["code"]) == (502, "CHECK_BOX_REFUSED")
+    assert response.json()["retryable"] is False
+    assert "the clone failed: exit=128" in response.json()["message"]
+
+
+@pytest.mark.parametrize("fails", [False, True])
+async def test_the_identity_of_the_check_box_is_revoked_either_way(
+    client, account, druks_db, box, fails
+):
+    if fails:
+        box.run_command.side_effect = SandboxProvisioningError("down")
+    run = await _run(druks_db, account)
+
+    _ask(client, run)
+
+    rows = list(
+        await db_session().scalars(select(SandboxIdentity).where(SandboxIdentity.run_id == run.id))
+    )
+    assert [row.scoped_to for row in rows] == ["check"]
+    assert rows[0].revoked_at
+
+
+async def test_a_run_is_checked_on_its_newest_running_call_without_naming_the_agent(
+    account, druks_db
+):
+    run = await seed_run(druks_db, kind="anything", state="running", account_id=account.id)
+    await seed_call(druks_db, run, "plan", status="succeeded")
+    newest = await seed_call(druks_db, run, "implement", status="running")
+    await druks_db.commit()
+
+    found = await AgentCall.lookup_running(druks_db, run.id)
+
+    assert found and found.id == newest.id
+    assert await AgentCall.lookup_running(druks_db, run.id, "plan") is None
+
+
+async def test_a_validation_error_of_the_check_box_is_not_a_retryable_refusal(
+    client, account, druks_db, box
+):
+    box.run_command.side_effect = SandboxValidationError("the provider stops its VMs after 0:45:00")
+    run = await _run(druks_db, account)
+
+    response = _ask(client, run, timeout_seconds=3600)
+
+    assert response.status_code == 422
+    body = response.json()
+    assert (body["code"], body["retryable"]) == ("CHECK_REJECTED", False)
+    assert "stops its VMs" in body["message"]
+
+
+async def test_the_identity_of_the_check_box_is_revoked_when_the_call_is_cancelled_twice(
+    account, druks_db, box
+):
+    """A cancel is already delivered when the finally runs, so one cancel proves nothing. A
+    second one reaches the revoke itself: only a shield, on a session of its own, finishes it."""
+    started = asyncio.Event()
+
+    async def slow(**kwargs):
+        started.set()
+        await asyncio.sleep(30)
+
+    box.run_command.side_effect = slow
+    run = await _run(druks_db, account)
+    call = asyncio.create_task(
+        run_check(
+            session=druks_db, account=account, run_id=run.id, command=CHECK, timeout_seconds=600
+        )
+    )
+    await started.wait()
+    call.cancel()
+    await asyncio.sleep(0)
+    call.cancel()
+    await asyncio.gather(call, return_exceptions=True)
+    await asyncio.sleep(0.3)
+
+    [row] = list(
+        await db_session().scalars(
+            select(SandboxIdentity)
+            .where(SandboxIdentity.run_id == run.id)
+            .execution_options(populate_existing=True)
+        )
+    )
+    assert row.revoked_at
+
+
+async def test_a_check_that_ran_keeps_its_result_when_the_identity_cannot_be_revoked(
+    client, account, druks_db, box, monkeypatch
+):
+    def broken():
+        raise ConnectionError("the database went away")
+
+    monkeypatch.setattr("druks.core.routes.session_scope", broken)
+    run = await _run(druks_db, account)
+
+    response = _ask(client, run)
+
+    assert response.status_code == 200
+    assert response.json()["output"] == "ok\n"
+
+
+async def test_the_check_box_gets_the_github_secret_of_the_repo_through_its_own_identity(
+    client, account, druks_db, box, monkeypatch
+):
+    """The route's whole chain, with the workspace's real secret refs: the issuer entry that
+    reaches drukbox is the one that the identity of the check issues."""
+    await connect_service(
+        "github", identity={"app_id": "1", "slug": "druks-operator"}, secrets={"private_key": "pem"}
+    )
+
+    class _Github(RepoWorkspace):
+        @classmethod
+        async def get_checks(cls, subject):
+            return (CHECK,)
+
+    monkeypatch.setattr("druks.core.routes.get_workflow", lambda kind: _workflow(_Github))
+    run = await _run(druks_db, account)
+
+    assert _ask(client, run).status_code == 200
+
+    [identity] = list(
+        await db_session().scalars(select(SandboxIdentity).where(SandboxIdentity.run_id == run.id))
+    )
+    [ref] = identity.secret_refs
+    assert (ref.name, tuple(ref.resources), ref.host) == ("github", ("acme/app",), "github.com")
+    [entries] = [call.kwargs["secrets"] for call in box.run_command.await_args_list]
+    assert list(entries) == ["github"]
+    issuer = entries["github"]
+    assert isinstance(issuer, Issuer)
+    assert issuer.url.endswith(f"/api/secrets/{identity.id}/github")
+    assert issuer.headers["Authorization"].startswith("Bearer ")
+
+
+@pytest.mark.parametrize(
+    "error",
+    [SandboxUnavailableError("Sandbox service transport failed"), SandboxCapacityError("full", 30)],
+)
+async def test_a_drukbox_that_is_down_or_full_is_a_retryable_503_not_a_crash(
+    client, account, druks_db, box, error
+):
+    box.run_command.side_effect = error
+    run = await _run(druks_db, account)
+
+    response = _ask(client, run)
+
+    assert response.status_code == 503
+    body = response.json()
+    assert (body["code"], body["retryable"]) == ("CHECK_BOX_UNAVAILABLE", True)
+    assert str(error) in body["message"]

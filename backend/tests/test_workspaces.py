@@ -311,3 +311,66 @@ async def test_a_checkout_refused_again_raises_the_first_failure(
     assert len(asked) == 2
     assert "second failure" in str(raised.value.__cause__)
     assert "second failure" in caplog.text
+
+
+async def test_a_workspace_declares_no_checks_until_an_app_says_so():
+    assert await Workspace.get_checks(None) == ()
+    assert await RepoWorkspace.get_checks(SimpleNamespace(repo="acme/widgets")) == ()
+
+
+def test_a_repo_workspace_clones_from_the_repo_of_its_subject():
+    workspace = RepoWorkspace(SimpleNamespace(repo="acme/widgets", ref=None))
+
+    assert workspace.repo_url == "https://github.com/acme/widgets"
+
+
+async def test_repo_workspace_base_commit_is_where_the_checkout_left_the_default_branch(
+    tmp_path: Path,
+):
+    def git(*args: str, cwd: Path = tmp_path) -> str:
+        identity = ("-c", "user.name=dev", "-c", "user.email=dev@example.com")
+        return subprocess.run(
+            ["git", *identity, *args], cwd=cwd, check=True, capture_output=True, text=True
+        ).stdout.strip()
+
+    git("init", "-q", "-b", "main", "origin")
+    (tmp_path / "origin" / "kept.txt").write_text("kept\n")
+    git("add", "kept.txt", cwd=tmp_path / "origin")
+    git("commit", "-q", "-m", "start", cwd=tmp_path / "origin")
+    git("clone", "-q", "origin", "checkout")
+    checkout = tmp_path / "checkout"
+    start = git("rev-parse", "HEAD", cwd=checkout)
+    git("checkout", "-q", "-b", "feature", cwd=checkout)
+    (checkout / "committed.txt").write_text("committed\n")
+    git("add", "committed.txt", cwd=checkout)
+    git("commit", "-q", "-m", "change", cwd=checkout)
+
+    class _CheckoutHost:
+        ssh_username = "exedev"
+
+        async def exec(
+            self, command: list[str], *, cwd: str = "", timeout: float = 30.0
+        ) -> subprocess.CompletedProcess[str]:
+            return subprocess.run(command, cwd=checkout, capture_output=True, text=True)
+
+    workspace = RepoWorkspace(None)
+    workspace.host = _CheckoutHost()  # type: ignore[assignment]
+
+    assert await workspace.get_base_commit() == start
+    assert git("rev-parse", "HEAD", cwd=checkout) != start
+
+
+async def test_repo_workspace_base_commit_fails_loudly_outside_a_checkout(tmp_path: Path):
+    class _NoCheckout:
+        ssh_username = "exedev"
+
+        async def exec(
+            self, command: list[str], *, cwd: str = "", timeout: float = 30.0
+        ) -> subprocess.CompletedProcess[str]:
+            return subprocess.run(command, cwd=tmp_path, capture_output=True, text=True)
+
+    workspace = RepoWorkspace(None)
+    workspace.host = _NoCheckout()  # type: ignore[assignment]
+
+    with pytest.raises(ExecFailed, match="failed to read the workspace base commit"):
+        await workspace.get_base_commit()

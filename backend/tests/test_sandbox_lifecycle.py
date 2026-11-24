@@ -2,7 +2,9 @@ import subprocess
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 from conftest import connect_provider
@@ -969,3 +971,42 @@ async def test_set_expiry_forwards_expires_at_to_sdk_renew(
 
     assert api.renewed == [("host-xyz", expires_at)]
     assert api.deleted_ids == []
+
+
+async def test_run_command_passes_the_run_to_drukbox_and_closes_the_api(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    api = SimpleNamespace(run_command=AsyncMock(return_value="the result"), aclose=AsyncMock())
+    monkeypatch.setattr("druks.sandbox.client.Client._api", lambda self: api)
+
+    result = await sandbox_client.run_command(
+        repo_url="https://github.com/acme/app",
+        commit="abc123",
+        command="make test",
+        patch="the patch",
+        timeout_seconds=900,
+        secrets={},
+    )
+
+    assert result == "the result"
+    api.run_command.assert_awaited_once_with(
+        repo_url="https://github.com/acme/app",
+        commit="abc123",
+        command="make test",
+        patch="the patch",
+        timeout_seconds=900,
+        secrets={},
+    )
+    api.aclose.assert_awaited_once()
+
+
+async def test_run_command_closes_the_api_when_drukbox_refuses(monkeypatch: pytest.MonkeyPatch):
+    api = SimpleNamespace(
+        run_command=AsyncMock(side_effect=SandboxProvisioningError("down")), aclose=AsyncMock()
+    )
+    monkeypatch.setattr("druks.sandbox.client.Client._api", lambda self: api)
+
+    with pytest.raises(SandboxProvisioningError):
+        await sandbox_client.run_command(repo_url="u", commit="c", command="x", patch="p")
+
+    api.aclose.assert_awaited_once()
