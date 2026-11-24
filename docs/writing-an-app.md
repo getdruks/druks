@@ -1708,6 +1708,24 @@ async def check_the_head(*, repo: str, payload: dict, **_: object) -> None:
     )
 ```
 
+`dispatch_workflow` starts an Actions workflow, named by its file, on a ref with
+its inputs. It returns the id of the run it started. `get_workflow_run` reads
+that run: its `status`, its `conclusion` once `status` is `completed`, and its
+`html_url`. The App needs **Actions: Read and write**, so an app dispatches as
+the App and holds no token of its own.
+
+```python
+from druks.core.services import Github
+
+
+async def deploy(environment: str) -> dict:
+    github = await Github.get_client("acme/portal")
+    run_id = await github.dispatch_workflow(
+        "acme/portal", "deploy.yml", ref="main", inputs={"environment": environment}
+    )
+    return await github.get_workflow_run("acme/portal", run_id)
+```
+
 ### Tracker events
 
 Linear and GitHub tickets publish the same events. Each `payload` names its

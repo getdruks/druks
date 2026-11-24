@@ -572,6 +572,24 @@ class GitHubClient:
             body["output"] = {**output, "annotations": list(annotations[start : start + limit])}
             await checks.async_update(owner, repo_name, check_run_id, data=body)
 
+    async def dispatch_workflow(
+        self, repo: str, workflow: str, *, ref: str, inputs: dict[str, Any] | None = None
+    ) -> int:
+        """Start ``workflow``, a file name such as ``deploy.yml``, on ``ref`` with
+        ``inputs``, and return the id of the run it started."""
+        owner, name = repo.split("/", 1)
+        response = await self._github.rest.actions.async_create_workflow_dispatch(
+            owner, name, workflow, ref=ref, inputs=inputs or UNSET
+        )
+        return response.parsed_data.workflow_run_id
+
+    async def get_workflow_run(self, repo: str, run_id: int) -> dict[str, Any]:
+        """The run ``run_id``: its ``status``, its ``conclusion`` once ``status`` is
+        ``completed``, and its ``html_url``."""
+        owner, name = repo.split("/", 1)
+        response = await self._github.rest.actions.async_get_workflow_run(owner, name, run_id)
+        return response.parsed_data.model_dump()
+
     async def can_write(self, repo: str, username: str) -> bool:
         """Whether ``username`` can write to ``repo``. GitHub reports maintain as write."""
         owner, name = repo.split("/", 1)
