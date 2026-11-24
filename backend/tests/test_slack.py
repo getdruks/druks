@@ -27,6 +27,7 @@ from druks.chat.routes import read_file, read_thread, require_tag
 from druks.core.apis.slack import SlackClient
 from druks.core.services import Slack
 from druks.core.webhooks.slack import SlackEvents, SlackInteractivity
+from druks.files import File
 from druks.mcp.inbound import get_druks_mcp_server
 from druks.models import Base
 from druks.notifications.models import Notification
@@ -35,7 +36,7 @@ from druks.sandbox.exceptions import SandboxUploadError
 from druks.sandbox.layout import get_work_root
 from druks.secrets.datastructures import Audience
 from druks.secrets.models import VaultSecret
-from druks.settings import configure_settings
+from druks.settings import configure_settings, get_settings
 from druks.testing import asgi_client, configure_app_for_test, make_settings
 from druks.webhooks.router import match_webhook
 from fastapi import Depends, FastAPI
@@ -280,12 +281,16 @@ FACTS = [
 ]
 
 
+@pytest.mark.usefixtures("tmp_data_dir")
 @pytest.mark.parametrize("blocks", [None, FACTS], ids=["text", "blocks"])
 async def test_an_agents_reply_shows_its_name_and_picture_and_the_bots_shows_neither(
     card_with_names, druks_db, slack, blocks
 ):
     ana = await Account.get_or_create(druks_db, "ana@example.com")
     agent = await create_agent(druks_db, ana, "Security engineer")
+    picture = await File.create(
+        name="face.png", content_type="image/png", content=b"png", app="core", uploaded_by=ana.id
+    )
     await agent.replace(
         druks_db,
         editor=ana,
@@ -298,14 +303,14 @@ async def test_an_agents_reply_shows_its_name_and_picture_and_the_bots_shows_nei
         model=agent.model,
         is_private=agent.is_private,
         channel_id=None,
-        picture_url="https://example.com/security.png",
+        picture=picture.id,
     )
 
     await reply_in_slack(druks_db, card_with_names, ana, agent.id, blocks=blocks)
     await reply_in_slack(druks_db, card_with_names, ana, None, blocks=blocks)
 
     assert [(sent.get("username"), sent.get("icon_url")) for _, sent in slack] == [
-        ("Security engineer", "https://example.com/security.png"),
+        ("Security engineer", f"{get_settings().urls.webhook_base}/media/{picture.id}"),
         (None, None),
     ]
 
@@ -604,7 +609,7 @@ async def bind_channel(session, agent, channel_id):
         model=agent.model,
         is_private=agent.is_private,
         channel_id=channel_id,
-        picture_url=agent.picture_url,
+        picture=None,
     )
     await session.commit()
 

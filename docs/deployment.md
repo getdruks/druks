@@ -187,9 +187,9 @@ Configure public webhook access:
 4. Run the installer again.
 
 Caddy provisions a Let's Encrypt certificate for that hostname. It serves only
-`POST /_external/*`, the PAT-authenticated `/mcp` endpoint, and the call streams
-at `/_calls/*`. It does not serve dashboard routes or the identity header. Thus,
-a public client cannot forge the SSO gate.
+`POST /_external/*`, agents' pictures at `GET /media/*`, the PAT-authenticated
+`/mcp` endpoint, and the call streams at `/_calls/*`. It does not serve dashboard
+routes or the identity header. Thus, a public client cannot forge the SSO gate.
 
 Webhook URLs become
 `https://druks.example.com/_external/<provider>/events/`. Agents connect at
@@ -435,6 +435,9 @@ image, host network, port `:8000`, and the Caddyfile from the installer:
   class authenticates each request. Per-provider paths land under
   `/_external/<provider>/<category>/`. App role-module discovery
   registers them at import time.
+- **Agent pictures:** Druks serves an agent's picture at
+  `GET /media/<file-id>` with no sign-in, because a channel's servers fetch it.
+  Any other file id answers 404.
 - **MCP:** Druks exposes `/mcp` publicly. A personal access token authenticates
   each request inside Druks. Caddy does not buffer this route, so its SSE frames stream.
 - **Calls:** Druks exposes `/_calls/*` publicly. Twilio streams a call's audio

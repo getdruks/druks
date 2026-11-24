@@ -24,7 +24,7 @@ const reviewer: Agent = {
   isPrivate: false,
   ownerId: 'admin',
   channelId: null,
-  pictureUrl: null,
+  picture: null,
 }
 
 function renderPage(account: Account) {
@@ -92,7 +92,7 @@ describe('AgentsPage', () => {
     let agents: Agent[] = []
     vi.spyOn(api, 'agents').mockImplementation(async () => agents)
     const create = vi.spyOn(api, 'createAgent').mockImplementation(async (body) => {
-      const agent = { ...body, id: 'agent-2', ownerId: 'member', channelId: null, pictureUrl: null }
+      const agent = { ...body, id: 'agent-2', ownerId: 'member', channelId: null, picture: null }
       agents = [agent]
       return agent
     })
@@ -166,7 +166,7 @@ describe('AgentsPage', () => {
         isPrivate: false,
         ownerId: 'member',
         channelId: null,
-        pictureUrl: null,
+        picture: null,
       }),
     )
   })
@@ -186,21 +186,72 @@ describe('AgentsPage', () => {
     )
   })
 
-  it('lets the owner give their agent a picture', async () => {
+  it('lets the owner upload a picture for their agent', async () => {
     vi.spyOn(api, 'agents').mockResolvedValue([{ ...reviewer, ownerId: 'member' }])
+    const upload = vi.spyOn(api, 'upload').mockResolvedValue({
+      id: 'file-1',
+      name: 'reviewer.png',
+      contentType: 'image/png',
+      size: 3,
+      url: '/api/files/file-1',
+    })
+    const update = vi.spyOn(api, 'updateAgent').mockResolvedValue(reviewer)
+    const file = new File(['png'], 'reviewer.png', { type: 'image/png' })
+
+    renderPage(member)
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+    fireEvent.change(screen.getByLabelText('Picture'), { target: { files: [file] } })
+    const picture = await screen.findByRole('img', { name: 'Picture of Reviewer' })
+    expect(picture.getAttribute('src')).toBe('/api/files/file-1')
+    fireEvent.click(screen.getByRole('button', { name: 'Save agent' }))
+
+    expect(upload).toHaveBeenCalledWith('core', file)
+    await waitFor(() =>
+      expect(update).toHaveBeenCalledWith(
+        'agent-1',
+        expect.objectContaining({ picture: 'file-1' }),
+      ),
+    )
+  })
+
+  it('refuses a picture that is not a png, jpg or gif', async () => {
+    vi.spyOn(api, 'agents').mockResolvedValue([{ ...reviewer, ownerId: 'member' }])
+    const upload = vi.spyOn(api, 'upload')
+    const file = new File(['<svg/>'], 'reviewer.svg', { type: 'image/svg+xml' })
+
+    renderPage(member)
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+    fireEvent.change(screen.getByLabelText('Picture'), { target: { files: [file] } })
+
+    expect(await screen.findByText(/reviewer.svg is not a png, jpg or gif image/)).toBeTruthy()
+    expect(upload).not.toHaveBeenCalled()
+  })
+
+  it('lets the owner remove an uploaded picture', async () => {
+    vi.spyOn(api, 'agents').mockResolvedValue([
+      {
+        ...reviewer,
+        ownerId: 'member',
+        picture: {
+          id: 'file-9',
+          name: 'reviewer.png',
+          contentType: 'image/png',
+          size: 3,
+          url: '/api/files/file-9',
+        },
+      },
+    ])
     const update = vi.spyOn(api, 'updateAgent').mockResolvedValue(reviewer)
 
     renderPage(member)
     fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
-    fireEvent.change(screen.getByLabelText('Picture URL'), {
-      target: { value: 'https://example.com/reviewer.png' },
-    })
+    fireEvent.click(screen.getByRole('button', { name: 'Remove picture' }))
     fireEvent.click(screen.getByRole('button', { name: 'Save agent' }))
 
     await waitFor(() =>
       expect(update).toHaveBeenCalledWith(
         'agent-1',
-        expect.objectContaining({ pictureUrl: 'https://example.com/reviewer.png' }),
+        expect.objectContaining({ picture: null }),
       ),
     )
   })

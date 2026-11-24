@@ -343,7 +343,7 @@ export const api = {
     postJSON<Team>(`/api/teams/${encodeURIComponent(teamId)}`, body, 'PUT'),
   deleteTeam: (teamId: string) => deleteRequest(`/api/teams/${encodeURIComponent(teamId)}`),
   agents: () => getJSON<Agent[]>('/api/agents'),
-  createAgent: (body: Omit<AgentInput, 'ownerId' | 'channelId' | 'pictureUrl'>) =>
+  createAgent: (body: Omit<AgentInput, 'ownerId' | 'channelId' | 'picture'>) =>
     postJSON<Agent>('/api/agents', body),
   updateAgent: (agentId: string, body: AgentInput) =>
     postJSON<Agent>(`/api/agents/${encodeURIComponent(agentId)}`, body, 'PUT'),

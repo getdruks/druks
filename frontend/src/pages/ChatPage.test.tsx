@@ -33,7 +33,7 @@ const conversation: Conversation = {
 const admin: Account = { id: 'admin', username: 'admin@example.com', isDefault: true, role: 'admin' }
 const reviewer: Agent = {
   id: 'agent-1', name: 'Reviewer', description: 'Reviews pull requests', instructions: 'Be brief.',
-  skills: [], harness: 'claude', model: 'claude-opus', isPrivate: true, ownerId: 'admin', channelId: null, pictureUrl: null,
+  skills: [], harness: 'claude', model: 'claude-opus', isPrivate: true, ownerId: 'admin', channelId: null, picture: null,
 }
 
 function mount(path = `/chat/${conversation.id}`, timezone?: string, account = admin) {

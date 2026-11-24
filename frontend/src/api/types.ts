@@ -678,11 +678,13 @@ export interface AgentInput {
   isPrivate: boolean
   ownerId: string
   channelId: string | null
-  pictureUrl: string | null
+  // The id of an uploaded png, jpg or gif.
+  picture: string | null
 }
 
-export interface Agent extends AgentInput {
+export interface Agent extends Omit<AgentInput, 'picture'> {
   id: string
+  picture: FileSummary | null
 }
 
 // A schedule set in a conversation of the agent. ``lastRun`` is the run of its newest due time.
