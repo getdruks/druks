@@ -8,9 +8,7 @@ import httpx
 import pytest
 from conftest import bind_ambient_session, connect_service
 from druks.accounts.models import Account
-from druks.chat.bots import service as bot_service
 from druks.chat.channels.github.channel import GitHubChannel
-from druks.chat.constants import PARKED_FOR_REVIEW_MESSAGE
 from druks.chat.enums import ConversationSource, MessageRole
 from druks.chat.models import Conversation
 from druks.core.apis.github import GITHUB_AUTHORITY, GitHubAppClient, GitHubClient
@@ -20,8 +18,7 @@ from druks.core.webhooks.github import GitHubEvents
 from druks.redis import close_client
 from druks.secrets.datastructures import Audience
 from druks.secrets.models import VaultSecret
-from druks.testing import configure_app_for_test, make_settings, seed_run
-from druks_field_notes.workflows import Summarize
+from druks.testing import configure_app_for_test, make_settings
 from fastapi.testclient import TestClient
 from githubkit import GitHub
 
@@ -293,29 +290,6 @@ async def test_a_line_druks_wrote_goes_where_the_last_tag_was(card, druks_db, gi
     await GitHubChannel.send_reply(druks_db, conversation, notice)
 
     assert github == [("reply_to_review_comment", "acme/app", 7, 50, "The run waits.")]
-
-
-async def test_a_thread_hears_only_that_a_run_waits_for_its_approver_s_review(card, druks_db):
-    ana = await Account.get_or_create(druks_db, "ana@example.com")
-    conversation = await issue_conversation(druks_db, card, ana)
-    approver = await Account.get_or_create(druks_db, "paulo@example.com")
-    run = await seed_run(
-        druks_db,
-        kind=Summarize.kind,
-        state="parked",
-        input_gate="review",
-        input_request={
-            "presentation": "in_app",
-            "controls": [{"id": "approve", "note_required": False}],
-            "questions": [],
-            "approver_id": approver.id,
-        },
-    )
-    run.conversation_id = conversation.id
-
-    assert await bot_service.ask_for_answer(druks_db, run) == conversation.id
-    await druks_db.refresh(conversation, ["messages"])
-    assert conversation.messages[-1].body == PARKED_FOR_REVIEW_MESSAGE.format(run=run.id)
 
 
 async def test_a_reply_goes_where_the_tag_was(card, druks_db, github):

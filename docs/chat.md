@@ -355,20 +355,20 @@ denies the file, shell, and web tools.
 A run that the agent starts with a tool records its conversation. When the run
 parks with a question, Druks adds an internal message with the request to that
 conversation. On a WhatsApp number with an admin, the admin answers instead: see
-[Confirmation](#confirmation). A review that names an
+[Confirmation](#confirmation). A question that names an
 [approver](writing-an-app.md#wait-for-input) asks the approver instead, on any
-source. In an operator's own chat, such as a direct message, the conversation's
-message then says that the run waits for the approver, and the agent tells you.
-Any other conversation reads only that the run waits for a review, without the
-request or the approver: a shared thread, such as a Slack room, a GitHub issue,
-or a WhatsApp group, and a conversation that a bot or bot admin account owns,
-such as a chat on a public WhatsApp number or a call. The conversation gets no
-buttons. Only the approver can answer. The request is the ask as JSON, as
+source. The conversation gets no buttons, because only the approver can answer.
+In an operator's conversation, the message holds the request and the name of the
+approver. The agent tells you. A conversation that a bot or bot admin account
+owns reads only that the run waits for a review. A chat on a public WhatsApp
+number and a call are such conversations. A conversation of the approver's own
+account is the exception. Druks asks there, as it does for a question with no
+approver. The request is the ask as JSON, as
 `get_gate` gives it. A review's context is text, or the JSON of its
 [blocks](writing-an-app.md#wait-for-input). Druks reads each subject status in the
 blocks when it writes the message. In a Slack conversation, you also get the
-question of a run that waits for an answer in the dashboard and names no
-approver. It comes in the thread
+question of a run that waits for an answer in the dashboard, unless it names
+another account as its approver. It comes in the thread
 or direct message, with a button for each choice. Only the person who started the
 run can click them. The question with its buttons is the only message that you get
 about it. Druks keeps the internal message for the agent's next turn, such as the
@@ -726,7 +726,7 @@ with `answer_gate`. When two questions are open, the run ID tells them apart.
 
 Only the number's admin can answer a question that came from the number's
 chats. The dashboard, `answer_gate`, and notification buttons all refuse
-everyone else, operators included. A review that names an approver goes to the
+everyone else, operators included. A question that names an approver goes to the
 approver instead of the admin. See [Agent access](#agent-access).
 
 When a chat on the number starts a run, Druks reports the end of the run to that

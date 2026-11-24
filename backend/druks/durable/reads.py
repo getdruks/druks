@@ -185,7 +185,7 @@ async def _timeline(runs: list[Run]) -> list[RunResponse]:
 async def read_ask(session: AsyncSession, run: Run) -> dict:
     """The ask that ``run`` is parked on, as Druks shows it. The run's app reads an ask
     whose context holds blocks, so that each status in them holds where the work on its
-    subject stands at this read. A review's approver shows as their username."""
+    subject stands at this read. The approver of an ask shows as their username."""
     match run.input_request:
         # A context of text holds no blocks, and an ask with no blocks needs no app.
         case {"presentation": "in_app", "context": [_, *_]}:

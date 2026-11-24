@@ -75,24 +75,5 @@ class SubjectlessGate(FatalError):
         self.gate = gate
 
 
-class UnknownApprover(FatalError):
-    def __init__(self, approver: str) -> None:
-        super().__init__(
-            f"review() names the approver {approver!r}, and no account has that username. "
-            "Name the username of an account in Druks."
-        )
-        self.approver = approver
-
-
-class ApproverCannotUseApp(FatalError):
-    def __init__(self, approver: str, app: str) -> None:
-        super().__init__(
-            f"review() names the approver {approver!r}, who cannot use the app {app}. "
-            "Add them to a team that lists the app, or name another approver."
-        )
-        self.approver = approver
-        self.app = app
-
-
 class ScheduleUnavailable(DruksError):
     """DBOS holds no schedule with this name, so there is nothing to trigger."""

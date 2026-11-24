@@ -45,8 +45,8 @@ PARKED_MESSAGE = (
 )
 PARKED_FOR_APPROVER_MESSAGE = (
     "[Internal: Run {run} waits for an answer from {approver}. Druks asked {approver}, and "
-    "only they can answer it. The request:\n{request}\nTell the person that the run waits "
-    "for {approver}.]"
+    "only they can answer it. The request:\n{request}\nTell the person what the run waits "
+    "for, and that only {approver} can answer it.]"
 )
 PARKED_FOR_REVIEW_MESSAGE = (
     "[Internal: Run {run} waits for a review by someone Druks asked. Tell the person that "

@@ -256,24 +256,24 @@ async def resume(session: AsyncSession, conversation: Conversation) -> bool:
 
 
 async def ask_for_answer(session: AsyncSession, run: Run) -> str | None:
-    """Ask for the answer a parked run that a chat started waits on. A review's approver
-    decides when the review names one. An operator's own chat then hears whom the run
-    waits for, and any other chat hears only that it waits for a review. Otherwise a
-    number's admin decides for the number's chats, and any other chat hears the ask
-    itself. Returns the conversation to deliver."""
+    """Ask for the answer a parked run that a chat started waits on. When only another
+    account may answer, an operator's chat hears whom the run waits for, and a Bot's chat
+    hears only that it waits for a review. Otherwise a number's admin decides for the
+    number's chats, and any other chat hears the ask itself. Returns the conversation to
+    deliver."""
     if not run.input_request:
         return
     conversation = await session.get(Conversation, run.conversation_id)
     request = to_json(await read_ask(session, run)).decode()
-    if approver_id := run.input_request.get("approver_id"):
-        if conversation.account.kind == AccountKind.OPERATOR and not conversation.is_shared_thread:
-            approver = await session.get(Account, approver_id)
+    if not run.is_answerable_by(conversation.account_id):
+        if conversation.account.kind == AccountKind.OPERATOR:
+            approver = await session.get(Account, run.input_request["approver_id"])
             body = PARKED_FOR_APPROVER_MESSAGE.format(
                 run=run.id, approver=approver.username, request=request
             )
         else:
-            # A username is an email address. A Bot serves people outside Druks, and others
-            # read a shared thread, so they read neither the ask nor the approver.
+            # A Bot serves people outside Druks. They read neither the ask nor the
+            # approver, whose username can be an email address.
             body = PARKED_FOR_REVIEW_MESSAGE.format(run=run.id)
         return await report_outcome(session, run.conversation_id, body)
     if not conversation.admin_account_id:

@@ -240,7 +240,7 @@ async def validate_in_app_answer(
     has_note_input: bool = False,
 ) -> dict:
     # The in-app answer contract, shared by the runs resume route, the answer_gate
-    # tool, and the respond path of notifications. Only the approver answers a review
+    # tool, and the respond path of notifications. Only the approver answers an ask
     # that names one. Otherwise, only the admin of an app's channel answers a question
     # that a chat on that channel asked. Only the team and the admins answer a run of an
     # app that a team lists.
@@ -250,11 +250,14 @@ async def validate_in_app_answer(
     # control flow. The answering account comes from the identity of the caller, never
     # from the client.
     account = await session.get(Account, account_id) if account_id else None
+    # A person whom Druks cannot name can still answer on the run's page, as the account
+    # that signed in.
+    link = None if account else run.get_link()
     if approver_id := run.input_request.get("approver_id"):
-        if account_id != approver_id:
+        if not run.is_answerable_by(account_id):
             approver = await session.get(Account, approver_id)
             raise AnswerNotAllowedError(
-                APPROVER_ONLY_MESSAGE.format(approver=approver.username), link=run.get_link()
+                APPROVER_ONLY_MESSAGE.format(approver=approver.username), link=link
             )
     elif run.conversation_id:
         conversation = await session.get(Conversation, run.conversation_id)
@@ -269,7 +272,7 @@ async def validate_in_app_answer(
     app = get_app(workflow.app)
     # A person with no account is on no team.
     if await Team.exists_for_app(session, app) and not (account and await account.can_use_app(app)):
-        raise AnswerNotAllowedError(TEAM_ONLY_MESSAGE.format(app=app.name), link=run.get_link())
+        raise AnswerNotAllowedError(TEAM_ONLY_MESSAGE.format(app=app.name), link=link)
     ask = await run.get_ask()
     offered = await get_offered_control(ask, control)
     if offered["note_required"] and not note.strip():

@@ -4,6 +4,7 @@ import pytest
 from dbos import DBOS
 from dbos import error as dbos_error
 from druks import ui
+from druks.accounts.models import Account
 from druks.contrib.software_factory.workflows import PullRequestReview
 from druks.durable.exceptions import GateTimeout, WorkflowError
 from druks.durable.models import Run
@@ -104,6 +105,29 @@ async def test_yes_no_parks_with_its_own_controls(druks_db, direct_steps, monkey
         ],
         "reply_fields": ["action", "note"],
     }
+
+
+async def test_a_gate_s_in_app_ask_names_its_approver_by_username(
+    druks_db, direct_steps, monkeypatch
+):
+    approver = await Account.get_or_create(druks_db, "paulo@example.com")
+    note = await Note.create(body="A quote")
+    run = await seed_run(druks_db, kind=Summarize.kind, subject=note)
+    workflow = Summarize()
+    workflow._workflow_id = run.id
+    workflow._subject = note.identity
+    token = current_workflow.set(workflow)
+    monkeypatch.setattr(DBOS, "recv_async", AsyncMock(return_value={"action": "yes"}))
+    ask = {"presentation": "in_app", "label": "Keep it?", "approver": "Paulo@Example.com"}
+    try:
+        await YesNo.wait(input_request=ask)
+    finally:
+        current_workflow.reset(token)
+
+    druks_db.expunge_all()
+    parked = await druks_db.scalar(select(Event).where(Event.type == "workflow.parked"))
+    stored = parked.payload["input_request"]
+    assert (stored["approver_id"], "approver" in stored) == (approver.id, False)
 
 
 async def test_a_reply_names_only_the_account_that_druks_stored(

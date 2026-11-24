@@ -26,7 +26,7 @@ class FeedItem(Schema):
     @field_validator("payload")
     @classmethod
     def show_usernames(cls, payload: dict, info: ValidationInfo) -> dict:
-        """A review's ask stores its approver by account id, and a gate's receipt stores
+        """An ask stores its approver by account id, and a gate's receipt stores
         the account that answered. The feed shows each one's username, from the
         ``usernames`` that the route reads for ``list_account_ids``."""
         usernames = info.context["usernames"]

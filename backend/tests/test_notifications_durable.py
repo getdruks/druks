@@ -244,6 +244,7 @@ async def rt():
                 9019,
                 9020,
                 9022,
+                9023,
             )
         )
         session.commit()
@@ -1140,7 +1141,6 @@ async def test_a_review_asks_its_approver_and_only_their_answer_resumes_it(rt, d
         approver = await Account.get_or_create(db_session(), "paulo@example.com")
         await approver.update_preferences(notification_channel_id="C-paulo")
         requester = await Account.get_default(db_session())
-        # The requester's direct message, which only they read.
         conversation = Conversation(
             account_id=requester.id, source=ConversationSource.SLACK, user_id="U1"
         )
@@ -1170,7 +1170,8 @@ async def test_a_review_asks_its_approver_and_only_their_answer_resumes_it(rt, d
         )
     finally:
         await session.close()
-    assert f"Run {workflow_id} waits for an answer from paulo@example.com." in told
+    # The requester's chat hears the approver, as the account spells the name.
+    assert "paulo@example.com" in told
 
     token = notification.correlation_token
     by_requester = await _respond_in_own_session(
@@ -1185,13 +1186,47 @@ async def test_a_review_asks_its_approver_and_only_their_answer_resumes_it(rt, d
     assert OperatorReply(action="approve", answered_by="paulo@example.com") in _REVIEW_REPLIES
 
 
+async def test_a_chat_of_the_approver_s_own_account_asks_in_the_chat(rt, deliver_spy):
+    async def create():
+        await _install_slack()
+        account = await Account.get_default(db_session())
+        conversation = Conversation(
+            account_id=account.id,
+            source=ConversationSource.SLACK,
+            user_id="U1",
+            thread_id="C9:1700000000.000900",
+        )
+        db_session().add(conversation)
+        await db_session().flush()
+        return account.username, conversation.id
+
+    username, conversation_id = await _seed(rt, create)
+    reset = current_conversation_id.set(conversation_id)
+    try:
+        workflow_id = await rt.ApproverFlow.start(
+            subject=NotificationProbe(id=9023), approver=username
+        )
+    finally:
+        current_conversation_id.reset(reset)
+
+    notification = await _wait_notification(rt, workflow_id, "delivered")
+    # The thread's buttons answer as the approver, so the approver gets no second question.
+    assert [row.id for row in await _notifications_for_run(rt, workflow_id)] == [notification.id]
+    assert (notification.account_id, notification.conversation_id) == (None, conversation_id)
+    clicked = await _respond_in_own_session(
+        rt, notification.correlation_token, {"control": "approve"}, user_id="U1"
+    )
+    assert clicked == "ok"
+    await _wait_run(rt, workflow_id, lambda run: run.state == RunState.FINISHED)
+
+
 async def test_a_review_whose_approver_has_no_account_fails_the_run(rt, deliver_spy):
     workflow_id = await rt.ApproverFlow.start(
         subject=NotificationProbe(id=9020), approver="nobody@example.com"
     )
 
     run = await _wait_run(rt, workflow_id, lambda run: run.state == RunState.FAILED)
-    assert "no account has that username" in run.failure_message()
+    assert "No account with username nobody@example.com" in run.failure_message()
 
 
 async def test_a_review_whose_approver_cannot_use_the_app_fails_the_run(rt, deliver_spy):

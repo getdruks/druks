@@ -479,6 +479,11 @@ class Run(Base):
             **ask,
         }
 
+    def is_answerable_by(self, account_id: str | None) -> bool:
+        """Whether the account may answer the ask that the run waits on. When the ask
+        names an approver, only that account may."""
+        return self.input_request.get("approver_id") in (None, account_id)
+
     async def close_park_notifications(self) -> None:
         """Queue the close of the messages that ask the question this run is parked on, in
         the session's transaction. The fixed id makes a repeat a no-op, so a step that runs

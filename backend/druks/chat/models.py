@@ -159,13 +159,6 @@ class Conversation(Base, Uuid7Pk):
         return channel_registry.get(self.source)
 
     @property
-    def is_shared_thread(self) -> bool:
-        """Whether people other than the conversation's person read it: a thread of a
-        channel whose threads others write in, such as a Slack room, a GitHub issue, or a
-        WhatsApp group."""
-        return bool(self.thread_id) and self.channel.has_readable_threads
-
-    @property
     def sandbox_scope(self) -> str:
         """A conversation with an agent runs in the box for its person and that agent,
         apart from their chat box."""

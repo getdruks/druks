@@ -1303,12 +1303,15 @@ wait. Druks then raises an error and does not park the run.
 Every gate's reply, a review's and `YesNo`'s included, carries `answered_by`: the
 username of the account that answered in Druks. The admin of a
 [public number](chat.md#link-a-number) answers as the number's bot admin account,
-whose username names no person. It is empty when no account answered: an answer
-from outside Druks, a link in a notification, which names nobody, or a click in
-Slack by a person whose Slack account is not linked. Only Druks sets it: `answer()`
-refuses `answered_by`.
+whose username names no person. `answered_by` is empty when no account answered:
 
-To make one person decide, name their account's username as `approver`. An
+- an answer from outside Druks
+- a link in a notification
+- a click in Slack by a person whose Slack account is not linked
+
+Only Druks sets it. `answer()` refuses `answered_by`.
+
+To make one person decide, name the username of their account as `approver`. An
 app usually reads it from its [settings](#app-settings-and-checks), in a step:
 
 ```python
@@ -1321,24 +1324,32 @@ async def get_approver(self) -> str:
 reply = await self.review(context=plan, approver=await self.get_approver())
 ```
 
-A review with an approver runs one more step than a review without one. Read
-outside a step, a setting that an operator sets or clears while a run waits
-would make the run's replay take other steps, and the replay would fail.
+A replay then keeps the approver that the workflow read first. A direct read can
+make the replay fail when an operator sets or clears the setting while the
+workflow waits.
 
 Only that account can answer. The dashboard, a Slack button, and `answer_gate`
-refuse everyone else, admins included. The refusal says who must answer and links
-to the run, so an approver whose Slack account is not linked answers there. Druks
-sends the approver the [Run waits for an answer](configuration.md#notifications)
-notification, with the review's context, its buttons, and a link to the run.
-The run shows under Needs you on the approver's
-[Dashboard](concepts.md#current-work-on-the-dashboard), and not on the
-Dashboard of the person who started it. That person gets no notification. When
-a chat started the run, the chat gets no buttons. Its agent tells the person
-that the run waits, and names the approver only in an operator's own chat. See
-[Agent access](chat.md#agent-access). The run fails before it parks: with
-`UnknownApprover` when no account has the username, and with
-`ApproverCannotUseApp` when the account cannot use the app. Without
-`approver`, the review asks as described above.
+refuse everyone else, admins included. The refusal says who must answer. A person
+whose Slack account is not linked clicks as nobody. The refusal then also links
+to the run's page, where the approver can answer.
+
+Druks sends the approver the
+[Run waits for an answer](configuration.md#notifications) notification. It has
+the context of the review, its buttons, and a link to the run's page. The
+workflow shows under Needs you on the approver's
+[Dashboard](concepts.md#current-work-on-the-dashboard). When another person
+started the workflow, that person gets no notification. Their Dashboard does not
+show the workflow while it waits.
+
+When a chat started the workflow, the chat gets no buttons. Its agent tells the
+person that the workflow waits. In an operator's chat, the agent also gets the
+request and the name of the approver. A chat of the approver's own account is
+the exception. Druks asks there, as it does without an approver. See
+[Agent access](chat.md#agent-access).
+
+The workflow fails before it waits when no account has the username, or when the
+account cannot use the app. Without `approver`, the review asks as described
+above.
 
 For a yes or no decision, wait on the built-in `YesNo` gate:
 
@@ -1349,6 +1360,9 @@ reply = await YesNo.wait(input_request={"presentation": "in_app", "label": "Keep
 if reply.action == "yes":
     ...
 ```
+
+The in-app ask of a gate names an approver with its `approver` key. Druks treats
+that approver as it treats the approver of a review.
 
 Raise `FatalError` for a deliberate domain stop. If readers need a stable
 machine failure code, subclass it. Set `code` on the subclass. Unexpected

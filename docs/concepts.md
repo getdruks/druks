@@ -130,9 +130,9 @@ gate as the shared run API. It shows the runs attributed to the current account
 or to the default account through `Run.account_id`. A run that starts without an
 operator, such as a scheduled run, takes the default account. That account can
 be a service account that nobody signs in as, so every operator sees its runs.
-The Dashboard does not show the runs of other operators. A run that waits for a
-review that names an [approver](writing-an-app.md#wait-for-input) is the
-exception: it shows only to the approver, whoever started it. This choice does
+The Dashboard does not show the runs of other operators. A run that waits for an
+[approver](writing-an-app.md#wait-for-input) is the exception. It shows only to
+the approver, whoever started it. This choice does
 not change access permissions. Only the workflows of installed apps that the
 viewer can use count. See
 [Process and access topology](#process-and-access-topology).

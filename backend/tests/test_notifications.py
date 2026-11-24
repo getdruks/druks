@@ -609,15 +609,16 @@ async def test_a_click_on_a_chat_question_is_the_person_s_next_message(druks_db,
     started.assert_awaited_once_with(deliver, question.conversation_id)
 
 
-async def test_a_click_that_names_nobody_gets_the_approver_and_the_run_s_page(tmp_path, druks_db):
-    # A Slack account that is not linked clicks as nobody, the approver too.
+async def test_a_refusal_gives_the_run_s_page_only_to_a_click_that_names_nobody(tmp_path, druks_db):
+    # A person with no linked account clicks as nobody, the approver too. That person can
+    # answer on the run's page.
     configure_settings(make_settings(tmp_path, urls={"endpoint": "https://druks.example"}))
     approver = await Account.get_or_create(druks_db, "paulo@example.com")
     run, notification = await _parked_notification(
         druks_db, ask={**_IN_APP_ASK, "approver_id": approver.id}
     )
 
-    with pytest.raises(AnswerNotAllowedError) as refused:
+    with pytest.raises(AnswerNotAllowedError) as unnamed:
         await respond_to_notification(
             druks_db,
             notification.correlation_token,
@@ -625,10 +626,18 @@ async def test_a_click_that_names_nobody_gets_the_approver_and_the_run_s_page(tm
             user_id="U7",
             account_id=None,
         )
+    with pytest.raises(AnswerNotAllowedError) as named:
+        await respond_to_notification(
+            druks_db,
+            notification.correlation_token,
+            {"control": "approve"},
+            user_id="U7",
+            account_id=run.account_id,
+        )
 
-    assert str(refused.value) == (
-        "Only paulo@example.com can answer this run. Open it in Druks: "
-        f"https://druks.example/runs/{run.id}"
+    assert str(named.value) == "Only paulo@example.com can answer this run."
+    assert str(unnamed.value) == (
+        f"{named.value} Open it in Druks: https://druks.example/runs/{run.id}"
     )
 
 
