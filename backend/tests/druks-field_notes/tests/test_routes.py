@@ -3,8 +3,8 @@ from druks_field_notes.workflows import Summarize
 
 
 async def test_notes_routes_create_and_list_notes(druks_client, monkeypatch):
-    # The route dispatches from its own session and that session closes with the
-    # request, so read the note's id here while the row is still attached.
+    # The route dispatches from its own session. That session closes with the request.
+    # Read the note's id here, while the row is still attached.
     summarized = []
 
     async def dispatch(*, note):
@@ -20,7 +20,7 @@ async def test_notes_routes_create_and_list_notes(druks_client, monkeypatch):
 
     assert created.status_code == 201
     note = await Note.get(id=created.json()["id"])
-    assert note.body == "the pump ran hot"
+    assert (note.body, note.written_by) == ("the pump ran hot", "op@example.com")
     assert summarized == [note.id]
 
     listed = await druks_client.get("/api/field_notes/notes")

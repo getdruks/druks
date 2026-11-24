@@ -65,7 +65,7 @@ async def _hydrate_file(session, monkeypatch, *, name="home.png", content=b"imag
 
 
 async def test_create_stores_an_upload_against_its_account(druks_db):
-    """File.create stores bytes against the account that sent them."""
+    """File.create stores the bytes and the account that sent them."""
 
     file = await File.create(
         name="shopfront.jpg",
@@ -92,7 +92,7 @@ async def test_create_stores_an_upload_against_its_account(druks_db):
 
 
 async def test_create_refuses_an_oversized_upload(monkeypatch):
-    """An upload past the byte cap raises before any byte or row lands."""
+    """An upload past the byte cap raises before Druks writes any byte or row."""
     monkeypatch.setattr("druks.files.datastructures.MAX_FILE_BYTES", 4)
 
     with pytest.raises(FileTooLargeError, match="cap"):
@@ -106,7 +106,7 @@ async def test_create_refuses_an_oversized_upload(monkeypatch):
 
 
 async def test_uploaded_file_delete_and_reap(druks_db, tmp_path):
-    """A deleted upload loses its bytes to the reaper and keeps its tombstone."""
+    """The reaper removes the bytes of a deleted upload. Its tombstone stays."""
     file = await File.create(
         name="shopfront.jpg",
         content_type="image/jpeg",
@@ -134,7 +134,7 @@ def test_file_contract_is_a_strict_nested_workspace_path():
 
 
 async def test_hydration_pulls_and_stores_a_nested_file(druks_db, tmp_path, monkeypatch):
-    """Hydration stores immutable bytes and stamps the handle and provenance."""
+    """Hydration stores immutable bytes and stamps the handle and the provenance."""
     file = await _hydrate_file(druks_db, monkeypatch, content=b"png bytes")
 
     record = await druks_db.get(FileRecord, file.id)
@@ -154,7 +154,7 @@ async def test_hydration_pulls_and_stores_a_nested_file(druks_db, tmp_path, monk
 async def test_a_deleted_agent_call_leaves_its_file_without_a_source(
     druks_db, tmp_path, monkeypatch
 ):
-    """A file outlives the call that made it, and stops naming it."""
+    """A file stays after the call that made it, and then names no source."""
     file = await _hydrate_file(druks_db, monkeypatch)
     record = await druks_db.get(FileRecord, file.id)
 
@@ -167,7 +167,8 @@ async def test_a_deleted_agent_call_leaves_its_file_without_a_source(
 
 
 async def test_an_upload_holds_its_uploader(druks_db):
-    """An upload holds its uploader, so the account cannot leave without it."""
+    """An upload refers to its uploader. The database thus does not delete the account while
+    the upload exists."""
     account = Account(username="shopkeeper@example.com")
     druks_db.add(account)
     await druks_db.flush()
@@ -218,8 +219,8 @@ async def test_hydration_leaves_no_canonical_bytes_when_a_later_pull_fails(
 
 
 async def test_a_file_uploads_into_the_call_directory(druks_db, tmp_path, monkeypatch):
-    """A hydrated handle lands in the call's own directory on the box and reads
-    as its path there."""
+    """A hydrated handle uploads to the call's own directory on the box. The upload returns
+    its path there."""
     file = await _hydrate_file(druks_db, monkeypatch)
     host = MagicMock(ssh_username="root")
     host.upload_file = AsyncMock()
@@ -233,7 +234,7 @@ async def test_a_file_uploads_into_the_call_directory(druks_db, tmp_path, monkey
 
 
 async def test_file_field_round_trip_loads_metadata_with_the_row(druks_db, tmp_path, monkeypatch):
-    """FileField persists a real FK and projects complete handle metadata on load."""
+    """FileField persists a real FK and projects all the metadata of the handle on load."""
     file = await _hydrate_file(druks_db, monkeypatch, content=b"1234")
     reference = FileReference(image=file)
     druks_db.add(reference)
@@ -256,7 +257,7 @@ async def test_file_field_round_trip_loads_metadata_with_the_row(druks_db, tmp_p
 
 
 async def test_delete_and_reaper_leave_the_tombstone(druks_db, tmp_path, monkeypatch):
-    """The reaper removes bytes while the soft-deleted row and app FK remain."""
+    """The reaper removes the bytes while the soft-deleted row and the app FK remain."""
     file = await _hydrate_file(druks_db, monkeypatch)
     reference = FileReference(image=file)
     druks_db.add(reference)
@@ -270,5 +271,5 @@ async def test_delete_and_reaper_leave_the_tombstone(druks_db, tmp_path, monkeyp
     assert await druks_db.get(FileRecord, file.id) is record
     assert reference.image.id == file.id
     assert not LocalFileStorage(tmp_path / "files").path(file.id).exists()
-    with pytest.raises(FileUnavailableError, match="deleted or missing"):
+    with pytest.raises(FileUnavailableError, match="deleted or does not exist"):
         await file.open()

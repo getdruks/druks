@@ -232,7 +232,8 @@ async def _parked_notification(druks_db, *, ask=None, run_state="parked"):
 
 APPROVE = {"id": "approve", "label": "Approve"}
 REQUEST_CHANGES = {"id": "request_changes", "label": "Request changes"}
-# A question's id is any text. One of these is the note's name. One is a question's.
+# A question's id is any text. One of these ids is the name of the note. Another is the name
+# of a question's field.
 QUESTIONS = [
     {
         "id": "note",
@@ -365,7 +366,6 @@ async def test_respond_resumes_and_marks_acknowledged(druks_db, resume_spy):
 
     assert resume_spy == [{"id": run.id, "action": "approve", "answers": {"q1": "a"}, "note": ""}]
     assert (await druks_db.get(Notification, notification.id)).state == "acknowledged"
-    assert (await druks_db.get(Notification, notification.id)).is_acknowledged
 
 
 async def test_only_the_chat_s_person_answers_in_its_thread(druks_db, resume_spy):
@@ -532,8 +532,8 @@ ANSWERS = {
 
 
 async def _question_notification(druks_db, *, person="U1", ask=CHOICES):
-    """A question that the agent of a Slack chat with ``person`` asked, as its turn left
-    it. It has choices, or the fields of a form."""
+    """An open question that the agent of a Slack chat with ``person`` asked at the end of
+    its turn. The question has choices, or the fields of a form."""
     account = await Account.get_or_create(druks_db, "op@example.com")
     conversation = Conversation(
         account_id=account.id,
@@ -731,7 +731,7 @@ async def test_a_submit_by_another_person_answers_nothing(druks_db, started):
 @pytest.mark.parametrize("is_seen", [True, False], ids=["closed-before", "claimed-meanwhile"])
 async def test_a_submit_after_another_answer_creates_no_message(druks_db, started, is_seen):
     question = await _question_notification(druks_db, ask=FORM)
-    # Another answer took the form, before this Submit read it or while it checked it.
+    # Another answer closed the form, before this Submit read it or while it checked it.
     await druks_db.execute(
         update(Notification)
         .where(Notification.id == question.id)
@@ -764,7 +764,7 @@ async def test_the_respond_route_answers_no_form(tmp_path, druks_db, started):
 
 
 async def test_respond_route_codes_and_secret_hygiene(tmp_path, druks_db, resume_spy):
-    run, notification = await _parked_notification(druks_db)
+    _, notification = await _parked_notification(druks_db)
     token = notification.correlation_token
     client = TestClient(configure_app_for_test(settings=make_settings(tmp_path)))
 
@@ -824,7 +824,7 @@ async def test_the_respond_route_takes_answers_without_a_note(tmp_path, druks_db
 
 
 async def test_respond_external_notification_not_answerable(tmp_path, druks_db, resume_spy):
-    run, notification = await _parked_notification(
+    _, notification = await _parked_notification(
         druks_db, ask={"presentation": "external", "label": "Answer on the ticket"}
     )
     client = TestClient(configure_app_for_test(settings=make_settings(tmp_path)))
@@ -888,7 +888,7 @@ async def test_respond_stale_round_409(tmp_path, druks_db, resume_spy):
 
 
 async def test_respond_run_no_longer_parked_409(tmp_path, druks_db, resume_spy):
-    run, notification = await _parked_notification(druks_db, run_state="finished")
+    _, notification = await _parked_notification(druks_db, run_state="finished")
     client = TestClient(configure_app_for_test(settings=make_settings(tmp_path)))
 
     response = client.post(
@@ -901,9 +901,9 @@ async def test_respond_run_no_longer_parked_409(tmp_path, druks_db, resume_spy):
 
 
 async def test_respond_direct_call_rejects_whitespace_only_content(druks_db, resume_spy):
-    # The core is also the boundary of a direct call. The Slack rail skips the whitespace
-    # strip of the HTTP models. Blank means blank on every path.
-    run, notification = await _parked_notification(druks_db)
+    # The core is also the boundary of a direct call. The HTTP models remove the whitespace
+    # around a value. The Slack path does not use them. Blank means blank on every path.
+    _, notification = await _parked_notification(druks_db)
 
     with pytest.raises(InvalidChoiceError):
         await respond_to_notification(
@@ -926,9 +926,9 @@ async def test_respond_direct_call_rejects_whitespace_only_content(druks_db, res
 
 
 async def test_respond_ask_without_presentation_not_answerable(tmp_path, druks_db, resume_spy):
-    # An ask that does not declare in_app takes no answer on this rail. The rail answers
-    # with a 422, not a crash.
-    run, notification = await _parked_notification(
+    # An ask that does not declare in_app takes no answer through this path. The answer is
+    # the mapped 422, not a crash.
+    _, notification = await _parked_notification(
         druks_db, ask={"label": "legacy ask", "controls": ["approve"]}
     )
     client = TestClient(configure_app_for_test(settings=make_settings(tmp_path)))

@@ -1,6 +1,6 @@
 import asyncio
 import hashlib
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from pydantic import GetCoreSchemaHandler
 from pydantic_core import CoreSchema, core_schema
@@ -48,12 +48,15 @@ class File:
         uploaded_by: str,
     ) -> "File":
         if len(content) > MAX_FILE_BYTES:
-            raise FileTooLargeError(f"{name} is {len(content)} bytes; the cap is {MAX_FILE_BYTES}")
+            raise FileTooLargeError(
+                f"{name} is {len(content)} bytes. The cap is {MAX_FILE_BYTES} bytes. Pass a "
+                "smaller file."
+            )
         file_id = uuid7_str()
         storage = get_file_storage()
-        temp = storage.new_temp(file_id)
+        temporary_file = storage.new_temp(file_id)
         try:
-            await asyncio.to_thread(temp.write_bytes, content)
+            await asyncio.to_thread(temporary_file.write_bytes, content)
             digest = await asyncio.to_thread(hashlib.sha256, content)
             record = FileRecord(
                 id=file_id,
@@ -66,9 +69,9 @@ class File:
             )
             db_session().add(record)
             await db_session().flush()
-            storage.save(temp, file_id)
+            storage.save(temporary_file, file_id)
         except BaseException:
-            storage.discard(temp)
+            storage.discard(temporary_file)
             storage.delete(file_id)
             raise
         return cls(
@@ -77,8 +80,8 @@ class File:
 
     @classmethod
     def _validate(cls, value: str, info: core_schema.ValidationInfo) -> "File":
-        # Validating a harness result: the caller's list collects every File the
-        # contract declares, so hydration never walks the output tree.
+        # When Druks validates a harness result, the caller's list collects every File
+        # that the contract declares. Hydration thus never walks the output tree.
         file = cls(path=value)
         if info.context:
             info.context["workspace_files"].append(file)
@@ -87,7 +90,7 @@ class File:
     @classmethod
     def __get_pydantic_core_schema__(
         cls,
-        source_type: Any,
+        source_type,
         handler: GetCoreSchemaHandler,
     ) -> CoreSchema:
         return core_schema.with_info_after_validator_function(
@@ -111,15 +114,18 @@ class File:
     async def open(self) -> bytes:
         record = await db_session().get(FileRecord, self.id)
         if not record or record.deleted_at:
-            raise FileUnavailableError(f"file {self.id} is deleted or missing")
+            raise FileUnavailableError(
+                f"file {self.id} is deleted or does not exist. Pass a file that exists."
+            )
         try:
             return await asyncio.to_thread(get_file_storage().open, self.id)
         except FileNotFoundError as error:
-            raise FileUnavailableError(f"file {self.id} content is missing") from error
+            raise FileUnavailableError(
+                f"file {self.id} has no content in the storage. Store the file again."
+            ) from error
 
     async def upload(self, host: "Host", agent_call_id: str) -> str:
-        """Put the file in the call's own directory on the box, and return the
-        path it reads as there."""
+        """Put the file in the call's own directory on the box. Return its path there."""
         root = get_work_root(host.ssh_username)
         remote = f"{root}/.druks-files/{agent_call_id}/{self.id}/{self.name}"
         await host.upload_file(local=get_file_storage().path(self.id), remote=remote)
@@ -128,12 +134,12 @@ class File:
     async def delete(self) -> None:
         record = await db_session().get(FileRecord, self.id)
         if not record:
-            raise FileUnavailableError(f"file {self.id} is missing")
+            raise FileUnavailableError(f"file {self.id} does not exist. Pass a file that exists.")
         if not record.deleted_at:
             record.deleted_at = Base.utc_now()
             await db_session().flush()
 
-    def _hydrate(self, record: "FileRecord") -> None:
+    def _hydrate(self, record: FileRecord) -> None:
         self.id = record.id
         self.path = ""
         self.name = record.name

@@ -313,6 +313,24 @@ def test_without_an_endpoint_only_an_outside_address_stays_a_link(block, written
     assert text(block) == written
 
 
+def test_a_form_that_knows_its_page_reads_as_its_actions_linked_to_the_page():
+    # A review stores the form with the page of its run on each action.
+    form = ui.Form.model_validate(
+        ui.Form(
+            title="New note",
+            description="What did you see?",
+            fields=[ui.TextAreaField(name="body", label="Note")],
+            action=ui.Action(label="Save", operation="write_note"),
+            extra_actions=[ui.Action(label="Discard", operation="clear_gist")],
+        ).model_dump(mode="json", by_alias=True, context={"action_url": "/runs/run-1"})
+    )
+
+    assert text(form) == (
+        "### New note\n\nWhat did you see?\n\n"
+        "[Save](https://druks.example/runs/run-1) · [Discard](https://druks.example/runs/run-1)"
+    )
+
+
 @pytest.mark.parametrize(
     "block",
     [

@@ -1,18 +1,20 @@
 import httpx
 import pytest
+from druks.accounts.dependencies import current_account
+from druks.api.server import _page_read_error_handler
 from druks.apps.loader import load_app
+from druks.registry import get_app_name
+from druks.testing import asgi_client
+from druks.ui import Action, Page
+from druks.ui.exceptions import PageReadError
+from druks_field_notes import pages
 from druks_field_notes.models import Note
+from fastapi import Depends, FastAPI
 
 
-async def failing_page(monkeypatch, project) -> httpx.AsyncClient:
-    """A page router mounted after ``project`` replaced a page; the shared
-    server captured the real functions."""
-    from druks.accounts.dependencies import current_account
-    from druks.api.server import _page_read_error_handler
-    from druks.ui.exceptions import PageReadError
-    from druks_field_notes import pages
-    from fastapi import Depends, FastAPI
-
+def failing_page(monkeypatch, project) -> FastAPI:
+    """The test builds this FastAPI app with the page routes after ``project`` replaces a
+    page. The shared server captured the real functions."""
     monkeypatch.setattr(pages.note, "function", project)
     app = load_app("field_notes")
     api = FastAPI()
@@ -25,12 +27,10 @@ async def failing_page(monkeypatch, project) -> httpx.AsyncClient:
 
 
 async def test_a_page_that_raises_says_which_page_and_nothing_more(monkeypatch):
-    from druks.testing import asgi_client
-
     async def raising(note_id: int):
         raise RuntimeError("connection to postgres://secret@host failed")
 
-    api = await failing_page(monkeypatch, raising)
+    api = failing_page(monkeypatch, raising)
     async with asgi_client(api) as client:
         response = await client.get("/api/field_notes/pages/notes/1")
 
@@ -38,20 +38,18 @@ async def test_a_page_that_raises_says_which_page_and_nothing_more(monkeypatch):
     detail = response.json()["detail"]
     assert response.json()["error"] == "PAGE_FAILED"
     assert (
-        detail
-        == "app 'field_notes' page 'note' could not be read: its own code raised RuntimeError"
+        detail == "Druks failed to read page 'note' of app 'field_notes': its own code raised "
+        "RuntimeError. Fix the page in the app's code."
     )
     # Whatever the app's own code said stays in the log.
     assert "postgres" not in detail
 
 
 async def test_a_page_that_answers_with_something_else_says_so(monkeypatch):
-    from druks.testing import asgi_client
-
     async def not_a_page(note_id: int):
         return {"title": "Note"}
 
-    api = await failing_page(monkeypatch, not_a_page)
+    api = failing_page(monkeypatch, not_a_page)
     async with asgi_client(api) as client:
         response = await client.get("/api/field_notes/pages/notes/1")
 
@@ -60,13 +58,10 @@ async def test_a_page_that_answers_with_something_else_says_so(monkeypatch):
 
 
 async def test_a_page_naming_an_operation_the_app_lacks_says_which(monkeypatch):
-    from druks.testing import asgi_client
-    from druks.ui import Action, Page
-
     async def bad_action(note_id: int):
         return Page("Note", blocks=[Action(label="Go", operation="nowhere")])
 
-    api = await failing_page(monkeypatch, bad_action)
+    api = failing_page(monkeypatch, bad_action)
     async with asgi_client(api) as client:
         response = await client.get("/api/field_notes/pages/notes/1")
 
@@ -100,9 +95,6 @@ async def test_a_page_read_that_cannot_resolve_says_which(
 
 
 def test_the_test_plugin_claims_every_installed_app():
-    from druks.registry import get_app_name
-
-    # An app's own suite imports its workflows module, and a Workflow resolves
-    # its app at definition. Loading the plugin is what makes that work outside
-    # this repository.
+    # An app's own suite imports its workflows module. A Workflow resolves its app at
+    # definition. The loaded plugin makes that possible outside this repository.
     assert get_app_name("druks_field_notes") == "field_notes"

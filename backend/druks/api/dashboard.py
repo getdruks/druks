@@ -45,7 +45,7 @@ async def get_overview(
     if app is not None:
         if app not in apps:
             raise HTTPException(
-                status_code=404, detail=f"Unknown app '{app}'. Select an installed app."
+                status_code=404, detail=f"Druks has no app '{app}'. Select an installed app."
             )
         apps = {app: apps[app]}
     owners = {
@@ -154,7 +154,8 @@ async def get_overview(
 async def list_current_schedules(
     session: SessionDep, response: Response, account: Account = Depends(current_account)
 ) -> DashboardSchedules:
-    """Configured cadence and recorded invocations, not scheduler health."""
+    """The configured cadence and the recorded invocations of each schedule, not the
+    health of the scheduler."""
     response.headers["Cache-Control"] = "no-store"
     timezone = get_settings().timezone
     declared = [
@@ -202,7 +203,7 @@ async def list_current_schedules(
 async def run_schedule(kind: str) -> dict[str, str]:
     workflow = get_workflow(kind)
     if not workflow or not workflow.every:
-        raise HTTPException(404, "Schedule not found. Select a declared schedule.")
+        raise HTTPException(404, "The schedule does not exist. Select a declared schedule.")
     try:
         run = await trigger_schedule(kind)
     except ScheduleUnavailable as error:

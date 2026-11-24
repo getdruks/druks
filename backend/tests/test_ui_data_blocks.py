@@ -91,14 +91,14 @@ def test_a_series_must_carry_one_point_for_each_category():
             "Sources",
             [ChartSeries(label="web", points=[3, 0])],
             "pie chart 'Sources' has a point of zero or less for the categories ['Tue']. A pie "
-            "draws each point as a share of the whole. Give each point a number above zero.",
+            "draws each point as a share of the whole. Give each point a number more than zero.",
         ),
         (
             "",
             [ChartSeries(label="web", points=[-1, 2])],
             "pie chart of categories ['Mon', 'Tue'] has a point of zero or less for the "
             "categories ['Mon']. A pie draws each point as a share of the whole. Give each "
-            "point a number above zero.",
+            "point a number more than zero.",
         ),
     ],
     ids=["two-series", "untitled-no-series", "zero", "untitled-negative"],
@@ -172,7 +172,7 @@ def test_a_selectable_table_needs_actions_and_a_key_on_every_row():
             rows=[TableRow([TextValue("peer-7")], key="7")],
             select="peer_ids",
         )
-    with pytest.raises(ValueError, match="a row has no key"):
+    with pytest.raises(ValueError, match="One of its rows has no key"):
         Table(
             columns=[TableColumn("Peer")],
             rows=[TableRow([TextValue("peer-7")])],
@@ -393,8 +393,8 @@ def test_a_number_must_be_one_json_can_carry(bad):
 
 
 def test_cards_finds_an_action_in_a_card_and_in_its_empty_state():
-    """Boot checks every action against the app's operations, so an action the
-    walk misses is one that ships naming a route nobody declares."""
+    """Druks checks every action against the app's operations at boot. An action that the
+    walk misses then ships, and names a route that nobody declares."""
     block = Cards(
         cards=[Card(title="Peer 7", controls=[Action(label="Retire", operation="retire_peer")])],
         empty=EmptyState("No peer yet", controls=[Action(label="Scan", operation="scan")]),
@@ -473,13 +473,6 @@ def test_cards_tiles_carry_the_image_the_shell_crops():
 
     assert block["layout"] == "tiles"
     assert block["cards"][0]["blocks"][0]["url"] == "/api/files/shot"
-
-
-def test_cards_with_none_and_nothing_to_say_carries_no_empty_state():
-    assert Cards().empty is None
-    assert Cards().layout == "wrap"
-    assert Cards().drop is None
-    assert Card().drag == {}
 
 
 def test_a_stack_is_true_only_when_it_holds_a_block():

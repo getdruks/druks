@@ -8,7 +8,7 @@ from druks_field_notes.models import Note
 from druks_field_notes.schemas import NoteSummary
 from druks_field_notes.workflows import Summarize
 
-# Every APIRouter declared here mounts under /api/field_notes.
+# Every APIRouter that this module declares mounts under /api/field_notes.
 router = APIRouter(prefix="/notes")
 
 
@@ -18,15 +18,17 @@ async def list_notes() -> list[Note]:
 
 
 @router.post("", status_code=status.HTTP_201_CREATED, operation_id="write_note")
-async def write_note(body: Annotated[str, Body(embed=True)]) -> dict[str, int]:
-    note = await Note.create(body=body)
+async def write_note(
+    body: Annotated[str, Body(embed=True)], account: Account = Depends(current_account)
+) -> dict[str, int]:
+    note = await Note.create(body=body, written_by=account.username)
     await Summarize.dispatch(note=note)
     return {"id": note.id}
 
 
 @router.post("/jotted", tags=["bot"], operation_id="jot_note")
 async def jot_note(body: Annotated[str, Body(embed=True)], user: BotUser) -> dict[str, int]:
-    """Save a note for the person writing, under their name."""
+    """Save a note for the person who writes it, under their name."""
     note = await Note.create(body=f"{user.name}: {body}")
     return {"id": note.id}
 

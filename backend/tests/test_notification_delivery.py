@@ -58,9 +58,9 @@ _BOT_TOKEN = "xoxb-delivery"
 
 @pytest.fixture
 def slack(monkeypatch):
-    """Slack's Web API, answered locally. Records each post. ``error`` makes Slack refuse
-    every post. Each of ``refusals`` refuses one next post. Slack answers that the message
-    is in ``channel``."""
+    """Slack's Web API, answered locally. It records each post. ``error`` makes Slack refuse
+    every post. Each item of ``refusals`` refuses the next post. Slack answers that the
+    message is in ``channel``."""
     fake = SimpleNamespace(posts=[], error="", refusals=[], channel="C1")
 
     async def api_call(client, api_method, *, params=None, json=None, **request):
@@ -155,7 +155,7 @@ async def _slack_chat(druks_db) -> Conversation:
 
 
 async def _form_question(druks_db) -> tuple[Conversation, Notification]:
-    """A Slack chat, and the form of FORM_TEXT that its agent asked."""
+    """A Slack chat, and the form of FORM_TEXT that its agent sent."""
     conversation = await _slack_chat(druks_db)
     question = await Notification.create(
         druks_db,
@@ -412,23 +412,23 @@ async def test_button_delivery_posts_one_button_per_action(slack):
 async def test_delivery_to_a_channel_the_bot_is_not_in_says_to_invite_it(slack):
     slack.error = "not_in_channel"
 
-    with pytest.raises(ChannelUnavailableError) as excinfo:
+    with pytest.raises(ChannelUnavailableError) as raised:
         await deliver(SlackClient(token=_BOT_TOKEN), "C1", "hello")
 
-    assert "Invite the bot to the channel" in str(excinfo.value)
+    assert "Invite the bot to the channel" in str(raised.value)
     # The Slack error keeps the request headers. They carry the bot token.
-    assert not excinfo.value.__cause__
-    assert excinfo.value.__suppress_context__
+    assert not raised.value.__cause__
+    assert raised.value.__suppress_context__
 
 
 async def test_a_refused_delivery_names_slack_s_reason(slack):
     slack.error = "restricted_action"
 
-    with pytest.raises(DeliveryError) as excinfo:
+    with pytest.raises(DeliveryError) as raised:
         await deliver(SlackClient(token=_BOT_TOKEN), "C1", "hello")
 
-    assert str(excinfo.value) == "Delivery failed: restricted_action."
-    assert not excinfo.value.__cause__
+    assert str(raised.value) == "Delivery failed: restricted_action."
+    assert not raised.value.__cause__
 
 
 async def test_a_delivery_slack_does_not_answer_names_the_failure(monkeypatch):
@@ -437,11 +437,11 @@ async def test_a_delivery_slack_does_not_answer_names_the_failure(monkeypatch):
 
     monkeypatch.setattr(SlackClient, "api_call", api_call)
 
-    with pytest.raises(DeliveryError) as excinfo:
+    with pytest.raises(DeliveryError) as raised:
         await deliver(SlackClient(token=_BOT_TOKEN), "C1", "hello")
 
-    assert str(excinfo.value) == "Delivery failed: TimeoutError."
-    assert not excinfo.value.__cause__
+    assert str(raised.value) == "Delivery failed: TimeoutError."
+    assert not raised.value.__cause__
 
 
 async def test_delivery_in_a_thread_replies_there(slack):
@@ -466,9 +466,9 @@ def test_button_encoding_round_trips():
 
 def test_button_decode_rejects_malformed_input():
     for action_id in ("no-separator", "bad!chars.x", "a.b!!", "tok.choice.extra"):
-        with pytest.raises(MalformedButtonError) as excinfo:
+        with pytest.raises(MalformedButtonError) as raised:
             decode_button(action_id)
-        assert action_id not in str(excinfo.value)
+        assert action_id not in str(raised.value)
 
 
 def test_button_decode_rejects_non_string_input():
@@ -480,7 +480,7 @@ def test_button_decode_rejects_non_string_input():
 
 
 def test_the_id_of_an_action_at_the_top_names_its_block():
-    # This form must decode, because a message in Slack keeps the ids that Druks posted.
+    # An id of this shape must decode, because a message in Slack keeps the ids that Druks posted.
     assert decode_action(f"{encode_button('t', '1')}.action") == ("t", [1])
 
 
@@ -571,7 +571,7 @@ async def test_an_approval_writes_its_label_context_questions_and_document_in_or
                     {"id": "mysql", "label": "MySQL", "recommended": False},
                 ],
             },
-            # An app's question can leave the flag out.
+            # An app's question can have no flag.
             {
                 "id": "cache",
                 "prompt": "Which cache?",
@@ -632,7 +632,7 @@ async def test_an_approval_writes_a_block_context_as_a_list_and_a_table(druks_db
             rows=[ui.TableRow(["front", ui.NumberValue(1200, unit="rpm")])],
         ),
     ]
-    # The ask stores the blocks as review writes them. Druks reads the status each time it
+    # The ask stores the blocks as ``review()`` writes them. Druks reads the status each time it
     # reads the ask.
     run = await _parked_review(
         druks_db,
@@ -660,7 +660,7 @@ def _stored(*blocks) -> list[dict]:
 
 
 def _action(*, operation: str = "archive_note", **data) -> ui.Action:
-    """An action as a review stores it: with the page of its run."""
+    """An action as ``review()`` stores it: with the page of its run."""
     return ui.Action(operation=operation, url="/runs/run-1", **data)
 
 
@@ -729,7 +729,8 @@ async def test_an_approval_keeps_its_blocks_beside_their_text_form(druks_db):
         "Which rack?\n- Rack 3",
         "## Steps\nShip it.",
     )
-    # A link keeps only the address it resolved to. A link with no address keeps its page.
+    # A link keeps only the address that it resolved to. A link with no address keeps its
+    # page.
     rack, _ = facts["facts"]
     destinations = [
         (link["url"], link["page"], link["subject"])
@@ -927,7 +928,7 @@ async def test_markdown_past_slack_s_limit_loses_its_end_to_a_line_that_says_so(
     )
 
     (post,) = slack.posts
-    # The cut takes the end of the document and the link after it.
+    # The cut removes the end of the document and the link after it.
     label, divider, cut, actions = post["blocks"]
     assert (label, divider) == ({"type": "markdown", "text": "# Review"}, {"type": "divider"})
     assert cut["text"].endswith(f"make test\n```\n\n…\n{line}")
@@ -1158,11 +1159,8 @@ async def test_actions_past_the_room_of_a_message_go_out_as_their_labels_linked_
     assert rest == {"type": "markdown", "text": "\n\n".join(labels) + f"\n{page}"}
 
 
-async def test_an_action_with_fields_and_a_table_that_selects_rows_go_out_as_their_text(slack):
+async def test_a_table_that_selects_rows_goes_out_as_its_text(slack):
     _set_endpoint("https://druks.example")
-    rename = _action(
-        label="Rename", operation="write_note", fields=[ui.TextField(name="title", label="Title")]
-    )
     table = ui.Table(
         columns=[ui.TableColumn("Note")],
         rows=[ui.TableRow(["Fan noise"], key="7")],
@@ -1170,14 +1168,167 @@ async def test_an_action_with_fields_and_a_table_that_selects_rows_go_out_as_the
         actions=[_action(label="Archive selected", operation="archive_notes")],
     )
 
-    await deliver(
-        SlackClient(token=_BOT_TOKEN), "C1", "text", blocks=_stored(rename, table), token="t"
-    )
+    await deliver(SlackClient(token=_BOT_TOKEN), "C1", "text", blocks=_stored(table), token="t")
 
     (post,) = slack.posts
     page = "https://druks.example/runs/run-1"
-    text = f"[Rename]({page})\n\n[Archive selected]({page})\n\n| Note |\n| --- |\n| Fan noise |"
+    text = f"[Archive selected]({page})\n\n| Note |\n| --- |\n| Fan noise |"
     assert post["blocks"] == [{"type": "markdown", "text": text}]
+
+
+def _form(**data) -> ui.Form:
+    """A form as ``review()`` stores it. Each of its actions holds the page of its run."""
+    return ui.Form(
+        **{
+            "title": "Ship it",
+            "fields": [ui.TextField(name="title", label="Title", is_required=True)],
+            "action": _action(label="Ship", operation="write_note"),
+            **data,
+        }
+    )
+
+
+async def test_a_form_and_an_action_with_fields_go_out_as_inputs_above_their_buttons(slack):
+    await deliver(
+        SlackClient(token=_BOT_TOKEN),
+        "C1",
+        "text",
+        blocks=_stored(
+            ui.Markdown("# Review"),
+            _form(
+                extra_actions=[
+                    _action(label="Hold", operation="clear_gist", confirm="Hold the note?")
+                ]
+            ),
+            # The action shares the name of a field with the form, and with the approval's note.
+            _action(
+                label="Rename",
+                operation="write_note",
+                fields=[
+                    ui.TextField(name="title", label="New title", value="Rack 3"),
+                    ui.TextAreaField(name="note", label="Why", is_required=True),
+                ],
+            ),
+        ),
+        actions=[_APPROVE],
+        fields=[_NOTE],
+        token="t",
+    )
+
+    (post,) = slack.posts
+    assert post["blocks"] == [
+        {"type": "markdown", "text": "# Review"},
+        {
+            "type": "input",
+            "block_id": "1.title",
+            "label": _label("Title"),
+            "optional": False,
+            "element": {"type": "plain_text_input", "multiline": False},
+        },
+        {
+            "type": "actions",
+            "elements": [
+                {
+                    "type": "button",
+                    "text": _label("Ship"),
+                    "action_id": encode_action("t", 1, 0),
+                },
+                {
+                    "type": "button",
+                    "text": _label("Hold"),
+                    "action_id": encode_action("t", 1, 1),
+                    "confirm": {
+                        "title": _label("Hold"),
+                        "text": _label("Hold the note?"),
+                        "confirm": _label("Hold"),
+                        "deny": _label("Back"),
+                    },
+                },
+            ],
+        },
+        {
+            "type": "input",
+            "block_id": "2.title",
+            "label": _label("New title"),
+            "optional": True,
+            "element": {"type": "plain_text_input", "multiline": False, "initial_value": "Rack 3"},
+        },
+        {
+            "type": "input",
+            "block_id": "2.note",
+            "label": _label("Why"),
+            "optional": False,
+            "element": {"type": "plain_text_input", "multiline": True},
+        },
+        {
+            "type": "actions",
+            "elements": [
+                {"type": "button", "text": _label("Rename"), "action_id": encode_action("t", 2)}
+            ],
+        },
+        {
+            "type": "input",
+            "block_id": "note",
+            "label": _label("Note"),
+            "optional": True,
+            "element": {"type": "plain_text_input", "multiline": True},
+        },
+        {
+            "type": "actions",
+            "elements": [
+                {
+                    "type": "button",
+                    "text": _label("Approve"),
+                    "action_id": encode_button("t", "approve"),
+                }
+            ],
+        },
+    ]
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        _form(submit="change"),
+        _form(fields=[ui.RadioField(name="size", label="Size", options=_options(11))]),
+        _form(extra_actions=[_action(label="H" * 76, operation="clear_gist")]),
+        # Slack has no input for a file.
+        _form(fields=[ui.UploadField(name="photo", label="Photo")]),
+    ],
+    ids=["sends-on-change", "input-past-a-limit", "button-past-a-limit", "field-with-no-input"],
+)
+async def test_a_form_that_slack_cannot_draw_whole_goes_out_as_its_text_with_no_input(slack, block):
+    _set_endpoint("https://druks.example")
+
+    await deliver(SlackClient(token=_BOT_TOKEN), "C1", "text", blocks=_stored(block), token="t")
+
+    (post,) = slack.posts
+    assert post["blocks"] == [{"type": "markdown", "text": block.to_markdown()}]
+    assert "https://druks.example/runs/run-1" in block.to_markdown()
+
+
+@pytest.mark.parametrize(
+    ("actions", "types"),
+    [(43, ["input"] * 5 + ["actions"]), (44, ["markdown"])],
+    ids=["room", "no-room"],
+)
+async def test_a_form_takes_inputs_only_when_the_message_has_room_for_all_of_them(
+    slack, actions, types
+):
+    # Five inputs and the buttons take six blocks. One block stays free for the link.
+    await deliver(
+        SlackClient(token=_BOT_TOKEN),
+        "C1",
+        "text",
+        blocks=_stored(
+            *(_action(label=f"Archive {number}") for number in range(actions)),
+            _form(fields=[ui.TextField(name=f"f{number}", label="F") for number in range(5)]),
+        ),
+        token="t",
+    )
+
+    (post,) = slack.posts
+    assert [block["type"] for block in post["blocks"][actions:]] == types
 
 
 @pytest.mark.parametrize(
@@ -1282,7 +1433,7 @@ async def test_a_question_after_blocks_too_long_for_slack_stays_whole_with_its_b
     await SlackChannel.post_buttons(druks_db, conversation, question)
 
     (post,) = slack.posts
-    # The cut takes the end of the reply and the facts after it.
+    # The cut removes the end of the reply and the facts after it.
     cut, question_block, buttons = post["blocks"]
     assert cut["text"].endswith(f"I compared both.\n\n…\n{OMISSION_MESSAGE}")
     assert len(cut["text"]) + len(question_block["text"]) <= MARKDOWN_TEXT_LIMIT
@@ -1450,13 +1601,13 @@ async def test_an_approval_s_actions_are_buttons_until_it_closes_and_the_line_of
         },
         clear_button,
     ]
-    # The approval keeps its inputs and buttons beside the action that has not run.
+    # The approval keeps its inputs and buttons beside the action that did not run.
     assert redraw["blocks"][:2] == [
         {"type": "markdown", "text": "# Review\n\nmember@example.com ran Archive."},
         clear_button,
     ]
     assert [block.get("block_id") for block in redraw["blocks"][2:]] == ["note", None]
-    # An outcome takes the place of every button. With no endpoint, an action shows its label.
+    # An outcome replaces every button. With no endpoint, an action shows its label.
     for edit, outcome in ((answer_edit, "<@U1> chose Approve."), (close_edit, CLOSED_MESSAGE)):
         assert edit["blocks"] == [
             {
@@ -1503,7 +1654,7 @@ async def test_an_approval_input_shows_the_start_of_a_long_label_and_keeps_each_
     )
     (post,) = slack.posts
     markdown, select, _, _ = post["blocks"]
-    # Slack sends back the block's id and the chosen option's value.
+    # Slack returns the block's id and the chosen option's value.
     await respond_to_notification(
         druks_db,
         approval.correlation_token,
@@ -1636,7 +1787,8 @@ def test_the_tables_of_a_message_share_slack_s_limit_for_the_text_of_their_cells
     )
     third_table = ui.Table(columns=[ui.TableColumn("Log")], rows=[ui.TableRow(["z"])])
 
-    # No room is left for a row of the third table. It goes out as its text form.
+    # The message has no room left for a row of the third table. Druks sends that table as
+    # its text form.
     assert get_blocks("text", blocks=[first_table, second_table, third_table]) == [
         _data_table("Log", ["Log"], ["x" * 15_997]),
         {"type": "markdown", "text": TABLE_OMISSION_MESSAGE.format(left=1, total=3)},
@@ -1826,8 +1978,8 @@ def test_a_chart_goes_out_as_slack_s_chart_of_its_kind_with_a_point_for_each_cat
 
 
 def test_a_pie_goes_out_as_slack_s_pie_with_a_segment_for_each_category():
-    # The categories are not in the order of their names. A pie has no axes. Its category label
-    # and value label stay out.
+    # The categories are not in the order of their names. A pie has no axes. The block holds
+    # neither its category label nor its value label.
     chart = ui.Chart(
         kind="pie",
         title="Answers by source",
@@ -2155,11 +2307,11 @@ def test_a_gallery_that_does_not_fit_whole_shows_its_text_form_with_the_blocks_a
         ],
         title="Shots",
     )
-    docs = ui.Link("Docs", url="https://docs.example/a")
+    documentation = ui.Link("Docs", url="https://docs.example/a")
 
-    blocks = get_blocks("text", blocks=[*links, shots, docs])
+    blocks = get_blocks("text", blocks=[*links, shots, documentation])
 
-    # The title and two of the images would fit.
+    # The title and two of the images fit.
     assert blocks[46:] == [
-        {"type": "markdown", "text": f"{shots.to_markdown()}\n\n{docs.to_markdown()}"}
+        {"type": "markdown", "text": f"{shots.to_markdown()}\n\n{documentation.to_markdown()}"}
     ]
