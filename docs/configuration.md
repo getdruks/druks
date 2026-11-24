@@ -670,6 +670,18 @@ After each push, the build waits for CI on the head before the review, and red
 CI returns the work to the implementer. The pull request leaves draft when the review of
 a head with green CI requests no changes, or when a person approves it.
 
+A build's agent can run one of the repository's test commands in full on a separate
+box, with the `core_run_check` tool. The commands come from the repository's
+verification profile: the ones the profiler found, or the `verification` test
+commands that `config.yml` pins. The tool takes the id of the build's run and one
+command, written as the profile lists it, and refuses any other command. The box has
+the repository at the commit where the agent's checkout left the default branch,
+with the agent's uncommitted and untracked changes on top, and drukbox deletes it
+when the command ends. The agent waits for the result. A build holds the tool for
+every tracker. When Druks has no address for a box to reach it (`urls.mcp_url`,
+`urls.webhook_host` or `urls.endpoint`), a build whose tracker is not the Druks
+board declares no commands, and runs as before.
+
 When Druks receives a push to the default branch that changes `config.yml`, the
 next build uses the new file. When a team lists Software Factory, this happens
 only for a push by a person who can use Software Factory. Druks refuses a push by
