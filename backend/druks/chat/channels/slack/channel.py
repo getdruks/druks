@@ -32,12 +32,14 @@ from druks.secrets.models import VaultSecret
 from druks.settings import get_settings
 
 from .constants import (
+    AGENT_NOTE,
     JOINED_THREAD_SECONDS,
     LINK_KEY,
     LINK_MESSAGE,
     LINK_TTL_SECONDS,
     MARKDOWN_TEXT_LIMIT,
     MESSAGE_BLOCKS_LIMIT,
+    TAG_REQUIRED_AGENT_NOTE,
     THREAD_MESSAGES,
     UNACCEPTED_AUTOMATION_REPLY,
     UNLINKED_REPLY,
@@ -214,6 +216,19 @@ class SlackChannel(Channel):
             await conversation.create_message(session, text, source_id=source_id)
         else:
             return conversation
+        # The count is from before this message, so this is the person's first.
+        if conversation.agent and conversation.thread_id and not conversation.message_count:
+            note = TAG_REQUIRED_AGENT_NOTE if conversation.is_tag_required else AGENT_NOTE
+            room, _, thread_ts = conversation.thread_id.partition(":")
+            await client.post_markdown(
+                room,
+                note.format(
+                    user=conversation.user_id,
+                    agent=conversation.agent.name,
+                    hours=JOINED_THREAD_SECONDS // 3600,
+                ),
+                thread_ts=thread_ts,
+            )
         await session.commit()
         await DBOS.start_workflow_async(deliver, conversation.id)
         return conversation

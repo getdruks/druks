@@ -779,6 +779,11 @@ and the tag rule below. Name an agent you cannot talk to, and the bot says why
 in the thread and drops the message. The same tag works in a direct message,
 where a name without the tag reaches the Bot.
 
+Before an agent's first answer to you in a thread, the bot posts a note there.
+The note names the agent and says how long your untagged replies reach it. If
+you asked for a tag, the note says that each reply needs one. A direct message
+gets no note.
+
 An admin can give a public agent one Slack channel, under **Slack channel**
 when they edit the agent. The bot must be in the channel. In that channel, a tag
 that names no agent reaches that agent. This does not apply when you already

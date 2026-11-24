@@ -17,7 +17,11 @@ from druks.api.dependencies import request_session
 from druks.chat import service
 from druks.chat.bridge import Bridge
 from druks.chat.channels.slack.channel import SlackChannel
-from druks.chat.channels.slack.constants import LINK_KEY
+from druks.chat.channels.slack.constants import (
+    AGENT_NOTE,
+    LINK_KEY,
+    TAG_REQUIRED_AGENT_NOTE,
+)
 from druks.chat.constants import CONVERSATION_HEADER
 from druks.chat.dependencies import current_conversation
 from druks.chat.enums import ConversationSource, MessageRole
@@ -791,6 +795,57 @@ async def test_a_tag_naming_someone_elses_private_agent_is_refused_in_the_thread
     [(method, sent)] = slack
     assert (method, sent["channel"], sent["thread_ts"]) == ("chat.postMessage", "C1", "10.0")
     assert PRIVATE_AGENT_MESSAGE in json.dumps(sent)
+
+
+async def test_a_persons_first_message_to_an_agent_in_a_thread_tells_them_who_answers(
+    card, druks_db, slack, delivery
+):
+    ana = await Account.get_or_create(druks_db, "ana@example.com")
+    await link_person(druks_db, ana)
+    await create_agent(druks_db, ana, "Writer")
+    await create_agent(druks_db, ana, "Designer")
+    await druks_db.commit()
+
+    await receive(room_event(text=f"<@{BOT}> Writer draft the notes"))
+    await receive(room_event(text="make it shorter", ts="11.0", thread_ts="10.0"))
+    await receive(room_event(text=f"<@{BOT}> Designer make a logo", ts="12.0", thread_ts="10.0"))
+    await receive(message_event(text=f"<@{BOT}> Writer draft the notes", ts="2.0"))
+
+    assert [(sent["channel"], sent["thread_ts"], sent["text"]) for _, sent in slack] == [
+        ("C1", "10.0", AGENT_NOTE.format(user=ANA, agent="Writer", hours=24)),
+        ("C1", "10.0", AGENT_NOTE.format(user=ANA, agent="Designer", hours=24)),
+    ]
+
+
+async def test_a_bare_tag_leaves_the_note_for_the_persons_first_message(
+    card, druks_db, slack, delivery
+):
+    ana = await Account.get_or_create(druks_db, "ana@example.com")
+    await link_person(druks_db, ana)
+    engineer = await create_agent(druks_db, ana, "Security engineer")
+    await bind_channel(druks_db, engineer, "C1")
+
+    await receive(room_event(text=f"<@{BOT}>"))
+    assert not slack
+    await receive(room_event(text=f"<@{BOT}> check this PR", ts="11.0", thread_ts="10.0"))
+
+    [(_, sent)] = slack
+    assert sent["text"] == AGENT_NOTE.format(user=ANA, agent="Security engineer", hours=24)
+
+
+async def test_a_person_who_requires_a_tag_reads_that_each_reply_needs_it(
+    card, druks_db, slack, delivery
+):
+    ana = await Account.get_or_create(druks_db, "ana@example.com")
+    await ana.update_preferences(is_tag_required=True)
+    await link_person(druks_db, ana)
+    await create_agent(druks_db, ana, "Writer")
+    await druks_db.commit()
+
+    await receive(room_event(text=f"<@{BOT}> Writer draft the notes"))
+
+    [(_, sent)] = slack
+    assert sent["text"] == TAG_REQUIRED_AGENT_NOTE.format(user=ANA, agent="Writer")
 
 
 async def test_an_unlinked_person_who_tags_the_bot_gets_the_link_by_direct_message(
