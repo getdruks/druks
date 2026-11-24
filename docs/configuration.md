@@ -685,6 +685,29 @@ an empty one. A list that it leaves out stays as detected. A command that the
 block writes keeps the CI check that the profiler found for it. A key that
 `config.yml` does not know fails the build with an error that names it.
 
+A repository can also name the script that builds the computer that its checks
+run on:
+
+```yaml
+verification:
+  sandbox:
+    setup: .druks/software_factory/setup.sh
+```
+
+The script is a path in `.druks/software_factory/`, and Druks reads it from the
+default branch, so a pull request cannot change the sandbox that its own checks
+run on. When the repository profiler runs, Druks asks drukbox for a template
+built from the script, with the lockfiles at the root of the repository
+(`uv.lock`, `package-lock.json`, and the like) added to its key. The profile
+shows the template as `sandbox_template`, and the run shows `sandbox_building`
+while drukbox builds it. Drukbox builds a given script once. When a build fails,
+Druks keeps the last good template and logs the reason. A push to
+`.druks/software_factory/` on the default branch runs the profiler again. A push
+that changes only a lockfile does not, so a new lockfile reaches the template at
+the next profile. Nothing reads the template yet. The size, the start script,
+and the env of the sandbox are not read either, and a `verification.sandbox` key
+other than `setup` fails the build with an error that names it.
+
 When Druks receives a push to the default branch that changes `config.yml`, the
 next build uses the new file. When a team lists Software Factory, this happens
 only for a push by a person who can use Software Factory. Druks refuses a push by
