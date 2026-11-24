@@ -46,6 +46,19 @@ class CheckNotDeclared(AgentApiError):
             super().__init__(f"{command!r} is not a declared check. Declared: {listed}.")
 
 
+class CheckAlreadyStarted(AgentApiError):
+    # One check waits for the end of the agent's turn. A second one would have no turn to
+    # wait for: the first answer resumes the session.
+    status_code = 409
+    code = "CHECK_ALREADY_STARTED"
+    retryable = False
+
+    def __init__(self, command: str) -> None:
+        super().__init__(
+            f"A check is already waiting for your turn to end ({command!r}). End your turn."
+        )
+
+
 class CheckBoxRefused(AgentApiError):
     # Drukbox answered and refused: a clone that failed, a patch that does not apply, a host
     # it could not reach. The same call may fail the same way, so the message decides.
