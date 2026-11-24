@@ -1192,7 +1192,9 @@ class Workflow:
         self.journal.add(reply)
         return reply
 
-    async def wait(self, topic: str, *, label: str, ttl_seconds: float) -> dict[str, Any]:
+    async def wait(
+        self, topic: str, *, label: str, ttl_seconds: float = GATE_TTL_SECONDS
+    ) -> dict[str, Any]:
         """Wait for the facts that ``answer`` delivers on ``topic``, and return them. The run
         stays running, shows ``label``, and keeps its warm sandbox. A failure answered
         instead raises ``WaitFailed``."""
