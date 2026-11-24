@@ -228,6 +228,13 @@ template. A workflow with no declaration uses the platform base unchanged.
 The content hash of the base and the script identifies the template. App authors do
 not name provider images.
 
+A script that is not a file beside a module, such as one that a repository
+holds, goes in `script`. `Sandbox(setup=".druks/software_factory/setup.sh",
+script=text)` keys the template on `text`, and `setup` names where it came from.
+`await sandbox.build(label=...)` returns the available template, and waits in
+the sandbox-building phase while drukbox builds it. A build that fails raises
+`TemplateUnavailable`, which `druks.sandbox` exports.
+
 Use provider idempotency keys for writes. An interrupted operation can run again.
 DBOS reuses completed checkpoints on recovery. Keep decisions in replayable
 control flow. Keep I/O inside steps. See
@@ -3066,7 +3073,7 @@ Import from concern namespaces, not from `druks.durable` or internal modules:
 | `druks.browser` | `BrowserClient`, `BrowserCommandError`, `BrowserSession`, `BrowserSessionSignedOutError`, `BrowserSessionStatus` |
 | `druks.chat` | `Bot`, `BotUser` |
 | `druks.workflows` | `Workflow`, `Instruction`, `InstructionOutput`, `Gate`, `YesNo`, `GateTimeout`, `WaitTimeout`, `WaitFailed`, `step`, `task`, `Journal`, `Subject`, `SubjectSummary`, `SubjectStatus`, `OperatorReply`, `RunResponse`, `AgentCall`, `AgentCallResponse`, `AgentCallStatus`, `WorkflowEvent`, `WorkflowError`, `FatalError` |
-| `druks.sandbox` | `Sandbox`, `SandboxMcpServer`, `SandboxSecret` |
+| `druks.sandbox` | `Sandbox`, `SandboxMcpServer`, `SandboxSecret`, `TemplateUnavailable` |
 | `druks.workspaces` | `Workspace`, `RepoWorkspace` |
 | `druks.db` | `Model`, `StoredSubject`, `atomic`, `db_session` |
 | `druks.db.fields` | `EncryptedJsonField`, `EncryptedTextField`, `Secret`, `SecretsMapping` |

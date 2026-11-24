@@ -18,6 +18,14 @@ class RepoTakenError(DruksError):
         )
 
 
+class SandboxSetupMissing(DruksError):
+    def __init__(self, repo: str, setup: str) -> None:
+        super().__init__(
+            f"{repo} has no {setup} in its default branch. Add the script, or remove "
+            "verification.sandbox from .druks/software_factory/config.yml."
+        )
+
+
 class TicketNotFound(AgentApiError):
     status_code = 404
     code = "TICKET_NOT_FOUND"

@@ -26,6 +26,7 @@ from druks.settings import get_settings
 
 from .constants import (
     SANDBOX_HOST_LEASE_SECONDS,
+    TEMPLATE_CREATE_TIMEOUT_SECONDS,
     WORKFLOW_HOST_LEASE_SECONDS,
     WORKFLOW_HOST_RENEW_SECONDS,
 )
@@ -205,7 +206,7 @@ class Client:
     async def create_template(
         self, *, setup_script: str, provider: str | None, base_image: str | None, label: str
     ):
-        api = self._api()
+        api = self._api(timeout=TEMPLATE_CREATE_TIMEOUT_SECONDS)
         try:
             return await api.create_template(
                 setup_script=setup_script,
@@ -408,12 +409,12 @@ class Client:
         finally:
             await api.aclose()
 
-    def _api(self) -> SandboxAPI:
+    def _api(self, *, timeout: float | None = None) -> SandboxAPI:
         settings = get_settings()
         return SandboxAPI(
             base_url=settings.sandbox.service_url,
             token=settings.sandbox.service_token.get_secret_value(),
-            timeout=settings.sandbox.timeout,
+            timeout=timeout or settings.sandbox.timeout,
         )
 
 
