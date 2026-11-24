@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 from druks.contrib import software_factory
+from druks.contrib.software_factory.app import SoftwareFactory
 from druks.contrib.software_factory.contracts import (
     CiReport,
     FindingOutput,
@@ -162,6 +163,13 @@ async def test_the_implement_prompt_names_the_check_tool_and_the_run_when_checks
     assert "`core_run_check`" in prompt
     assert "`run_id` set to `run-42`" in prompt
     assert "A command that you narrowed to some files is not a listed command" in prompt
+    # The agent that is told `started` ends its turn, and the result is its next message.
+    assert "or `started`: then end your turn at once" in prompt
+    assert "Your next message holds the result" in prompt
+
+
+def test_the_implementer_can_end_its_turn_for_a_check_and_be_resumed():
+    assert SoftwareFactory.implement.resumable is True
 
 
 async def test_the_implement_prompt_without_declared_checks_never_mentions_the_tool():

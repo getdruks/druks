@@ -945,9 +945,23 @@ you declare it. Druks refuses any other command. The tool needs a `RepoWorkspace
 and a subject with a `repo`. It reads the repo, the commit where the agent's
 checkout left the default branch, and the agent's uncommitted and untracked
 changes from the agent's box. Drukbox then clones the repo at that commit,
-applies the changes, runs the command, and deletes its box. The tool waits for
-the end of the command and answers with the exit code, the end of the output,
-and the duration. The agent's own box is not touched.
+applies the changes, runs the command, and deletes its box. The agent's own box
+is not touched.
+
+An instruction that declares `resumable=True`, on a harness that can resume
+(Claude), does not wait for the check inside its turn. The tool answers
+`started`, and the agent ends its turn. Druks runs the check, and sends the exit
+code and the end of the output as the agent's next message, in the same session on
+the same box. That turn and the ones after it are calls of their own, each with its
+own cost, and the output of the last one is the output of the instruction: the
+answer of the turn that ended for a check is discarded. The first call writes the
+model's prompt cache for an hour, so that the resumed call reads it. An
+instruction that is not resumable, or a harness that cannot resume (Codex), keeps
+the tool that waits for the end of the command and answers with the exit code, the
+end of the output, and the duration. A restart during a check runs the instruction
+again from its start. The answer of the turn that ends for a check is discarded, but
+the agent still has to produce it, so the contract of a resumable instruction must
+accept empty values in its required fields.
 
 ```python
 class BuildWorkspace(RepoWorkspace):

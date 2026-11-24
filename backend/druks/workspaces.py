@@ -1,14 +1,19 @@
+import asyncio
 import functools
+import hashlib
+import json
 import logging
 import subprocess
 from typing import TYPE_CHECKING, Any, ClassVar
 from urllib.parse import urlsplit
 
+from drukbox_sdk import SandboxRun
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from druks.accounts.context import current_account_id
 from druks.accounts.models import Account
 from druks.core.services import Github
+from druks.database import session_scope
 from druks.durable.engine import step_session
 from druks.durable.exceptions import WorkflowError
 from druks.mcp import models as mcp_models
@@ -28,7 +33,7 @@ from druks.sandbox.datastructures import (
 )
 from druks.sandbox.exceptions import ExecFailed
 from druks.sandbox.layout import get_repo_root, get_work_root
-from druks.sandbox.models import SecretRef
+from druks.sandbox.models import SandboxIdentity, SecretRef
 
 if TYPE_CHECKING:
     from druks.harnesses.base import Harness
@@ -36,6 +41,17 @@ if TYPE_CHECKING:
     from druks.sandbox.host import Host
 
 logger = logging.getLogger(__name__)
+
+
+async def _revoke(identity_id: str) -> None:
+    # The check has run by now, and its result is the answer. A revoke that fails leaves an
+    # identity that expires with the box lease, so it is a log line and not an error.
+    try:
+        async with session_scope() as session:
+            identity = await session.get(SandboxIdentity, identity_id)
+            await identity.revoke()
+    except Exception:
+        logger.exception("could not revoke the identity of a check box: %s", identity_id)
 
 
 class Workspace:
@@ -363,6 +379,45 @@ class RepoWorkspace(Workspace):
                 exit_code=result.returncode,
             )
         return result.stdout
+
+    async def run_check(
+        self,
+        session: AsyncSession,
+        *,
+        run_id: str,
+        account_id: str,
+        command: str,
+        timeout_seconds: int,
+    ) -> SandboxRun:
+        """Run ``command`` on a separate box that holds the repo at the commit this checkout
+        started from, with its uncommitted and untracked changes on top. The box is deleted
+        when the command ends. The SDK's errors reach the caller."""
+        patch = await self.get_diff(binary=True)
+        commit = await self.get_base_commit()
+        refs = await type(self).get_secret_refs(self.subject)
+        digest = hashlib.sha256(json.dumps([ref.secret_id for ref in refs]).encode()).hexdigest()
+        # The box that runs the check fetches the repo's GitHub token like an agent box does.
+        # It never binds to a box id, so nothing sweeps it: it ends here.
+        identity, entries = await SandboxIdentity.create(
+            session,
+            account_id=account_id,
+            run_id=run_id,
+            scoped_to="check",
+            secret_refs=refs,
+            secrets_hash=digest,
+        )
+        try:
+            return await sandbox_client.run_command(
+                repo_url=self.repo_url,
+                commit=commit,
+                command=command,
+                patch=patch,
+                timeout_seconds=timeout_seconds,
+                secrets=entries,
+            )
+        finally:
+            # A caller that is cancelled still revokes, on a session of its own.
+            await asyncio.shield(_revoke(identity.id))
 
     async def set_git_identity(self) -> None:
         """Commits in the repo are authored as the operator's bot user, with a

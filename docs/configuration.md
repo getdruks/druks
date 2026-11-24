@@ -677,7 +677,10 @@ commands that `config.yml` pins. The tool takes the id of the build's run and on
 command, written as the profile lists it, and refuses any other command. The box has
 the repository at the commit where the agent's checkout left the default branch,
 with the agent's uncommitted and untracked changes on top, and drukbox deletes it
-when the command ends. The agent waits for the result. A build holds the tool for
+when the command ends. The implementer ends its turn when it starts a check, and
+Druks sends it the result as its next message, in the same session. The call keeps
+the model's prompt cache for an hour. A harness that cannot resume, such as Codex,
+waits for the result inside its turn. A build holds the tool for
 every tracker. When Druks has no address for a box to reach it (`urls.mcp_url`,
 `urls.webhook_host` or `urls.endpoint`), a build whose tracker is not the Druks
 board declares no commands, and runs as before.

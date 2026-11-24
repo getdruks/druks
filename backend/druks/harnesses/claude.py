@@ -42,6 +42,7 @@ class ClaudeHarness(Harness):
     reply_command = (command, "-p")
     no_ask_mode = "bypassPermissions"
     skills_folder = ".claude/skills"
+    can_resume = True
 
     @classmethod
     def get_acp_session(
@@ -138,6 +139,8 @@ class ClaudeHarness(Harness):
         include_apps: bool = False,
         timeout: int = Harness.default_timeout,
         hooks: Collection[str] = (),
+        resumable: bool = False,
+        resume_session: str | None = None,
     ) -> AgentInvocation:
         in_vm_run_dir = f"{get_runs_root(ssh_username)}/{run_id}"
         in_vm_debug = f"{in_vm_run_dir}/debug.log"
@@ -172,6 +175,9 @@ class ClaudeHarness(Harness):
             self.no_ask_mode,
             "--debug-file",
             in_vm_debug,
+            # The fork gives the resumed part its own session id, so the call's transcript
+            # and cost are found by its own run id.
+            *(("--resume", resume_session, "--fork-session") if resume_session else ()),
             "--session-id",
             run_id,
             "--disallowedTools",
@@ -213,12 +219,18 @@ class ClaudeHarness(Harness):
             f"cp $HOME/.claude/projects/*/{run_id}.jsonl {session_q} 2>/dev/null; "
             "exit $ec"
         )
+        env = extra_env
+        if resumable or resume_session:
+            # A pause for a check outlasts the default five-minute cache, and the resumed
+            # call would pay to write the whole context again. The first call must write
+            # the context with the long lifetime for the resume to read it.
+            env = {**(extra_env or {}), "CLAUDE_CODE_PROMPT_CACHE_TTL": "1h"}
         return AgentInvocation(
             name="claude",
             args=("sh", "-c", wrapper),
             stdin=prompt.encode("utf-8"),
             credentials=_get_credentials(manifest, include_plugins=include_plugins),
-            env=extra_env,
+            env=env,
             extra_artifact_filenames=("debug.log", "session.jsonl"),
         )
 
@@ -303,6 +315,27 @@ class ClaudeHarness(Harness):
         # The catalog entry puts the placeholder in ANTHROPIC_AUTH_TOKEN, which
         # the CLI sends as a bearer. It never refreshes a token from there.
         return [SecretRef(name=AnthropicProvider.id, secret_id=subscription.id)]
+
+    @classmethod
+    def get_own_cost(
+        cls,
+        cost_usd: float | None,
+        cost_metadata: dict | None,
+        parent_cost_usd: float | None,
+        parent_metadata: dict | None,
+    ) -> tuple[float | None, dict | None]:
+        """A resumed session reports the totals of every call since the session began, so
+        the parent's totals are what the calls before this one already recorded. Take them
+        off, so each call records its own cost once."""
+        if cost_usd is not None and parent_cost_usd is not None:
+            cost_usd = max(cost_usd - parent_cost_usd, 0.0)
+        if not cost_metadata or not parent_metadata:
+            return cost_usd, cost_metadata
+        own = dict(cost_metadata)
+        for key in _MODEL_USAGE_FIELDS:
+            if key in own:
+                own[key] = max(own[key] - parent_metadata.get(key, 0), 0)
+        return cost_usd, own
 
     @classmethod
     def get_after_agent_reply(cls, text: str) -> str:

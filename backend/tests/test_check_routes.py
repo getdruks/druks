@@ -17,6 +17,13 @@ from druks.accounts.models import Account
 from druks.core.routes import run_check
 from druks.db import db_session
 from druks.durable.models import AgentCall
+from druks.redis import (
+    clear_resumable,
+    is_resumable,
+    request_check,
+    set_resumable,
+    take_check_request,
+)
 from druks.sandbox.exceptions import HostGone
 from druks.sandbox.models import SandboxIdentity
 from druks.testing import configure_app_for_test, make_settings, seed_call, seed_run
@@ -310,7 +317,7 @@ async def test_a_check_that_ran_keeps_its_result_when_the_identity_cannot_be_rev
     def broken():
         raise ConnectionError("the database went away")
 
-    monkeypatch.setattr("druks.core.routes.session_scope", broken)
+    monkeypatch.setattr("druks.workspaces.session_scope", broken)
     run = await _run(druks_db, account)
 
     response = _ask(client, run)
@@ -367,3 +374,70 @@ async def test_a_drukbox_that_is_down_or_full_is_a_retryable_503_not_a_crash(
     body = response.json()
     assert (body["code"], body["retryable"]) == ("CHECK_BOX_UNAVAILABLE", True)
     assert str(error) in body["message"]
+
+
+@pytest.fixture
+def resumable_call(monkeypatch):
+    """A run whose agent call can end its turn for a check. The route runs on the test
+    client's own event loop, which the shared Redis client cannot cross, so the two Redis
+    calls are in memory here and the Redis keys have a test of their own."""
+    requests = {}
+
+    async def request_check(run_id, *, command, timeout_seconds):
+        return requests.setdefault(run_id, (command, timeout_seconds)) == (command, timeout_seconds)
+
+    monkeypatch.setattr("druks.core.routes.is_resumable", AsyncMock(return_value=True))
+    monkeypatch.setattr("druks.core.routes.request_check", request_check)
+    return requests
+
+
+async def test_a_check_asked_in_a_resumable_call_starts_when_the_turn_ends(
+    client, account, druks_db, box, resumable_call
+):
+    run = await _run(druks_db, account)
+
+    response = _ask(client, run, timeout_seconds=900)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["started"] is True
+    assert resumable_call == {run.id: (CHECK, 900)}
+    box.run_command.assert_not_awaited()
+    assert box.attached == []
+
+
+async def test_a_second_check_before_the_turn_ends_is_refused(
+    client, account, druks_db, box, resumable_call
+):
+    run = await _run(druks_db, account)
+    assert _ask(client, run).status_code == 200
+
+    response = _ask(client, run, command="make lint")
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "CHECK_ALREADY_STARTED"
+    assert resumable_call == {run.id: (CHECK, 600)}
+
+
+async def test_the_check_request_of_a_run_is_taken_once(druks_redis):
+    await set_resumable("run-1", ttl_seconds=60)
+
+    assert await is_resumable("run-1")
+    assert await request_check("run-1", command=CHECK, timeout_seconds=30)
+    assert not await request_check("run-1", command="make lint", timeout_seconds=30)
+    assert await take_check_request("run-1") == {"command": CHECK, "timeout_seconds": 30}
+    assert await take_check_request("run-1") is None
+    await clear_resumable("run-1")
+    assert not await is_resumable("run-1")
+
+
+async def test_a_request_that_a_crashed_attempt_left_is_not_the_next_calls(druks_redis):
+    await set_resumable("run-1", ttl_seconds=60)
+    assert await request_check("run-1", command=CHECK, timeout_seconds=30)
+
+    # The attempt crashed before it took the request. The replay marks its call again.
+    await set_resumable("run-1", ttl_seconds=60)
+
+    assert await take_check_request("run-1") is None
+    assert await request_check("run-1", command="make lint", timeout_seconds=30)
+    await clear_resumable("run-1")
+    assert await take_check_request("run-1") is None
