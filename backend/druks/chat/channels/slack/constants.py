@@ -46,6 +46,21 @@ SECTION_FIELDS_LIMIT = 10
 FIELD_TEXT_LIMIT = 2000
 BUTTON_TEXT_LIMIT = 75
 BUTTON_URL_LIMIT = 3000
+# Slack's limits for a card, a carousel, a container, and a layout, from the Block Kit reference.
+CARD_TITLE_LIMIT = 150
+CARD_BODY_LIMIT = 200
+CARD_BUTTONS_LIMIT = 3
+CAROUSEL_CARDS_LIMIT = 10
+# Slack takes this many characters in the title and in the subtitle of a container.
+CONTAINER_TITLE_LIMIT = 150
+CONTAINER_BLOCKS_LIMIT = 10
+LAYOUT_ITEMS_LIMIT = 3
+# Slack puts a container or a layout in another one 2 levels deep at most.
+NESTING_LIMIT = 2
+# Slack puts no two of these blocks in one row of a layout.
+WIDE_BLOCK_TYPES = ("carousel", "data_table", "data_visualization")
+# What a layout says that it holds. Slack requires a label. It does not show it.
+LAYOUT_LABEL = "Columns"
 # Slack's limits for a data table, from the Block Kit reference.
 TABLE_ROWS_LIMIT = 200
 TABLE_COLUMNS_LIMIT = 20

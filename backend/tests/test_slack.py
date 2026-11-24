@@ -1274,7 +1274,17 @@ async def test_a_file_a_linked_person_sends_is_a_druks_file_on_their_message(
     assert delivery.await_count == 2
 
 
-async def test_the_client_posts_a_message_again_when_slack_still_scans_its_file(monkeypatch):
+@pytest.mark.parametrize(
+    "refusal",
+    [
+        "invalid slack file [json-pointer:/blocks/0/slack_file.id/slack_file]",
+        "invalid file type [json-pointer:/blocks/0/hero_image/slack_file.id/slack_file]",
+    ],
+    ids=["image", "card"],
+)
+async def test_the_client_posts_a_message_again_when_slack_still_scans_its_file(
+    monkeypatch, refusal
+):
     # The test waits no time before the second post.
     monkeypatch.setattr(BackoffRetryIntervalCalculator, "calculate_sleep_duration", lambda *_: 0)
     # The SDK sends a message again inside its HTTP call. A local server thus stands in for Slack.
@@ -1283,7 +1293,7 @@ async def test_the_client_posts_a_message_again_when_slack_still_scans_its_file(
             {
                 "ok": False,
                 "error": "invalid_blocks",
-                "errors": ["invalid slack file [json-pointer:/blocks/0/slack_file.id/slack_file]"],
+                "errors": [refusal],
             },
             {"ok": True, "channel": "C1", "ts": "1.0"},
         ]

@@ -13,7 +13,7 @@ from druks.accounts.models import Account
 from druks.api.client import call_route
 from druks.api.exceptions import get_refusal
 from druks.chat.channels.slack.constants import INPUT_ID_PREFIX, LINK_BUTTON_ACTION_ID
-from druks.chat.channels.slack.delivery import deliver
+from druks.chat.channels.slack.delivery import deliver, escape_mrkdwn
 from druks.chat.forms import get_answer
 from druks.core.services import Slack
 from druks.db import db_session
@@ -187,7 +187,8 @@ class SlackInteractivity(SlackWebhook):
                 "Druks cannot read the Slack payload. Send a block_actions payload with its "
                 "actions, channel, message and user, as Slack does.",
             ) from error
-        if action_id == LINK_BUTTON_ACTION_ID:
+        # A block numbers each button that opens a link after its first: link:1, link:2.
+        if isinstance(action_id, str) and action_id.partition(":")[0] == LINK_BUTTON_ACTION_ID:
             # Slack opened the link of the button. It still sends the click to Druks. A link
             # answers nothing.
             return JSONResponse({"accepted": True})
@@ -263,8 +264,7 @@ class SlackInteractivity(SlackWebhook):
             return JSONResponse({"accepted": False})
         # Druks escapes the person's words. They thus cannot mention anyone or link anywhere
         # in the message.
-        answers = get_answer(notification.fields or [], values)
-        answers = answers.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        answers = escape_mrkdwn(get_answer(notification.fields or [], values))
         if notification.fields and not notification.run_id:
             outcome = ANSWER_MESSAGE.format(user=user, answers=answers)
         else:

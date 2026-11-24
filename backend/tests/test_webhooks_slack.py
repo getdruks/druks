@@ -280,11 +280,17 @@ async def test_dead_round_click_is_acknowledged_without_resume(
     ]
 
 
+# A card or a section with more than one link numbers each of its buttons after the first.
+@pytest.mark.parametrize(
+    "action_id",
+    [LINK_BUTTON_ACTION_ID, f"{LINK_BUTTON_ACTION_ID}:1", f"{LINK_BUTTON_ACTION_ID}:2"],
+    ids=["first", "second", "third"],
+)
 async def test_a_click_on_a_link_button_answers_nothing(
-    tmp_path, druks_db, resume_spy, slack_card, started
+    tmp_path, druks_db, resume_spy, slack_card, started, action_id
 ):
     _, notification = await _parked_notification(druks_db)
-    body = _interactivity_body(LINK_BUTTON_ACTION_ID)
+    body = _interactivity_body(action_id)
     with _client(tmp_path) as client:
         response = client.post(
             "/_external/slack/interactivity/", content=body, headers=_signed_headers(body)
