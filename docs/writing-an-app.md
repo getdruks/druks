@@ -737,7 +737,9 @@ hooked call.
 
 `RepoWorkspace.get_diff()` returns the change of the checkout since it left the
 default branch: commits, uncommitted edits, and untracked files. It reads the
-checkout as it is, without a clone.
+checkout as it is, without a clone. A changed binary file reads "Binary files
+differ". `get_diff(binary=True)` includes its content, so that `git apply` can
+apply the diff to another checkout.
 
 Each harness gives the agent the text in its own way:
 

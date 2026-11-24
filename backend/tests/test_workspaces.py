@@ -136,6 +136,45 @@ async def test_repo_workspace_diff_holds_commits_edits_and_untracked_files(tmp_p
     assert "?? untracked.txt" in git("status", "--short", cwd=checkout)
 
 
+async def test_repo_workspace_diff_carries_a_binary_file_only_when_asked(tmp_path: Path):
+    def git(*args: str, cwd: Path = tmp_path, stdin: str | None = None) -> str:
+        identity = ("-c", "user.name=dev", "-c", "user.email=dev@example.com")
+        return subprocess.run(
+            ["git", *identity, *args],
+            cwd=cwd,
+            input=stdin,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+
+    git("init", "-q", "-b", "main", "origin")
+    (tmp_path / "origin" / "kept.txt").write_text("kept\n")
+    git("add", "kept.txt", cwd=tmp_path / "origin")
+    git("commit", "-q", "-m", "start", cwd=tmp_path / "origin")
+    git("clone", "-q", "origin", "checkout")
+    git("clone", "-q", "origin", "elsewhere")
+    checkout = tmp_path / "checkout"
+    (checkout / "logo.bin").write_bytes(bytes(range(256)) * 8)
+
+    class _CheckoutHost:
+        ssh_username = "exedev"
+
+        async def exec(
+            self, command: list[str], *, cwd: str = "", timeout: float = 30.0
+        ) -> subprocess.CompletedProcess[str]:
+            return subprocess.run(command, cwd=checkout, capture_output=True, text=True)
+
+    workspace = RepoWorkspace(None)
+    workspace.host = _CheckoutHost()  # type: ignore[assignment]
+
+    assert "GIT binary patch" not in await workspace.get_diff()
+    git("apply", "-", cwd=tmp_path / "elsewhere", stdin=await workspace.get_diff(binary=True))
+    assert (tmp_path / "elsewhere" / "logo.bin").read_bytes() == (
+        checkout / "logo.bin"
+    ).read_bytes()
+
+
 async def _connect(slug: str = "github") -> VaultSecret:
     return await connect_service(
         slug, identity={"app_id": "1", "slug": "druks-operator"}, secrets={"private_key": "pem"}
