@@ -592,6 +592,8 @@ export interface Harness {
   /** Null for a key-only CLI. */
   provider: string | null
   billingOptions: string[]
+  /** Whether Chat runs on this harness. */
+  hasChat: boolean
 }
 
 /** One model provider, which answers and bills a request. An account holds at

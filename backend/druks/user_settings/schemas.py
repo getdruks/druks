@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, PositiveInt
+from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field, PositiveInt
 from pydantic.fields import FieldInfo
 
 from druks.accounts.enums import Theme
@@ -28,6 +28,8 @@ class HarnessResponse(Schema):
     name: str
     provider: str | None
     billing_options: SortedNames
+    # Chat runs on a harness that has an ACP adapter.
+    has_chat: Annotated[bool, BeforeValidator(bool)] = Field(validation_alias="adapter_command")
 
 
 class PersonalSettingsResponse(Schema):
