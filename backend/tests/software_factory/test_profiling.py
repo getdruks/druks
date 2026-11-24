@@ -333,6 +333,31 @@ class TestSandboxTemplate:
         assert repo.effective_profile["sandbox_template"] == "template-1"
         assert "sandbox_template" not in repo.profile["baseline"]
 
+    async def test_the_sandbox_size_start_and_env_reach_the_profile(self, druks_db, monkeypatch):
+        repo = await _seed_repo()
+        sandbox = VerificationSandbox(
+            setup=SETUP,
+            start=".druks/software_factory/start.sh",
+            size={"cpu": 8, "memory_gb": 16},
+            env={"CI": "1"},
+        )
+
+        async def _policy(repo_name):
+            return RepoPolicy(verification=VerificationProfile(sandbox=sandbox))
+
+        monkeypatch.setattr(RepoPolicy, "resolve", staticmethod(_policy))
+        _repo_files(monkeypatch)
+        _templates(monkeypatch, "template-1")
+
+        await Profile().run(repo_id=repo.id)
+        await db_session().refresh(repo)
+
+        assert repo.effective_profile["sandbox"] == {
+            "start": ".druks/software_factory/start.sh",
+            "size": {"cpu": 8, "memory_gb": 16},
+            "env": {"CI": "1"},
+        }
+
     async def test_a_repo_without_a_sandbox_builds_no_template(self, druks_db, monkeypatch):
         repo = await _seed_repo()
         _repo_files(monkeypatch)

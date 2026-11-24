@@ -699,6 +699,9 @@ run on:
 verification:
   sandbox:
     setup: .druks/software_factory/setup.sh
+    start: .druks/software_factory/start.sh
+    size: {cpu: 8, memory_gb: 16}
+    env: {CI: "1"}
 ```
 
 The script is a path in `.druks/software_factory/`, and Druks reads it from the
@@ -711,9 +714,16 @@ while drukbox builds it. Drukbox builds a given script once. When a build fails,
 Druks keeps the last good template and logs the reason. A push to
 `.druks/software_factory/` on the default branch runs the profiler again. A push
 that changes only a lockfile does not, so a new lockfile reaches the template at
-the next profile. Nothing reads the template yet. The size, the start script,
-and the env of the sandbox are not read either, and a `verification.sandbox` key
-other than `setup` fails the build with an error that names it.
+the next profile. `start` is a script in the same folder that runs on every boot,
+for services and a dependency sync. `size` is the CPUs and the gigabytes of
+memory of the computer, and `env` holds values that are set on the box when it
+is leased and never in the template, so they are not secrets. All three come
+from the default branch, as `setup` does, and the profile records them as
+`sandbox`. The sandbox client sends a size to drukbox when a caller gives one,
+and drukbox refuses a size that its provider cannot give. Nothing leases the
+repository's sandbox yet, so nothing reads the template, the start script or the
+env, and no build asks for the size. A `verification.sandbox` key other than
+these four fails the build with an error that names it.
 
 When Druks receives a push to the default branch that changes `config.yml`, the
 next build uses the new file. When a team lists Software Factory, this happens

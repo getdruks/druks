@@ -97,6 +97,7 @@ class _FakeAPI:
     created_envs: list[dict[str, str] | None] = field(default_factory=list)
     created_secrets: list[dict[str, Secret] | None] = field(default_factory=list)
     created_expires_at: list[datetime | None] = field(default_factory=list)
+    created_sizes: list[dict[str, int]] = field(default_factory=list)
     deleted_ids: list[str] = field(default_factory=list)
     renewed: list[tuple[str, datetime | None]] = field(default_factory=list)
     get_host_responses: list[SandboxHostRecord] = field(default_factory=list)
@@ -118,7 +119,9 @@ class _FakeAPI:
         provider: str | None = None,
         secrets: dict[str, Secret] | None = None,
         template: str | None = None,
+        **size: int,
     ) -> SandboxHostRecord:
+        self.created_sizes.append(size)
         self.created_envs.append(env)
         self.created_secrets.append(secrets)
         self.created_expires_at.append(expires_at)
@@ -525,6 +528,23 @@ async def test_acquire_releases_host_when_helper_upload_fails(
         "create_host succeeded but the helper upload failed before yield; "
         "acquire must roll back the host it created"
     )
+
+
+async def test_acquire_sends_a_size_only_when_one_is_asked_for(
+    patched_real_sandbox: list[_FakeSandbox],
+    patched_sandbox_api: list[_FakeAPI],
+):
+    """A host without a size is the provider's default. The SDK that does not take a size
+    is never sent one."""
+    api = _FakeAPI(create_record=_record(status="active"))
+    patched_sandbox_api.append(api)
+
+    async with sandbox_client.acquire():
+        pass
+    async with sandbox_client.acquire(cpu=8, memory_gb=16):
+        pass
+
+    assert api.created_sizes == [{}, {"cpu": 8, "memory_gb": 16}]
 
 
 @pytest.mark.parametrize(

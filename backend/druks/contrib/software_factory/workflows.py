@@ -843,6 +843,9 @@ class Profile(Workflow):
                     effective["sandbox_template"] = previous
             else:
                 effective["sandbox_template"] = template.id
+            # The size, the start script and the env come from the default branch with the
+            # setup script, so a pull request cannot change the box that its own checks use.
+            effective["sandbox"] = sandbox.model_dump(exclude={"setup"})
         await project_repo.set_profile(baseline=baseline, effective=effective)
 
     async def get_prompt_context(self, **context: Any) -> dict[str, Any]:

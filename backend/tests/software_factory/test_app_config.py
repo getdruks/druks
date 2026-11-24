@@ -80,6 +80,43 @@ class TestResolveAppConfig:
         policy = await RepoPolicy.resolve(REPO)
         assert policy.verification.sandbox.setup == ".druks/software_factory/setup.sh"
 
+    async def test_a_sandbox_size_start_and_env_are_read(self, monkeypatch):
+        _fake_fetch(
+            monkeypatch,
+            {
+                (REPO, ".druks/software_factory/config.yml"): (
+                    "verification:\n  sandbox:\n    setup: .druks/software_factory/setup.sh\n"
+                    "    start: .druks/software_factory/start.sh\n"
+                    "    size: {cpu: 8, memory_gb: 16}\n    env: {CI: '1'}\n"
+                )
+            },
+        )
+        sandbox = (await RepoPolicy.resolve(REPO)).verification.sandbox
+        assert sandbox.start == ".druks/software_factory/start.sh"
+        assert (sandbox.size.cpu, sandbox.size.memory_gb) == (8, 16)
+        assert sandbox.env == {"CI": "1"}
+
+    @pytest.mark.parametrize(
+        ("lines", "message"),
+        [
+            ("    start: start.sh\n", "start must be a path in"),
+            ("    size: {cpu: 0, memory_gb: 16}\n", "cpu"),
+            ("    size: {cpu: 8}\n", "memory_gb"),
+        ],
+    )
+    async def test_a_bad_sandbox_start_or_size_fails_loudly(self, monkeypatch, lines, message):
+        _fake_fetch(
+            monkeypatch,
+            {
+                (REPO, ".druks/software_factory/config.yml"): (
+                    "verification:\n  sandbox:\n    setup: .druks/software_factory/setup.sh\n"
+                    + lines
+                )
+            },
+        )
+        with pytest.raises(AppConfigError, match=message):
+            await RepoPolicy.resolve(REPO)
+
     async def test_no_file_yields_defaults(self, monkeypatch):
         _fake_fetch(monkeypatch, {})
         policy = await RepoPolicy.resolve(REPO)

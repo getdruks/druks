@@ -60,6 +60,8 @@ class Client:
         provider: str | None = None,
         secrets: dict[str, Secret | Issuer] | None = None,
         template: str | None = None,
+        cpu: int | None = None,
+        memory_gb: int | None = None,
         identity: SandboxIdentity | None = None,
         lease_seconds: int = SANDBOX_HOST_LEASE_SECONDS,
     ) -> AsyncIterator[Host]:
@@ -72,6 +74,8 @@ class Client:
                 provider=provider,
                 secrets=secrets,
                 template=template,
+                cpu=cpu,
+                memory_gb=memory_gb,
                 identity=identity,
                 lease_seconds=lease_seconds,
             ) as host:
@@ -89,6 +93,8 @@ class Client:
         provider: str | None = None,
         secrets: dict[str, Secret | Issuer] | None = None,
         template: str | None = None,
+        cpu: int | None = None,
+        memory_gb: int | None = None,
         identity: SandboxIdentity | None = None,
         lease_seconds: int = SANDBOX_HOST_LEASE_SECONDS,
     ) -> AsyncIterator[Host]:
@@ -105,6 +111,10 @@ class Client:
                 image = settings.sandbox.image
             # drukbox reaps the host at lease end, so a dead worker still frees its VM.
             lease = timedelta(seconds=lease_seconds)
+            # A size that is left out is not sent, so a host without one is the provider's default.
+            size = {
+                name: value for name, value in (("cpu", cpu), ("memory_gb", memory_gb)) if value
+            }
             # A slot can take long to open; the wait is bounded by the longest lease.
             deadline = datetime.now(UTC) + timedelta(seconds=SANDBOX_HOST_LEASE_SECONDS)
             try:
@@ -117,6 +127,7 @@ class Client:
                             provider=provider,
                             secrets=secrets,
                             template=template,
+                            **size,
                         )
                         break
                     except SandboxCapacityError as exc:
@@ -256,6 +267,8 @@ class Client:
         provider: str | None = None,
         secrets: dict[str, Secret | Issuer] | None = None,
         template: str | None = None,
+        cpu: int | None = None,
+        memory_gb: int | None = None,
         identity: SandboxIdentity | None = None,
         lease_seconds: int = SANDBOX_HOST_LEASE_SECONDS,
     ) -> Host:
@@ -266,6 +279,8 @@ class Client:
             provider=provider,
             secrets=secrets,
             template=template,
+            cpu=cpu,
+            memory_gb=memory_gb,
             identity=identity,
             lease_seconds=lease_seconds,
         ) as host:

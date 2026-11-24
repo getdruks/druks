@@ -21,6 +21,19 @@ class Gates(BaseModel):
 SETUP_FOLDER = ".druks/software_factory/"
 
 
+def _in_setup_folder(path: str, key: str) -> str:
+    if not path.startswith(SETUP_FOLDER) or ".." in path.split("/"):
+        raise ValueError(f"{key} must be a path in {SETUP_FOLDER}, not {path!r}")
+    return path
+
+
+class SandboxSize(BaseModel):
+    model_config = {"frozen": True, "extra": "forbid"}
+
+    cpu: int = Field(ge=1)
+    memory_gb: int = Field(ge=1)
+
+
 class VerificationSandbox(BaseModel):
     """The computer that a repo's checks run on."""
 
@@ -29,13 +42,22 @@ class VerificationSandbox(BaseModel):
     # The script that builds the repo's template, a path in the repo's default branch. It
     # sits in the config folder, so a push to it re-profiles the repo.
     setup: str
+    # The script that runs on every boot, for services and a dependency sync.
+    start: str | None = None
+    size: SandboxSize | None = None
+    # Values that are set on the box when it is leased, never in the template. They sit in
+    # the profile and the config, so they are not secrets.
+    env: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("setup")
     @classmethod
     def setup_is_in_the_config_folder(cls, setup: str) -> str:
-        if not setup.startswith(SETUP_FOLDER) or ".." in setup.split("/"):
-            raise ValueError(f"setup must be a path in {SETUP_FOLDER}, not {setup!r}")
-        return setup
+        return _in_setup_folder(setup, "setup")
+
+    @field_validator("start")
+    @classmethod
+    def start_is_in_the_config_folder(cls, start: str | None) -> str | None:
+        return start if start is None else _in_setup_folder(start, "start")
 
 
 class VerificationProfile(BaseModel):
