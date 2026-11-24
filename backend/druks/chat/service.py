@@ -4,9 +4,10 @@ import hashlib
 import json
 import logging
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from contextlib import suppress
 from datetime import datetime, timedelta
+from functools import partial
 from operator import attrgetter
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
@@ -73,6 +74,7 @@ from .constants import (
     POST_CANCEL_WORKFLOW,
     QUOTA_RESUMED_MESSAGE,
     QUOTA_WAIT_MESSAGE,
+    REFUSED_RUN_MESSAGE,
     RESULT_MESSAGE,
     TIME_MESSAGE,
     TRANSCRIPTION_FAILED_MESSAGE,
@@ -910,14 +912,19 @@ async def report_result(session: AsyncSession, run: Run, *, result) -> str | Non
         body = NO_RESULT_MESSAGE.format(run=run.id)
     else:
         body = RESULT_MESSAGE.format(run=run.id, result=to_json(result, fallback=str).decode())
-    return await report_outcome(session, run.conversation_id, body)
+    return await report_outcome(
+        session, run.conversation_id, body, get_notice=partial(get_refused_notice, run, "finished")
+    )
 
 
 async def report_failure(session: AsyncSession, run: Run, *, failure: str) -> str | None:
     """Report a run's failure to the chat that started it, whether or not the run waited
     for an answer. Returns the conversation to deliver."""
     return await report_outcome(
-        session, run.conversation_id, FAILURE_MESSAGE.format(run=run.id, failure=failure)
+        session,
+        run.conversation_id,
+        FAILURE_MESSAGE.format(run=run.id, failure=failure),
+        get_notice=partial(get_refused_notice, run, "failed"),
     )
 
 
@@ -940,7 +947,12 @@ async def report_cancel(run_id: str) -> str | None:
     async with step_session() as session:
         run = await session.get(Run, run_id)
         body = CANCELLED_MESSAGE.format(run=run.id, reason=run.failure or "none given")
-        return await report_outcome(session, run.conversation_id, body)
+        return await report_outcome(
+            session,
+            run.conversation_id,
+            body,
+            get_notice=partial(get_refused_notice, run, "was cancelled"),
+        )
 
 
 async def report_quota_wait(session: AsyncSession, run: Run, *, resumes_at: datetime) -> None:
@@ -961,14 +973,40 @@ async def report_quota_resume(session: AsyncSession, run: Run) -> str | None:
     """Tell the chat that started a run that it continues after its usage-limit wait.
     Returns the conversation to deliver."""
     return await report_outcome(
-        session, run.conversation_id, QUOTA_RESUMED_MESSAGE.format(run=run.id)
+        session,
+        run.conversation_id,
+        QUOTA_RESUMED_MESSAGE.format(run=run.id),
+        get_notice=partial(get_refused_notice, run, "continues after its usage-limit wait"),
     )
 
 
-async def report_outcome(session: AsyncSession, conversation_id: str, body: str) -> str | None:
+def get_refused_notice(run: Run, outcome: str) -> str:
+    """The line that tells a person a run's outcome when the chat's agent no longer
+    answers them. It names the run as a notification does. It links to the run when the
+    installation has an endpoint."""
+    notice = REFUSED_RUN_MESSAGE.format(
+        run=run.subject_key or run.kind, outcome=outcome, reason=PRIVATE_AGENT_MESSAGE
+    )
+    if link := run.get_link():
+        notice += f" Open {link}"
+    return notice
+
+
+async def report_outcome(
+    session: AsyncSession, conversation_id: str, body: str, *, get_notice: Callable[[], str]
+) -> str | None:
     """Keep the outcome in the chat. Returns the conversation to deliver, unless its
-    channel runs no turns."""
+    channel runs no turns. When the agent no longer answers the conversation's person,
+    Druks sends the line of ``get_notice`` itself and no turn runs."""
     conversation = await session.get(Conversation, conversation_id)
+    # The agent can change owner or turn private after the conversation began.
+    if conversation.agent and not conversation.account.can_talk_to(conversation.agent):
+        notice = await conversation.create_message(
+            session, get_notice(), role=MessageRole.ASSISTANT
+        )
+        await session.commit()
+        await send_assistant_message(session, conversation, notice)
+        return
     await conversation.create_message(session, body, is_internal=True)
     channel = conversation.channel
     if not channel or channel.has_turns:

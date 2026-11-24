@@ -78,6 +78,9 @@ REFUSED_MESSAGE = (
     "Druks skipped the scheduled call of {tool}: {reason} The schedule goes on. "
     "To stop it, ask Druks in another chat."
 )
+# Druks sends this line itself for a run's report: the agent no longer answers the
+# conversation's person, so its turn would only refuse.
+REFUSED_RUN_MESSAGE = "Your run {run} {outcome}. The agent does not tell you itself: {reason}"
 # The workflow that posts a cancelled run's report to its chat, by the name a run queues it.
 POST_CANCEL_WORKFLOW = "chat.post_cancel"
 # A channel turn that ends with no answer gets this once; the next empty turn fails.

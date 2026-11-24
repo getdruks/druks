@@ -2280,6 +2280,48 @@ async def test_a_quota_wait_tells_the_person_when_the_run_continues_without_a_tu
     send_reply.assert_awaited_once_with(druks_db, conversation, notice)
 
 
+async def test_a_run_tells_the_person_itself_once_the_agent_no_longer_answers_them(
+    druks_db, monkeypatch
+):
+    owner = await Account.get_or_create(druks_db, "owner@example.com")
+    other = await Account.get_or_create(druks_db, "other@example.com")
+    agent = await Agent.create(druks_db, owner=owner, **{**AGENT, "is_private": False})
+    conversation = await Conversation.create(
+        druks_db, account_id=other.id, body="Review the pull request", agent_id=agent.id
+    )
+    conversation.source = "slack"
+    await agent.replace(
+        druks_db,
+        editor=owner,
+        owner_id=owner.id,
+        channel_id=None,
+        picture=None,
+        **{**AGENT, "is_private": True},
+    )
+    run = await seed_run(druks_db, kind="test", account_id=other.id)
+    run.conversation_id = conversation.id
+    await druks_db.commit()
+    # The report loads its run, as the step that posts it does.
+    await druks_db.refresh(run)
+    send_reply = AsyncMock()
+    monkeypatch.setattr(channel_registry.get("slack"), "send_reply", send_reply)
+    monkeypatch.setattr(
+        "druks.durable.models.get_settings",
+        lambda: SimpleNamespace(urls=Urls(endpoint="https://druks.example.com")),
+    )
+
+    assert not await service.report_result(druks_db, run, result={"price": 12})
+
+    messages = await list_messages(druks_db, conversation)
+    *_, notice = messages
+    assert notice.body == (
+        f"Your run test finished. The agent does not tell you itself: {PRIVATE_AGENT_MESSAGE} "
+        f"Open https://druks.example.com/runs/{run.id}"
+    )
+    assert not any(message.is_internal for message in messages)
+    send_reply.assert_awaited_once_with(druks_db, conversation, notice)
+
+
 async def test_a_failed_run_reports_to_its_conversation_whether_or_not_it_parked(
     druks_db, conversation
 ):
