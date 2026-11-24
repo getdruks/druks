@@ -32,9 +32,14 @@ trap cleanup EXIT HUP INT TERM
 base_url=""
 attempt=0
 while [ "$attempt" -lt 50 ]; do
+  # Check the server before reading its log: a server seen gone has written all it will,
+  # whereas one that wrote its banner after the read and exited before the check would
+  # be reported as having no banner.
+  server_alive=0
+  if kill -0 "$server_pid" 2>/dev/null; then server_alive=1; fi
   base_url=$(sed -n 's/.*listening on \(http:\/\/127\.0\.0\.1:[0-9]*\).*/\1/p' "$run_dir/opencode.log" | head -n 1)
   if [ -n "$base_url" ]; then break; fi
-  if ! kill -0 "$server_pid" 2>/dev/null; then break; fi
+  if [ "$server_alive" -eq 0 ]; then break; fi
   sleep 0.1
   attempt=$((attempt + 1))
 done

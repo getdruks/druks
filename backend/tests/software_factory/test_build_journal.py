@@ -25,6 +25,7 @@ def _implementation(
         {
             "type": "result",
             "status": status,
+            "check_command": "uv run pytest" if status == "needs_check" else None,
             "base_sha": base_sha if delivered else None,
             "head_sha": head_sha if delivered else None,
             "commit_sha": head_sha if delivered else None,
@@ -48,7 +49,11 @@ def test_plan_is_the_latest_or_an_empty_stand_in():
 
 
 def test_only_shipped_deliveries_count_as_implementations():
-    journal = _journal(_implementation(), _implementation(status="needs_clarification"))
+    journal = _journal(
+        _implementation(),
+        _implementation(status="needs_clarification"),
+        _implementation(status="needs_check"),
+    )
     assert len(journal.implementations) == 1
     assert journal.implementation_revision == 1
     last = journal.last_implementation
@@ -127,3 +132,10 @@ def test_a_review_after_green_ci_that_requests_no_changes_is_ready_for_review():
     assert not _journal(green, _review("request_changes")).is_ready_for_review
     assert not _journal(unfinished, _review("approve")).is_ready_for_review
     assert not _journal(_review("approve"), green).is_ready_for_review
+
+
+def test_the_plan_size_survives_a_revision_that_sizes_nothing():
+    journal = _journal(PlanData(plan_markdown="v1", size="small"), PlanData(plan_markdown="v2"))
+
+    assert journal.plan_size == "small"
+    assert _journal(PlanData()).plan_size is None
