@@ -17,6 +17,7 @@ from dbos import DBOS, StepOptions
 from pydantic_core import to_json
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from druks import ui
 from druks.accounts.enums import AccountKind
 from druks.agents.constants import PRIVATE_AGENT_MESSAGE
 from druks.durable.engine import step_session
@@ -99,6 +100,12 @@ def events_key(conversation_id: str) -> str:
 def question_key(conversation_id: str, message_id: str) -> str:
     """The key that holds the question of the turn of ``message_id`` until the turn ends."""
     return f"chat:{conversation_id}:question:{message_id}"
+
+
+def blocks_key(conversation_id: str, message_id: str) -> str:
+    """The key that holds the blocks that the turn of ``message_id`` shows until the turn
+    ends."""
+    return f"chat:{conversation_id}:blocks:{message_id}"
 
 
 async def publish(conversation_id: str, event: dict) -> None:
@@ -787,26 +794,33 @@ async def finish_turn(
     status: dict,
 ) -> None:
     """Save the reply and the agent's session files, and send a channel's reply to its
-    person. The question that the agent asked in the turn follows the reply. A web reply
-    keeps the question, and the web chat shows its choices or its fields. A channel with
-    buttons gets both in one message, with a button for each choice, and a channel with
-    inputs gets a form's fields as inputs. Elsewhere the reply ends with the question and
-    its numbered choices or fields."""
+    person. The blocks that the agent showed in the turn follow the reply's text, and the
+    question that it asked follows both. A web reply keeps the blocks and the question, and
+    the web chat shows the question's choices or its fields. A channel that draws blocks
+    gets the text and the blocks in one message. A channel with buttons gets the question
+    in that message too, with a button for each choice, and a channel with inputs gets a
+    form's fields as inputs. Elsewhere the reply ends with the text form of the blocks,
+    then the question and its numbered choices or fields."""
     body, tool_calls = await bridge.reply(conversation.id, message.id)
     state = MessageState(status["status"])
     await conversation.end_turn(session, state)
     redis = get_client()
     saved = await redis.get(question_key(conversation.id, message.id))
-    ask = {}
-    # A turn that the person stopped asks nothing.
+    shown = await redis.get(blocks_key(conversation.id, message.id))
+    ask, blocks = {}, None
+    # A turn that the person stopped asks nothing and shows nothing.
     if saved and state == MessageState.REPLIED:
         # A question that the release before forms staged has no fields.
         ask = {"fields": [], **json.loads(saved)}
+    if shown and state == MessageState.REPLIED:
+        blocks = json.loads(shown)
     channel = conversation.channel
     question = None
     # A web conversation has no channel. Its reply keeps the question for the web chat.
     if ask and not channel:
         question = ask
+    # The web chat and a channel that draws blocks keep them apart from the reply's text.
+    is_stored = not channel or channel.has_blocks
     reply = await conversation.create_message(
         session,
         body,
@@ -814,8 +828,14 @@ async def finish_turn(
         reply_to=message,
         tool_calls=tool_calls,
         question=question,
+        blocks=blocks if is_stored else None,
     )
-    separator = "\n\n" if reply.answer else ""
+    if blocks and not is_stored:
+        if reply.answer:
+            reply.body += "\n\n"
+        reply.body += ui.Stack(blocks).to_markdown()
+    text = ui.Stack(reply.answer_blocks).to_markdown()
+    separator = "\n\n" if text else ""
     is_shown = False
     if ask and channel:
         is_shown = channel.has_inputs if ask["fields"] else channel.has_buttons
@@ -836,7 +856,9 @@ async def finish_turn(
         await bridge.host.save_files(session, [session_file], app="chat")
         await conversation.set_session_file(session, session_file)
     await session.commit()
-    await redis.delete(question_key(conversation.id, message.id))
+    await redis.delete(
+        question_key(conversation.id, message.id), blocks_key(conversation.id, message.id)
+    )
     await reset_live_stream(conversation.id)
     # A person who took the chat over during the turn answers it instead.
     if (
@@ -854,14 +876,15 @@ async def finish_turn(
                 session,
                 conversation_id=conversation.id,
                 reason="question.asked",
-                body=reply.answer + separator + ask["question"],
-                question_offset=len(reply.answer),
+                body=text + separator + ask["question"],
+                blocks=reply.answer_blocks if reply.blocks else None,
+                question_offset=len(text),
                 actions=choices or None,
                 fields=ask["fields"] or None,
             )
             await queue_send(session, notification)
             await session.commit()
-        elif reply.answer:
+        elif reply.answer or reply.blocks:
             await conversation.channel.send_reply(session, conversation, reply)
         elif message.body == NO_ANSWER_MESSAGE:
             failure = await conversation.create_message(

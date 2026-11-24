@@ -1,9 +1,9 @@
 from datetime import datetime
 
-from pydantic import AliasPath, ConfigDict, Field
+from pydantic import AliasPath, ConfigDict, Field, field_validator
 
 from druks.schemas import Schema
-from druks.ui.blocks import FileSummary
+from druks.ui.blocks import Block, FileSummary, Stack
 from druks.ui.fields import Field as FormField
 
 from .enums import ConversationSource, MessageRole, MessageState
@@ -42,12 +42,18 @@ class QuestionResponse(Schema):
     fields: list[FormField]
 
 
+class ReplyBlockResponse(Schema):
+    block: Block
+    text_form: str
+
+
 class MessageResponse(Schema):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
     role: MessageRole
     body: str
+    blocks: list[ReplyBlockResponse]
     reply_to: str | None
     state: MessageState | None
     tool_calls: list[dict]
@@ -58,9 +64,29 @@ class MessageResponse(Schema):
     created_at: datetime
     delivered_at: datetime | None
 
+    @field_validator("blocks", mode="before")
+    @classmethod
+    def add_text_forms(cls, blocks: list[dict] | None) -> list[dict]:
+        """Each block that the reply shows, with its text form."""
+        return [
+            {"block": block, "text_form": block.to_markdown()}
+            for block in Stack(blocks or []).blocks
+        ]
+
 
 class ConversationDetailResponse(ConversationResponse):
     messages: list[MessageResponse]
+
+
+class RunStatusResponse(Schema):
+    # The status that a run reported, as its message shows it.
+    id: str
+    run: str
+    # The app that declares the run's workflow. Empty when no loaded app declares it.
+    app: str
+    blocks: list[Block]
+    # When the first run of the retry chain started. The status shows at that place.
+    started_at: datetime
 
 
 class ReminderResponse(Schema):

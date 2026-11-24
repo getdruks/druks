@@ -119,6 +119,24 @@ as files. Set `DRUKS_SECRETS_DIR` to the directory, for example a mounted
 `sandbox.service_token`. Druks does not start when a secret is in the
 environment and in a file. The installer does not use files.
 
+A file can also set a `Secret` field of an app's settings. Name the file
+`apps.<app>.<field>`, for example `apps.field_notes.sync_token`. When the file
+exists, its content is the value. The app settings form shows the field as
+**Managed by configuration**, and nobody can change or clear it there. When the
+file is absent, the field keeps the value that an admin saved, or stays unset.
+Plain fields of app settings stay on the dashboard. Druks reads the files at
+startup, so restart Druks after a change.
+
+Druks does not start when a file `apps.<app>.<field>` names one of these:
+
+- an app that is not installed or not enabled
+- a field that the app does not declare
+- a field that is not a `Secret`
+- `enabled`: only `[apps.<name>] enabled` in `druks.toml` switches an app on or off
+
+The error names the file. When the app's settings refuse a value, reading them
+fails with an error that does not show the value.
+
 ## Managed services
 
 A `[services.<slug>]` table makes that service managed. `druks.toml` and the
@@ -265,6 +283,23 @@ authenticated account. It returns `timezone`, `theme`, `notificationChannelId`, 
 | `DRUKS_HARNESS_CONFIG_ROOT` | `~/.config/druks/harnesses` | Optional harness configuration copied into sandboxes |
 | `DRUKS_LOG_LEVEL` | `INFO` | Python and DBOS log level |
 
+`log_format` sets the format of the log. It is a top-level key of `druks.toml`,
+before any table, and it has no environment variable:
+
+```toml
+log_format = "json"
+```
+
+With the default `text`, each record is one line of text:
+`<time> <level> <logger> <message>`, and a traceback continues on the lines
+below. DBOS, FastMCP, and uvicorn write in their own text formats. With
+`json`, each record is one JSON object on one line, with `time` in UTC,
+`level`, `logger`, `message`, and `exception`. `exception` holds the
+traceback, or `null` when the record has none. A record written inside a span
+that Druks sends also holds `trace_id` and `span_id` in hex. The records of
+DBOS, FastMCP, and uvicorn, and the migration lines of `druks init-db`, take the
+same form, on standard error. Restart Druks after a change.
+
 Each Druks process can open up to `DRUKS_DATABASE_POOL_SIZE` +
 `DRUKS_DATABASE_MAX_OVERFLOW` + `DRUKS_DBOS_POOL_SIZE` + 1 Postgres connections.
 The extra connection is the DBOS notification listener. With the defaults, this
@@ -339,6 +374,10 @@ traces of the runs:
 
 Any caller can mark its own request this way, and Druks then sends no span
 for that request. A run always keeps its trace.
+
+With [`log_format = "json"`](#core-process-settings), a log record written
+inside a span that Druks sends carries the `trace_id` of the span's trace, so a
+JSON line opens its trace in the collector.
 
 A span leaves the process with identifiers, route templates, and the attributes
 above only. Druks removes the rest before the export:
@@ -469,14 +508,16 @@ authentication. Keep the listener on loopback. Never publish it.
 
 A public listener that bypasses the identity edge must not forward the
 configured identity header. The shipped webhook listener serves only
-provider-authenticated `/_external/*` and PAT-authenticated `/mcp` routes. The
+provider-authenticated `/_external/*`, agents' pictures at `GET /media/*`, and
+PAT-authenticated `/mcp` routes. The
 issuer listener serves only the `/api/secrets/*` route, which authenticates the
 sandbox's identity bearer. These routes do not resolve the header. A future
 public listener must keep the same isolation.
 
 Public `POST /_external/*` routes bypass the identity gate and use their own
 authentication. Webhooks use signature validation. The notification response
-route uses its correlation token. `GET /api/auth/me` answers without a
+route uses its correlation token. `GET /media/<file-id>` serves
+a file only while it is an agent's picture. `GET /api/auth/me` answers without a
 resolved account so the dashboard can render onboarding in the `none`-mode
 setup state.
 
@@ -1154,8 +1195,13 @@ Druks sends these notifications:
   run's page. A run that a chat started reports its failure in that chat.
 - **Run waits for an answer.** A run with a subject, which no chat started, parked
   on a gate. For a gate that you answer in Druks, the notification has buttons
-  and a link to the run. A run that a chat started asks in that chat. Failure to
-  deliver the notification does not unpark or fail the run.
+  and a link to the run. A run that a chat started asks in that chat. A question
+  that names an [approver](writing-an-app.md#wait-for-input) notifies the approver
+  instead, also when another account's chat started the run. Failure to deliver
+  the notification does not unpark or fail the run.
+- **Status.** A workflow that no chat started, and that reports its status, keeps
+  it in one message that Druks edits as the work goes on. See
+  [Report status](writing-an-app.md#report-status).
 
 **Settings → Preferences → Notifications** chooses where the bot sends your notifications:
 
@@ -1167,8 +1213,8 @@ Druks sends these notifications:
 
 A run without an account, such as a scheduled run, belongs to the default
 account, and that account gets its notifications. The bell in the dashboard
-header shows your newest notifications, with or without Slack. A notification
-links to the dashboard only when `urls.endpoint` is set.
+header shows your newest notifications, with or without Slack, except a status.
+A notification links to the dashboard only when `urls.endpoint` is set.
 
 ## MCP servers
 

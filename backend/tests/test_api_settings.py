@@ -1,6 +1,7 @@
 from pathlib import Path
 from unittest.mock import AsyncMock
 
+import pytest
 from conftest import settings_client
 from druks.accounts.enums import Role
 from druks.accounts.models import Account
@@ -64,8 +65,8 @@ def test_get_settings_carries_the_execution_defaults(tmp_path: Path):
 
 def test_patch_settings_judges_the_default_triple_together(tmp_path: Path):
     with settings_client(tmp_path) as client:
-        # opencode takes keys only: the harness alone does not fit the
-        # subscription default it would inherit.
+        # opencode takes keys only. The harness alone does not fit the subscription default
+        # that it inherits.
         alone = client.patch("/api/settings", json={"defaultHarness": "opencode"})
         assert alone.status_code == 422
         assert "API key only" in alone.json()["detail"]
@@ -89,15 +90,15 @@ def test_a_switched_provider_wakes_the_runs_waiting_out_a_quota(tmp_path: Path, 
     monkeypatch.setattr(Instruction, "wake_runs_waiting_for_quota", wake)
     with settings_client(tmp_path) as client:
         client.patch(
-            "/api/settings/apps", json={"agentEfforts": {"software_factory.implement": "low"}}
+            "/api/settings/apps", json={"instructionEfforts": {"software_factory.implement": "low"}}
         )
         client.patch("/api/settings", json={"defaultEffort": "low"})
         wake.assert_not_awaited()
         client.patch(
             "/api/settings/apps",
             json={
-                "agentHarnesses": {"software_factory.implement": "codex"},
-                "agentModels": {"software_factory.implement": "openai/gpt-5.5"},
+                "instructionHarnesses": {"software_factory.implement": "codex"},
+                "instructionModels": {"software_factory.implement": "openai/gpt-5.5"},
             },
         )
         wake.assert_awaited_once()
@@ -155,7 +156,9 @@ def test_patch_settings_rejects_defaults_that_break_an_agent_override(tmp_path: 
     with settings_client(tmp_path) as client:
         override = client.patch(
             "/api/settings/apps",
-            json={"agentModels": {"software_factory.generate_plan": "anthropic/claude-opus-4-7"}},
+            json={
+                "instructionModels": {"software_factory.generate_plan": "anthropic/claude-opus-4-7"}
+            },
         )
         assert override.status_code == 200
 
@@ -178,54 +181,17 @@ def test_patch_settings_rejects_a_model_no_harness_runs(tmp_path: Path):
     assert "gpt-5.5" in response.json()["detail"]
 
 
-def test_agents_lists_every_apps_agents_as_they_resolve(tmp_path: Path):
-    with settings_client(tmp_path) as client:
-        client.patch(
-            "/api/settings/apps",
-            json={
-                "agentHarnesses": {"software_factory.implement": "codex"},
-                "agentModels": {"software_factory.implement": "openai/gpt-5.5"},
-            },
-        )
-        body = client.get("/api/instructions").json()
-    apps = {app["name"]: app for app in body["apps"]}
-    assert "software_factory" in apps
-    assert "field_notes" in apps
-    agents = {agent["name"]: agent for agent in apps["software_factory"]["instructions"]}
-    assert agents["software_factory.implement"]["harness"] == "codex"
-    assert agents["software_factory.implement"]["harnessSource"] == "agent"
-    assert agents["software_factory.implement"]["model"] == "openai/gpt-5.5"
-    assert agents["software_factory.implement"]["source"] == "agent"
-    assert agents["software_factory.implement"]["billing"] == "subscription"
-    assert agents["software_factory.implement"]["billingSource"] == "default"
-    assert agents["software_factory.generate_plan"]["harnessSource"] == "default"
-    assert set(agents["software_factory.generate_plan"]) == {
-        "name",
-        "label",
-        "description",
-        "harness",
-        "harnessSource",
-        "model",
-        "source",
-        "billing",
-        "billingSource",
-        "effort",
-        "effortSource",
-        "timeout",
-        "timeoutSource",
-    }
-
-
 def test_apps_judge_an_agents_triple_as_it_resolves(tmp_path: Path):
     with settings_client(tmp_path) as client:
         response = client.patch(
-            "/api/settings/apps", json={"agentHarnesses": {"software_factory.implement": "pi"}}
+            "/api/settings/apps",
+            json={"instructionHarnesses": {"software_factory.implement": "pi"}},
         )
         assert response.status_code == 422
         assert "API key only" in response.json()["detail"]
         response = client.patch(
             "/api/settings/apps",
-            json={"agentModels": {"software_factory.implement": "openai/gpt-5.5"}},
+            json={"instructionModels": {"software_factory.implement": "openai/gpt-5.5"}},
         )
         assert response.status_code == 422
         assert "does not run OpenAI" in response.json()["detail"]
@@ -235,8 +201,8 @@ def test_apps_judge_an_agents_triple_as_it_resolves(tmp_path: Path):
         response = client.patch(
             "/api/settings/apps",
             json={
-                "agentHarnesses": {"software_factory.implement": "pi"},
-                "agentBillings": {"software_factory.implement": "api_key"},
+                "instructionHarnesses": {"software_factory.implement": "pi"},
+                "instructionBillings": {"software_factory.implement": "api_key"},
             },
         )
         assert response.status_code == 200
@@ -245,23 +211,16 @@ def test_apps_judge_an_agents_triple_as_it_resolves(tmp_path: Path):
             agents["software_factory.implement"]["harness"],
             agents["software_factory.implement"]["billing"],
         ) == ("pi", "api_key")
-        assert agents["software_factory.implement"]["billingSource"] == "agent"
-        response = client.patch("/api/settings/apps", json={"agentBillings": {"ghost": "api_key"}})
+        assert agents["software_factory.implement"]["billingSource"] == "override"
+        response = client.patch(
+            "/api/settings/apps", json={"instructionBillings": {"ghost": "api_key"}}
+        )
         assert response.status_code == 422
 
 
 def _software_factory_app(client: TestClient) -> dict:
     body = client.get("/api/settings/apps").json()
     return next(app for app in body["apps"] if app["name"] == "software_factory")
-
-
-def _chat_app(client: TestClient) -> dict:
-    body = client.get("/api/settings/apps").json()
-    return next(app for app in body["apps"] if app["name"] == "chat")
-
-
-def _software_factory_settings_fields(client: TestClient) -> dict:
-    return {field["name"]: field for field in _software_factory_app(client)["settings"]}
 
 
 def _field_notes_settings_fields(client: TestClient) -> dict:
@@ -331,6 +290,7 @@ def test_apps_surface_build_agents_and_workflow_defaults(tmp_path: Path):
         "secretSet": None,
         "multiline": False,
         "overridden": False,
+        "managed": False,
     }
 
 
@@ -446,7 +406,11 @@ async def test_app_non_secret_setting_stays_in_value(tmp_path: Path):
                 {"key": key},
             )
         ).one()
-        field = _software_factory_settings_fields(client)["trigger_status"]
+        field = next(
+            setting
+            for setting in _software_factory_app(client)["settings"]
+            if setting["name"] == "trigger_status"
+        )
 
     assert written.status_code == 200
     assert stored.value == status
@@ -469,7 +433,9 @@ def test_incoherent_app_save_is_rejected_and_rolled_back_before_schedules(
         response = client.patch(
             "/api/settings/apps",
             json={
-                "agentModels": {"software_factory.generate_plan": "anthropic/claude-opus-4-7"},
+                "instructionModels": {
+                    "software_factory.generate_plan": "anthropic/claude-opus-4-7"
+                },
                 "appSettings": {"field_notes": {"visibility": "public"}},
             },
         )
@@ -528,20 +494,40 @@ async def test_clearing_a_secret_deletes_its_override_and_stays_coherent(tmp_pat
     assert fields["sync_signing_key"]["secretSet"] is False
 
 
+async def test_app_secret_the_app_refuses_stays_out_of_the_error(tmp_path: Path):
+    # The proof app's validator quotes the token that it refuses.
+    await SettingsOverride.set_app_setting(
+        db_session(), "field_notes", "sync_token", "not-a-token", is_secret=True
+    )
+
+    with settings_client(tmp_path) as client:
+        # A cleared field validates nothing until the route's last check of the app.
+        cleared = client.patch(
+            "/api/settings/apps", json={"appSettings": {"field_notes": {"board_size": None}}}
+        )
+        with pytest.raises(ValueError) as refused:
+            await FieldNotes.settings()
+
+    assert cleared.status_code == 422
+    assert "not-a-token" not in cleared.text
+    assert "not-a-token" not in str(refused.value)
+    assert refused.value.__suppress_context__
+
+
 def test_apps_override_agent_model_persists(tmp_path: Path):
     with settings_client(tmp_path) as client:
         patch = client.patch(
             "/api/settings/apps",
             json={
-                "agentHarnesses": {"software_factory.implement": "codex"},
-                "agentModels": {"software_factory.implement": "openai/gpt-5.5"},
+                "instructionHarnesses": {"software_factory.implement": "codex"},
+                "instructionModels": {"software_factory.implement": "openai/gpt-5.5"},
             },
         )
         assert patch.status_code == 200
         agents = {agent["name"]: agent for agent in _software_factory_app(client)["instructions"]}
 
     assert agents["software_factory.implement"]["model"] == "openai/gpt-5.5"
-    assert agents["software_factory.implement"]["source"] == "agent"
+    assert agents["software_factory.implement"]["source"] == "override"
 
 
 def test_apps_accept_a_bot_id_across_the_override_maps(tmp_path: Path):
@@ -549,20 +535,22 @@ def test_apps_accept_a_bot_id_across_the_override_maps(tmp_path: Path):
         response = client.patch(
             "/api/settings/apps",
             json={
-                "agentHarnesses": {"chat.bot": "codex"},
-                "agentModels": {"chat.bot": "openai/gpt-5.5"},
-                "agentBillings": {"chat.bot": "api_key"},
+                "instructionHarnesses": {"chat.bot": "codex"},
+                "instructionModels": {"chat.bot": "openai/gpt-5.5"},
+                "instructionBillings": {"chat.bot": "api_key"},
             },
         )
         assert response.status_code == 200
-        agents = {agent["name"]: agent for agent in _chat_app(client)["instructions"]}
+        apps = client.get("/api/settings/apps").json()["apps"]
+        chat = next(app for app in apps if app["name"] == "chat")
+        agents = {agent["name"]: agent for agent in chat["instructions"]}
 
     bot = agents["chat.bot"]
     assert (bot["harness"], bot["model"], bot["billing"]) == ("codex", "openai/gpt-5.5", "api_key")
     assert (bot["harnessSource"], bot["source"], bot["billingSource"]) == (
-        "agent",
-        "agent",
-        "agent",
+        "override",
+        "override",
+        "override",
     )
 
 
@@ -571,9 +559,9 @@ async def test_apps_reject_a_name_in_neither_registry_without_storing_it(tmp_pat
         response = client.patch(
             "/api/settings/apps",
             json={
-                "agentHarnesses": {"chat.ghost": "codex"},
-                "agentModels": {"chat.ghost": "openai/gpt-5.5"},
-                "agentBillings": {"chat.ghost": "api_key"},
+                "instructionHarnesses": {"chat.ghost": "codex"},
+                "instructionModels": {"chat.ghost": "openai/gpt-5.5"},
+                "instructionBillings": {"chat.ghost": "api_key"},
             },
         )
         stored = (
@@ -596,11 +584,12 @@ def test_apps_default_effort_and_per_agent_effort_override(tmp_path: Path):
 
         client.patch("/api/settings", json={"defaultEffort": "low"})
         client.patch(
-            "/api/settings/apps", json={"agentEfforts": {"software_factory.generate_plan": "high"}}
+            "/api/settings/apps",
+            json={"instructionEfforts": {"software_factory.generate_plan": "high"}},
         )
         agents = {agent["name"]: agent for agent in _software_factory_app(client)["instructions"]}
         assert agents["software_factory.generate_plan"]["effort"] == "high"
-        assert agents["software_factory.generate_plan"]["effortSource"] == "agent"
+        assert agents["software_factory.generate_plan"]["effortSource"] == "override"
         assert agents["software_factory.revise_contract"]["effort"] == "low"
         assert agents["software_factory.revise_contract"]["effortSource"] == "default"
 
@@ -609,10 +598,20 @@ def test_apps_reject_unknown_effort(tmp_path: Path):
     with settings_client(tmp_path) as client:
         response = client.patch(
             "/api/settings/apps",
-            json={"agentEfforts": {"software_factory.implement": "turbo"}},
+            json={"instructionEfforts": {"software_factory.implement": "turbo"}},
         )
     assert response.status_code == 422
-    assert "agentEfforts" in str(response.json()["detail"])
+    assert "instructionEfforts" in str(response.json()["detail"])
+
+
+def test_apps_reject_an_unknown_map(tmp_path: Path):
+    with settings_client(tmp_path) as client:
+        response = client.patch(
+            "/api/settings/apps", json={"agentHarnesses": {"software_factory.implement": "codex"}}
+        )
+        assert response.status_code == 422
+        agents = {agent["name"]: agent for agent in _software_factory_app(client)["instructions"]}
+    assert agents["software_factory.implement"]["harnessSource"] == "default"
 
 
 def test_apps_default_timeout_and_per_agent_timeout_override(tmp_path: Path):
@@ -623,11 +622,11 @@ def test_apps_default_timeout_and_per_agent_timeout_override(tmp_path: Path):
 
         client.patch("/api/settings", json={"defaultTimeout": 1200})
         client.patch(
-            "/api/settings/apps", json={"agentTimeouts": {"software_factory.implement": 3600}}
+            "/api/settings/apps", json={"instructionTimeouts": {"software_factory.implement": 3600}}
         )
         agents = {agent["name"]: agent for agent in _software_factory_app(client)["instructions"]}
         assert agents["software_factory.implement"]["timeout"] == 3600
-        assert agents["software_factory.implement"]["timeoutSource"] == "agent"
+        assert agents["software_factory.implement"]["timeoutSource"] == "override"
         assert agents["software_factory.review_plan"]["timeout"] == 1200
         assert agents["software_factory.review_plan"]["timeoutSource"] == "default"
 
@@ -636,7 +635,7 @@ def test_apps_reject_non_positive_timeout(tmp_path: Path):
     with settings_client(tmp_path) as client:
         response = client.patch(
             "/api/settings/apps",
-            json={"agentTimeouts": {"software_factory.implement": 0}},
+            json={"instructionTimeouts": {"software_factory.implement": 0}},
         )
     assert response.status_code == 422
 
@@ -665,14 +664,17 @@ def test_apps_clearing_an_override_reverts_to_the_operator_default(tmp_path: Pat
     with settings_client(tmp_path) as client:
         client.patch(
             "/api/settings/apps",
-            json={"agentModels": {"software_factory.generate_plan": "anthropic/claude-opus-4-7"}},
+            json={
+                "instructionModels": {"software_factory.generate_plan": "anthropic/claude-opus-4-7"}
+            },
         )
         agents = {agent["name"]: agent for agent in _software_factory_app(client)["instructions"]}
         assert agents["software_factory.generate_plan"]["model"] == "anthropic/claude-opus-4-7"
-        assert agents["software_factory.generate_plan"]["source"] == "agent"
+        assert agents["software_factory.generate_plan"]["source"] == "override"
 
         client.patch(
-            "/api/settings/apps", json={"agentModels": {"software_factory.generate_plan": None}}
+            "/api/settings/apps",
+            json={"instructionModels": {"software_factory.generate_plan": None}},
         )
         agents = {agent["name"]: agent for agent in _software_factory_app(client)["instructions"]}
         assert agents["software_factory.generate_plan"]["model"] == "anthropic/claude-opus-4-7"
@@ -681,31 +683,13 @@ def test_apps_clearing_an_override_reverts_to_the_operator_default(tmp_path: Pat
 
 def test_apps_reject_unknown_agent_model(tmp_path: Path):
     with settings_client(tmp_path) as client:
-        # No installed harness owns this namespace, so nothing could run it.
+        # No installed harness owns this namespace. Nothing can then run it.
         response = client.patch(
             "/api/settings/apps",
-            json={"agentModels": {"software_factory.implement": "llama-3-70b"}},
+            json={"instructionModels": {"software_factory.implement": "llama-3-70b"}},
         )
     assert response.status_code == 422
     assert "llama-3-70b" in response.json()["detail"]
-
-
-def test_apps_override_workflow_setting_persists(tmp_path: Path):
-    with settings_client(tmp_path) as client:
-        patch = client.patch(
-            "/api/settings/apps",
-            json={
-                "workflowSettings": {"software_factory.build": {"max_implementation_revisions": 8}}
-            },
-        )
-        assert patch.status_code == 200
-        fields = {
-            field["name"]: field
-            for field in _software_factory_app(client)["workflows"][0]["fields"]
-        }
-
-    assert fields["max_implementation_revisions"]["value"] == 8
-    assert fields["max_implementation_revisions"]["overridden"]
 
 
 def test_apps_plan_gate_override_persists(tmp_path: Path):
@@ -739,7 +723,10 @@ def test_apps_reject_an_unknown_workflow_setting(tmp_path: Path):
 
     assert response.status_code == 422
     detail = response.json()["detail"]
-    assert detail == "Unknown software_factory.build setting 'auto_dispatch_on_plan_approval'"
+    assert detail == (
+        "software_factory.build has no setting 'auto_dispatch_on_plan_approval'. Set a field "
+        "that its Settings declares."
+    )
 
 
 def test_apps_reject_out_of_range_workflow_setting(tmp_path: Path):
@@ -753,24 +740,22 @@ def test_apps_reject_out_of_range_workflow_setting(tmp_path: Path):
     assert response.status_code == 422
 
 
-def test_settings_lists_read_the_overrides_in_one_query(tmp_path: Path, monkeypatch):
+def test_app_settings_read_the_overrides_in_one_query(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(Summarize, "every", "0 9 * * *")
-    reads: dict[str, int] = {}
-    route = ""
+    statements: list[str] = []
 
-    def record(conn, cursor, statement, parameters, context, executemany):
+    def record(connection, cursor, statement, parameters, context, executemany):
         if "settings_overrides" in statement:
-            reads[route] = reads.get(route, 0) + 1
+            statements.append(statement)
 
     with settings_client(tmp_path) as client:
         event.listen(Engine, "before_cursor_execute", record)
         try:
-            for route in ("/api/settings/apps", "/api/instructions"):
-                assert client.get(route).status_code == 200
+            assert client.get("/api/settings/apps").status_code == 200
         finally:
             event.remove(Engine, "before_cursor_execute", record)
 
-    assert reads == {"/api/settings/apps": 1, "/api/instructions": 1}
+    assert len(statements) == 1
 
 
 async def test_a_member_reads_no_settings_of_an_app_they_cannot_use(tmp_path: Path, druks_db):
@@ -780,9 +765,8 @@ async def test_a_member_reads_no_settings_of_an_app_they_cannot_use(tmp_path: Pa
 
     with settings_client(tmp_path) as client:
         settings = client.get("/api/settings/apps").json()["apps"]
-        agents = client.get("/api/instructions").json()["apps"]
         choices = client.get("/api/settings/apps/choices?app=field_notes")
 
-    assert "field_notes" not in {app["name"] for app in settings + agents}
-    assert "software_factory" in {app["name"] for app in agents}
+    assert "field_notes" not in {app["name"] for app in settings}
+    assert "software_factory" in {app["name"] for app in settings}
     assert choices.status_code == 403

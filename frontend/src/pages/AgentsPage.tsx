@@ -3,12 +3,15 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useLocation } from 'wouter'
 
 import { api } from '../api/client'
-import type { Account, Agent, AgentInput } from '../api/types'
+import type { Account, Agent } from '../api/types'
 import { Button, Field, Select, Textarea, TextInput } from '../components/Control'
 import { Page } from '../components/Page'
 import { buildCatalog, knownProviders } from '../components/settings'
 import { ModelChooser, Switch } from '../components/SettingsPanes'
 import '../agents.css'
+
+// Slack shows only these types as a reply's icon.
+const PICTURE_TYPES = ['image/png', 'image/jpeg', 'image/gif']
 
 export function AgentsPage({ account }: { account: Account }) {
   const [, navigate] = useLocation()
@@ -32,7 +35,7 @@ export function AgentsPage({ account }: { account: Account }) {
     enabled: isAdmin,
     retry: false,
   })
-  const [draft, setDraft] = useState<AgentInput | null>(null)
+  const [draft, setDraft] = useState<Omit<Agent, 'id'> | null>(null)
   const [editingAgentId, setEditingAgentId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -76,7 +79,7 @@ export function AgentsPage({ account }: { account: Account }) {
       isPrivate: true,
       ownerId: account.id,
       channelId: null,
-      pictureUrl: null,
+      picture: null,
     })
     setEditingAgentId(null)
     setError(null)
@@ -100,13 +103,35 @@ export function AgentsPage({ account }: { account: Account }) {
     )
   }
 
-  async function saveAgent(agent: AgentInput) {
+  async function uploadPicture(file: File) {
+    if (!PICTURE_TYPES.includes(file.type)) {
+      setError(`${file.name} is not a png, jpg or gif image. Choose one of these types.`)
+      return
+    }
     setBusy(true)
     setError(null)
     try {
-      const { ownerId, channelId, pictureUrl, ...input } = agent
+      const picture = await api.upload('core', file)
+      setDraft((current) => (current ? { ...current, picture } : current))
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function saveAgent(agent: Omit<Agent, 'id'>) {
+    setBusy(true)
+    setError(null)
+    try {
+      const { ownerId, channelId, picture, ...input } = agent
       if (editingAgentId)
-        await api.updateAgent(editingAgentId, { ...input, ownerId, channelId, pictureUrl })
+        await api.updateAgent(editingAgentId, {
+          ...input,
+          ownerId,
+          channelId,
+          picture: picture?.id ?? null,
+        })
       else await api.createAgent(input)
       await queryClient.invalidateQueries({ queryKey: ['agents'] })
       setDraft(null)
@@ -300,11 +325,23 @@ export function AgentsPage({ account }: { account: Account }) {
             )}
           </Field>
           {editingAgentId && (
-            <Field label="Picture URL" help="A public link to an image. Slack shows it on the agent's replies.">
+            <Field label="Picture" help="A png, jpg or gif image. Slack shows it on the agent's replies.">
+              {draft.picture && (
+                <div className="agent-picture">
+                  <img src={draft.picture.url} alt={`Picture of ${draft.name}`} />
+                  <Button onClick={() => setDraft({ ...draft, picture: null })} disabled={busy}>
+                    Remove picture
+                  </Button>
+                </div>
+              )}
               <TextInput
-                aria-label="Picture URL"
-                value={draft.pictureUrl ?? ''}
-                onChange={(event) => setDraft({ ...draft, pictureUrl: event.target.value || null })}
+                // A new identity drops the file the browser still holds, so the same file
+                // can be picked again after Remove picture.
+                key={draft.picture?.id ?? 'none'}
+                aria-label="Picture"
+                type="file"
+                accept={PICTURE_TYPES.join(',')}
+                onChange={(event) => event.target.files?.[0] && uploadPicture(event.target.files[0])}
                 disabled={busy}
               />
             </Field>

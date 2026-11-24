@@ -11,8 +11,8 @@ from druks.mcp.gateway import exceptions as gate_errors
 from druks.mcp.gateway import schemas, services
 from druks.teams.dependencies import require_call_access, require_run_access
 
-# Docstrings here are the derived tool descriptions and operation_id is the
-# tool name — renaming one is a break, never a refactor side effect.
+# The docstrings here are the derived tool descriptions. operation_id is the tool name.
+# A rename of either one is a break, never a side effect of a refactor.
 router = APIRouter(prefix="/api", tags=["agent"])
 
 
@@ -32,10 +32,10 @@ async def get_gate(
     run: Annotated[str, Path(description="The parked run, from list_open_subjects.")],
 ) -> schemas.GateResponse:
     """A parked run's open gate: the ask, a bounded artifact chunk, and
-    parkedAt — echo parkedAt unchanged to answer_gate. ask.presentation is
-    in_app when answer_gate takes this gate. An external ask is answered by a
-    person at ask.url and ask.label says what it waits for: do not call
-    answer_gate on it, report where it is answered instead."""
+    parkedAt. Echo parkedAt unchanged to answer_gate. ask.presentation is
+    in_app when answer_gate takes this gate. A person answers an external ask at
+    ask.url. ask.label says what it waits for. Do not call answer_gate on it. Report
+    where a person answers it instead."""
     return await services.get_gate(session, run)
 
 
@@ -47,8 +47,13 @@ async def get_gate(
     response_model=schemas.GateAnswerResponse,
     response_model_by_alias=True,
     responses=agent_error_responses(
-        gate_errors.InvalidGateAnswer("unknown control 'merge'"),
-        gate_errors.GateAnswerNotAllowed("Only the number's admin can answer this run."),
+        gate_errors.InvalidGateAnswer(
+            "The ask offers no control 'merge'. Answer with a control that it offers."
+        ),
+        gate_errors.GateAnswerNotAllowed(
+            "Only the admin of the number that started this run can answer it. Ask that admin "
+            "to answer it."
+        ),
         RunNotFound("run-123"),
         gate_errors.GateRoundStale("run-123"),
         gate_errors.GateNotOpen("run-123"),
@@ -60,10 +65,10 @@ async def answer_gate(
     run: Annotated[str, Path(description="The parked run from get_gate.")],
     body: schemas.AnswerGateRequest,
 ) -> schemas.GateAnswerResponse:
-    """Answer the gate get_gate showed, resuming the run. parkedAt must echo
-    get_gate's value unchanged; a repeat answer to the same parkedAt reports
-    already_answered. Empty request_changes is valid only when get_gate's ask
-    has context: text that is not blank, or a list of one or more blocks."""
+    """Answer the gate that get_gate showed, and resume the run. parkedAt must echo
+    get_gate's value unchanged. A second answer to the same parkedAt reports
+    already_answered. An empty request_changes is valid only when get_gate's ask has
+    context: text that is not blank, or a list of one or more blocks."""
     return await services.answer_gate(
         session,
         run,
@@ -101,6 +106,6 @@ async def get_agent_call(
 async def get_usage(
     session: SessionDep, account: Account = Depends(current_account)
 ) -> schemas.AgentUsageResponse:
-    """The caller's harness quota snapshot and today's spend. Pure read — it
+    """The caller's harness quota snapshot and today's spend. It is a pure read and
     never triggers a scrape."""
     return await services.get_usage(session, account)

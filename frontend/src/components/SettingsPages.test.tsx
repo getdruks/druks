@@ -51,9 +51,9 @@ const coder: InstructionSetting = {
   label: 'coder',
   description: 'writes the change',
   harness: 'codex',
-  harnessSource: 'agent',
+  harnessSource: 'override',
   model: 'openai/gpt-5.5',
-  source: 'agent',
+  source: 'override',
   billing: 'subscription',
   billingSource: 'default',
   effort: 'high',
@@ -67,22 +67,15 @@ const critic: InstructionSetting = {
   label: 'critic',
   description: 'reviews the change',
   harness: 'opencode',
-  harnessSource: 'agent',
+  harnessSource: 'override',
   model: 'anthropic/claude-sonnet-5',
-  source: 'agent',
+  source: 'override',
   billing: 'api_key',
-  billingSource: 'agent',
+  billingSource: 'override',
   effort: 'high',
   effortSource: 'default',
   timeout: 1800,
   timeoutSource: 'default',
-}
-
-const resolvedAgents = {
-  apps: [
-    { name: 'software_factory', instructions: [coder] },
-    { name: 'review', instructions: [critic] },
-  ],
 }
 
 const providerCatalogs = [
@@ -176,6 +169,7 @@ const appSettings: AppsSettingsResponse = {
           secretSet: null,
           multiline: false,
           overridden: false,
+          managed: false,
         },
         {
           name: 'trigger_status',
@@ -191,6 +185,7 @@ const appSettings: AppsSettingsResponse = {
           secretSet: null,
           multiline: false,
           overridden: false,
+          managed: false,
         },
       ],
     },
@@ -201,7 +196,7 @@ const appSettings: AppsSettingsResponse = {
       builtin: false,
       bot: null,
       botAccess: null,
-      instructions: [],
+      instructions: [critic],
       workflows: [],
       settings: [
         {
@@ -218,6 +213,7 @@ const appSettings: AppsSettingsResponse = {
           secretSet: false,
           multiline: false,
           overridden: false,
+          managed: false,
         },
         {
           name: 'private_key',
@@ -233,6 +229,7 @@ const appSettings: AppsSettingsResponse = {
           secretSet: true,
           multiline: true,
           overridden: true,
+          managed: false,
         },
       ],
     },
@@ -260,6 +257,7 @@ const appSettings: AppsSettingsResponse = {
           secretSet: null,
           multiline: false,
           overridden: false,
+          managed: false,
         },
       ],
     },
@@ -313,10 +311,10 @@ function stubFetch(
               }
             }
             for (const agent of app.instructions) {
-              const effort = edits.agentEfforts?.[agent.name]
+              const effort = edits.instructionEfforts?.[agent.name]
               if (effort !== undefined) {
                 agent.effort = effort ?? savedSettings.defaultEffort
-                agent.effortSource = effort === null ? 'default' : 'agent'
+                agent.effortSource = effort === null ? 'default' : 'override'
               }
             }
           }
@@ -332,9 +330,6 @@ function stubFetch(
       }
       if (path === '/api/settings/harnesses') {
         return new Response(JSON.stringify(harnesses), { status: 200 })
-      }
-      if (path === '/api/instructions') {
-        return new Response(JSON.stringify(resolvedAgents), { status: 200 })
       }
       if (path === '/api/auth/accounts') {
         return new Response(JSON.stringify([{ id: 'acc-1', username: 'paulo@example.com', isDefault: true, role: 'admin' }]), {
@@ -660,6 +655,18 @@ describe('SettingsPages app fields', () => {
     expect(body.appSettings.review).toEqual({ private_key: pem })
   })
 
+  it('shows a secret that a file sets as managed and keeps its box disabled', async () => {
+    const settings = structuredClone(appSettings)
+    const appId = settings.apps.find((app) => app.name === 'review')!.settings[0]!
+    Object.assign(appId, { secretSet: true, managed: true })
+    stubFetch(false, {}, settings)
+    renderSettings('/apps/review/settings')
+
+    const appIdField = (await screen.findByText('Review App ID')).closest('.set-field')
+    expect(appIdField?.textContent).toContain('Managed by configuration')
+    expect(appIdField?.querySelector('input')?.disabled).toBe(true)
+  })
+
   it('shows live choices as a select that keeps the stored value', async () => {
     stubFetch()
     const choices = vi
@@ -768,6 +775,7 @@ describe('SettingsPages instructions', () => {
     expect(await screen.findByText('coder')).toBeTruthy()
     expect(screen.getByText('critic')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Open Software Factory' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Open Field Notes' })).toBeNull()
     expect(screen.getByText('API key ⚬')).toBeTruthy()
     expect(screen.getByText('openai/gpt-5.5')).toBeTruthy()
   })
@@ -1298,6 +1306,7 @@ describe('canonical app settings', () => {
             secretSet: null,
             multiline: false,
             overridden: false,
+            managed: false,
           },
         ],
       },
@@ -1377,7 +1386,7 @@ describe('canonical app settings', () => {
         ([path, init]) => String(path) === '/api/settings/apps' && init?.method === 'PATCH',
       )
     expect(JSON.parse(String(patch?.[1]?.body))).toEqual({
-      agentEfforts: { 'software_factory.coder': 'low', 'software_factory.bot': 'medium' },
+      instructionEfforts: { 'software_factory.coder': 'low', 'software_factory.bot': 'medium' },
       appSettings: { software_factory: { trigger_status: 'Agent Queue' } },
       workflowSettings: {},
     })
@@ -1462,7 +1471,7 @@ describe('settings resource read failures', () => {
       stubFetch(false)
       for (const method of [
         'getSettings', 'getAppSettings', 'providerCatalogs', 'providerSubscriptions',
-        'providerKeys', 'providers', 'harnesses', 'accounts', 'instructions',
+        'providerKeys', 'providers', 'harnesses', 'accounts',
       ] as const) {
         const request = vi.spyOn(api, method)
         if (state === 'failed') request.mockRejectedValue(new Error('Offline'))
@@ -1603,7 +1612,6 @@ describe('settings resource read failures', () => {
     'providers',
     'harnesses',
     'accounts',
-    'instructions',
   ] as const)(
     'shows a failed %s read on Instructions and retries without false choices',
     async (method) => {

@@ -15,6 +15,12 @@ class SettingsDeclarationError(DruksError):
     operator PATCH."""
 
 
+class SecretFileError(DruksError):
+    """A file ``apps.<name>.<field>`` in DRUKS_SECRETS_DIR names an app that is not
+    enabled, a field the app does not declare, or a field that is not a ``Secret``.
+    Raised at startup, so a misnamed file never goes unread."""
+
+
 class SubscriberDeclarationError(DruksError):
     """A subscriber's signature asks for a routing key — one a filter matches on but
     no body is handed. Raised at declaration, so it fails on import instead of

@@ -26,8 +26,8 @@ router = APIRouter(prefix="/services/twilio", dependencies=[Depends(current_sess
 async def require_number_access(
     request: Request, session: SessionDep, account: Account = Depends(current_session_account)
 ) -> None:
-    """The caller must be able to use the app that the phone number answers for. An
-    unknown number is the route's to answer."""
+    """The caller must be able to use the app of the phone number. The route answers
+    an unknown number."""
     connection = await Twilio.get_connection(session, request.path_params["number_id"])
     if connection:
         try:
@@ -35,7 +35,10 @@ async def require_number_access(
         except KeyError as error:
             raise ObjectNotFound("number", {"id": connection.id}) from error
         if not await account.can_use_app(app):
-            raise PermissionDenied(f"{account.username} cannot use the app {app.name}.")
+            raise PermissionDenied(
+                f"{account.username} cannot use the app {app.name}. Ask an admin to add "
+                f"{account.username} to a team that lists the app."
+            )
 
 
 @router.get(
@@ -73,9 +76,11 @@ async def link_number(
     try:
         bot = get_app(app).bot
     except KeyError as error:
-        raise HTTPException(404, f"Unknown app {app!r}") from error
+        raise HTTPException(404, f"Druks has no app {app!r}. Select an installed app.") from error
     if not bot or bot.access != BotAccess.PUBLIC:
-        raise HTTPException(404, f"App {app!r} declares no public Bot.")
+        raise HTTPException(
+            404, f"App {app!r} declares no public Bot. Select an app that declares a public Bot."
+        )
     webhook_base = get_settings().urls.webhook_base
     if not webhook_base:
         raise CallsLinkError(
@@ -94,11 +99,11 @@ async def link_number(
 )
 async def remove_number(session: SessionDep, number_id: str) -> None:
     if connection := await Twilio.get_connection(session, number_id):
-        # Removing is idempotent: a second delete finds the number removed.
+        # The delete is idempotent. A second delete finds the number removed.
         if connection.is_live:
             await Twilio.unlink(session, connection, "user")
         return
-    raise HTTPException(404, "Number not found.")
+    raise HTTPException(404, "The number does not exist. Choose one of the numbers of the app.")
 
 
 @router.get(
@@ -112,7 +117,7 @@ async def list_calls(session: SessionDep, number_id: str) -> list[Row]:
     number's app can read them."""
     if await Twilio.get_connection(session, number_id):
         return await CallsChannel.list_calls(session, number_id)
-    raise HTTPException(404, "Number not found.")
+    raise HTTPException(404, "The number does not exist. Choose one of the numbers of the app.")
 
 
 @router.get(
@@ -126,4 +131,4 @@ async def list_lines(session: SessionDep, number_id: str, call_id: str) -> list[
     call = await session.get(Conversation, call_id)
     if call and call.source == ConversationSource.CALL and call.connection_id == number_id:
         return await CallsChannel.list_lines(session, call_id)
-    raise HTTPException(404, "Call not found.")
+    raise HTTPException(404, "The call does not exist. Choose one of the calls of the number.")

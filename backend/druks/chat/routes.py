@@ -18,10 +18,12 @@ from druks.api.dependencies import SessionDep
 from druks.durable.reads import list_active_runs_for_conversation
 from druks.durable.schemas import ActiveRunResponse
 from druks.exceptions import PermissionDenied
+from druks.notifications.models import Notification
 from druks.redis import get_client
 from druks.sandbox.constants import SANDBOX_HOST_LEASE_SECONDS
 from druks.sandbox.exceptions import SandboxUploadError
 
+from .blocks import parse_blocks
 from .channels.whatsapp.exceptions import NumberNotOnWhatsAppError, WahaError
 from .enums import MessageState
 from .exceptions import (
@@ -39,8 +41,9 @@ from .schemas import (
     ConversationResponse,
     MessageResponse,
     ReminderResponse,
+    RunStatusResponse,
 )
-from .service import cancel_turn, deliver, publish, question_key, upload_file
+from .service import blocks_key, cancel_turn, deliver, publish, question_key, upload_file
 from .workflows import RunInstruction
 
 router = APIRouter()
@@ -56,8 +59,8 @@ router = APIRouter()
 async def list_conversations(
     session: SessionDep, account: Account = Depends(current_account)
 ) -> list[Conversation]:
-    """Your conversations, newest first. thread_id is set for a group, and title names
-    it. A number's admin also gets the direct chats of everyone who wrote to the number.
+    """Your conversations, newest first. A group has a thread_id. Its title names the
+    group. A number's admin also gets the direct chats of everyone who wrote to the number.
     A person has a direct chat only after they wrote."""
     return await Conversation.list_for_account(session, account)
 
@@ -120,6 +123,32 @@ async def list_active_runs(
     if not conversation:
         raise HTTPException(404, "Conversation not found.")
     return await list_active_runs_for_conversation(session, conversation.id)
+
+
+@router.get(
+    "/conversations/{conversation_id}/statuses",
+    response_model=list[RunStatusResponse],
+    response_model_by_alias=True,
+)
+async def list_statuses(
+    conversation_id: str, session: SessionDep, account: Account = Depends(current_session_account)
+) -> list[RunStatusResponse]:
+    conversation = await Conversation.get_for_account(session, conversation_id, account)
+    if not conversation:
+        raise HTTPException(404, "Conversation not found.")
+    statuses = []
+    for status, run in await Notification.list_statuses(session, conversation.id):
+        stack = await status.draw(run)
+        statuses.append(
+            RunStatusResponse(
+                id=status.id,
+                run=run.id,
+                app=run.workflow.app if run.workflow else "",
+                blocks=stack.blocks,
+                started_at=await run.get_first_started_at(),
+            )
+        )
+    return statuses
 
 
 @router.patch(
@@ -225,14 +254,12 @@ async def cancel(
 
 
 @router.get("/thread", operation_id="read_thread", tags=["agent", "bot"])
-async def read_thread(
-    session: SessionDep, account: Account = Depends(current_account)
-) -> list[dict]:
+async def read_thread(session: SessionDep) -> list[dict]:
     """Read the thread of the conversation this call comes from: its newest 200
-    messages, oldest first. Each one has ts, user_id, user_name, text, files (each
-    file's id, name, and content_type; chat_read_file reads one), is_from_you (you
-    wrote it), and is_from_user (the person you answer wrote it). A direct message has
-    no thread."""
+    messages, oldest first. Each one has ts, user_id, user_name, text, and files, with
+    each file's id, name, and content_type. It also has is_from_you (you wrote it) and
+    is_from_user (the person you answer wrote it). chat_read_file reads one of the
+    files. A direct message has no thread."""
     conversation_id = current_conversation_id.get()
     if not conversation_id:
         raise HTTPException(
@@ -250,12 +277,10 @@ async def read_thread(
 
 
 @router.get("/thread/files/{file_id}", operation_id="read_file", tags=["agent", "bot"])
-async def read_file(
-    session: SessionDep, file_id: str, account: Account = Depends(current_account)
-) -> dict:
+async def read_file(session: SessionDep, file_id: str) -> dict:
     """Read a file on the thread of the conversation this call comes from, by the id
-    chat_read_thread lists. The file lands in your workspace; the answer is its path,
-    name, and content_type. Open the path to read it."""
+    chat_read_thread lists. Druks puts the file in your workspace. The answer is its
+    path, name, and content_type. Open the path to read it."""
     conversation_id = current_conversation_id.get()
     if not conversation_id:
         raise HTTPException(
@@ -287,10 +312,9 @@ async def require_tag(
     is_required: Annotated[
         bool, Body(embed=True, description="True to require a tag, false to stop requiring one.")
     ],
-    account: Account = Depends(current_account),
 ) -> None:
     """Require a tag in the thread of the conversation this call comes from, or stop
-    requiring one. While a tag is required, the person's untagged replies in the thread
+    requiring one. While you require a tag, the person's untagged replies in the thread
     do not reach you. Their tagged messages always do."""
     conversation_id = current_conversation_id.get()
     if not conversation_id:
@@ -323,27 +347,26 @@ async def ask(
     fields: Annotated[
         str, Body(description="The fields of a form, as one Python list of field calls.")
     ] = "",
-    account: Account = Depends(current_account),
 ) -> None:
-    """Ask the person of the conversation this call comes from one question, with two to
-    four choices or with a form of fields. Give choices or fields, not both. Druks sends
-    the question after your reply, when your turn ends. The web chat and a channel with
-    buttons show a button for each choice. The web chat and a channel with inputs show an
-    input for each field and a Submit button. Elsewhere the choices or the fields are a
-    numbered list, and the person answers in their own words. In Slack, Druks checks a
-    form's answers against its fields. In the web chat, the browser checks that each
-    required field has an answer, and Druks does not check the answers again. Write the
+    """Ask one question of the person in the conversation that this call comes from. The
+    question has two to four choices, or a form of fields. Give choices or fields, not
+    both. Druks sends the question after your reply, when your turn ends. The web chat and
+    a channel with buttons show a button for each choice. The web chat and a channel with
+    inputs show an input for each field and a Submit button. Elsewhere the choices or the
+    fields are a numbered list. The person answers in their own words. In Slack, Druks
+    checks a form's answers against its fields. In the web chat, the browser checks that
+    each required field has an answer. Druks does not check the answers again. Write the
     fields as one Python list of TextField, TextAreaField, NumberField, SelectField,
     MultiSelectField, RadioField, and CheckboxField calls of druks.ui. Give each argument
     by its druks.ui name, except the label of an Option, as in [TextField(name="title",
     label="Title"), SelectField(name="where", label="Where", options=[Option("Staging",
     value="staging")])]. Druks reads the fields and runs no code. A form takes no
-    SecretField, UploadField, or MultiUploadField. Make this your last tool call, and write
-    any reply after it: the text before it stays your notes. Do not repeat the question,
-    its choices, or its fields in the reply. Then end your turn, and do not wait for the
-    answer. The person's choice, their answers with one line for each field, or what they
-    write instead, reaches you as their next message. A second call in the turn replaces
-    the question."""
+    SecretField, UploadField, or MultiUploadField. Make this your last tool call. Write any
+    reply after it. The text before it stays your notes. Do not repeat the question, its
+    choices, or its fields in the reply. Then end your turn. Do not wait for the answer.
+    The person's answer reaches you as their next message. It is their choice,
+    their answers with one line for each field, or what they write instead. A second call
+    in the turn replaces the question."""
     if bool(choices) == bool(fields):
         raise HTTPException(422, "Give choices or fields. Give only one of them.")
     if len(choices) == 1:
@@ -370,6 +393,47 @@ async def ask(
     )
 
 
+@router.put("/blocks", operation_id="show", status_code=204, tags=["agent"])
+async def show(
+    session: SessionDep,
+    blocks: Annotated[
+        str,
+        Body(embed=True, description="The blocks, as one Python list of druks.ui block calls."),
+    ],
+) -> None:
+    """Show druks.ui blocks, such as a chart, an image, a table, or a grid of facts, in your
+    reply. The reply goes to the person in the conversation that this call comes from.
+    Druks sends the blocks after your reply's text, in the same message, when your turn
+    ends. Write the blocks as one Python list of druks.ui block calls, as app pages write
+    them, such as [Chart(kind="bar", title="Builds this week", categories=["Mon", "Tue"],
+    series=[ChartSeries(label="Builds", points=[4, 7])])]. Call each block by its bare name
+    or with the ui. prefix. Call each part of a block, such as Fact, Metric, TableRow, or
+    StatusValue, the same way. Give each argument by its druks.ui name. Where druks.ui
+    takes an argument without its name, you can leave the name out, as in
+    Fact("Owner", "Ana"). A fact, a metric, or a table cell takes a string or a number as
+    its value. Druks reads the blocks and runs no code. A reply runs no operation and does
+    not change after Druks sends it. It takes no Form, Action, GateControls, or
+    SubjectStatus, and no subject=, page=, or follows=. When Druks refuses the blocks, the
+    answer says why. Correct them and call again. A second call in the turn replaces the
+    blocks. Slack and the web chat draw the blocks. The other channels show their text
+    form. With chat_ask in the same turn, the person gets one message: your text, the
+    blocks, then the question. Call it before you write your reply. Write the reply after
+    your last tool call. The text before it stays your notes. Do not repeat the blocks in
+    the reply."""
+    conversation_id = current_conversation_id.get()
+    if not conversation_id:
+        raise HTTPException(409, "This tool shows blocks in a conversation. Call it from one.")
+    conversation = await session.get(Conversation, conversation_id)
+    message = await conversation.get_unanswered_message(session)
+    if not message or message.state != MessageState.DELIVERED:
+        raise HTTPException(409, "No turn runs in this conversation. Call it during a turn.")
+    await get_client().set(
+        blocks_key(conversation.id, message.id),
+        json.dumps(parse_blocks(blocks)),
+        ex=SANDBOX_HOST_LEASE_SECONDS,
+    )
+
+
 @router.post("/instructions", operation_id="run_instruction", status_code=202, tags=["agent"])
 async def run_instruction(
     instruction: Annotated[
@@ -379,10 +443,10 @@ async def run_instruction(
     """Start a run that does a task in a fresh box, and return its run id. As a saved
     agent, you do the task there with your instructions, your model, and your skills. The
     run reports the task and its answer to this chat. Use it to schedule a task that none
-    of your other tools does, or when the person asks for a task to run on its own. Do
-    other work yourself."""
+    of your other tools does. Use it also when the person asks for a task to run on its
+    own. Do other work yourself."""
     if not current_conversation_id.get():
-        raise HTTPException(422, "Start a task from a chat. This call comes from no chat.")
+        raise HTTPException(422, "This call comes from no chat. Start a task from a chat.")
     return await RunInstruction.start(subject=None, instruction=instruction)
 
 
@@ -398,9 +462,8 @@ async def start_conversation(
     session: SessionDep,
     phone: Annotated[str, Body(description="The person's phone number, with its country code.")],
     name: Annotated[str, Body(description="The person's name, as you call them.")],
-    account: Account = Depends(current_account),
 ) -> Conversation:
-    """Start a chat with a person on the number this call comes from, so your reminders
+    """Start a chat with a person on the number this call comes from. Then your reminders
     reach them. Druks sends nothing until a reminder does."""
     conversation_id = current_conversation_id.get()
     if not conversation_id:
@@ -453,13 +516,13 @@ async def create_reminder(
 ) -> Reminder:
     """Send a message in a conversation once, at send_at or delay_seconds from now, or
     again and again on a cron. Give exactly one of the three. Druks sends the body word
-    for word at its first check after the reminder is due, and it checks every minute.
-    Local time is the installation timezone. The answer's nextSendAt is local: tell the
-    person that time as it is. When Druks refuses a time, ask the person rather than
-    pick another, and never make a reminder to test the time."""
+    for word at its first check after the reminder is due. It checks every minute. Local
+    time is the installation timezone. The answer's nextSendAt is local. Tell the person
+    that time as it is. When Druks refuses a time, ask the person rather than pick
+    another. Never make a reminder to test the time."""
     conversation_id = conversation_id or current_conversation_id.get()
     if not conversation_id:
-        raise HTTPException(422, "Give conversation_id: this call comes from no chat.")
+        raise HTTPException(422, "This call comes from no chat. Give conversation_id.")
     conversation = await Conversation.get_for_account(session, conversation_id, account)
     if not conversation:
         raise HTTPException(404, "Conversation not found. Choose one from chat_list_conversations.")

@@ -8,7 +8,7 @@
 # connects to each sandbox at the address the provider returns.
 
 x-druks: &druks
-  image: ghcr.io/czpython/druks:${DRUKS_TAG:-latest}
+  image: ghcr.io/getdruks/druks:${DRUKS_TAG:-latest}
   # Run as the deploy user, not root. This user owns the data and harness-config
   # roots. install.sh writes DRUKS_UID/DRUKS_GID into .env from `id -u` / `id -g`.
   user: "${DRUKS_UID:?set DRUKS_UID in .env — run install.sh}:${DRUKS_GID:?set DRUKS_GID in .env — run install.sh}"
@@ -205,6 +205,10 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     network_mode: host
+    # On the host network the image default listens on every host address,
+    # which a tailnet peer or a sandbox behind the secrets proxy can reach.
+    # Every service connects on 127.0.0.1.
+    command: ["postgres", "-c", "listen_addresses=127.0.0.1"]
     environment:
       POSTGRES_USER: ${DRUKS_POSTGRES_USER:-druks}
       POSTGRES_PASSWORD: ${DRUKS_POSTGRES_PASSWORD}

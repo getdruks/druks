@@ -9,21 +9,25 @@ import druks.chat.channels.slack.subscribers  # noqa: F401 — the webhook publi
 import httpx
 import pytest
 from conftest import bind_ambient_session, install_service
+from druks import ui
 from druks.accounts.models import Account, PersonalAccessToken
+from druks.agents.constants import PRIVATE_AGENT_MESSAGE
 from druks.agents.models import Agent
 from druks.api.dependencies import request_session
 from druks.chat import service
+from druks.chat.bridge import Bridge
 from druks.chat.channels.slack.channel import SlackChannel
 from druks.chat.channels.slack.constants import LINK_KEY
 from druks.chat.constants import CONVERSATION_HEADER
 from druks.chat.dependencies import current_conversation
 from druks.chat.enums import ConversationSource, MessageRole
 from druks.chat.exceptions import ChannelHasNoThreadsError
-from druks.chat.models import Automation, Conversation
+from druks.chat.models import Automation, Conversation, Message
 from druks.chat.routes import read_file, read_thread, require_tag
 from druks.core.apis.slack import SlackClient
 from druks.core.services import Slack
 from druks.core.webhooks.slack import SlackEvents, SlackInteractivity
+from druks.files import File
 from druks.mcp.inbound import get_druks_mcp_server
 from druks.models import Base
 from druks.notifications.models import Notification
@@ -32,7 +36,7 @@ from druks.sandbox.exceptions import SandboxUploadError
 from druks.sandbox.layout import get_work_root
 from druks.secrets.datastructures import Audience
 from druks.secrets.models import VaultSecret
-from druks.settings import configure_settings
+from druks.settings import configure_settings, get_settings
 from druks.testing import asgi_client, configure_app_for_test, make_settings
 from druks.webhooks.router import match_webhook
 from fastapi import Depends, FastAPI
@@ -92,12 +96,12 @@ def slack(monkeypatch):
 
     async def api_call(client, api_method, *, params=None, json=None, **request):
         calls.append((api_method, json or params or {}))
-        return {
-            "ok": True,
-            "channel": "D1",
-            "ts": f"{len(calls)}.0",
-            "bot": {"id": "B500", "name": "Support form"},
-        }
+        return Answer(
+            ok=True,
+            channel="D1",
+            ts=f"{len(calls)}.0",
+            bot={"id": "B500", "name": "Support form"},
+        )
 
     monkeypatch.setattr(SlackClient, "api_call", api_call)
     return calls
@@ -248,16 +252,7 @@ async def test_a_forwarded_link_links_only_the_person_who_opens_it(
 
 async def test_a_reply_posts_markdown_in_pieces_and_records_its_slack_id(card, druks_db, slack):
     ana = await Account.get_or_create(druks_db, "ana@example.com")
-    conversation = await Conversation.get_or_create_for_user(
-        druks_db,
-        card,
-        ana.id,
-        source=ConversationSource.SLACK,
-        user_id=ANA,
-        user_name="",
-        user_phone="",
-        thread_id="",
-    )
+    conversation = await thread_conversation(druks_db, card, ana, thread_id="")
     reply = await conversation.create_message(druks_db, "a" * 12_001, role=MessageRole.ASSISTANT)
 
     await SlackChannel.send_reply(druks_db, conversation, reply)
@@ -269,27 +264,33 @@ async def test_a_reply_posts_markdown_in_pieces_and_records_its_slack_id(card, d
     assert reply.source_id == "D1:1.0"
 
 
-async def reply_in_slack(session, card, account, agent):
-    conversation = await Conversation.get_or_create_for_user(
-        session,
-        card,
-        account.id,
-        source=ConversationSource.SLACK,
-        user_id=ANA,
-        user_name="",
-        user_phone="",
-        thread_id="C1:1.0",
-        agent_id=agent.id if agent else None,
+async def reply_in_slack(session, card, account, agent_id, *, blocks=None):
+    conversation = await thread_conversation(
+        session, card, account, thread_id="C1:1.0", agent_id=agent_id
     )
-    reply = await conversation.create_message(session, "Done", role=MessageRole.ASSISTANT)
+    reply = await conversation.create_message(
+        session, "Done", role=MessageRole.ASSISTANT, blocks=blocks
+    )
     await SlackChannel.send_reply(session, conversation, reply)
 
 
+FACTS = [
+    ui.Facts([ui.Fact("Owner", "Ana"), ui.Fact("Builds", 12)], title="Project").model_dump(
+        mode="json", by_alias=True
+    )
+]
+
+
+@pytest.mark.usefixtures("tmp_data_dir")
+@pytest.mark.parametrize("blocks", [None, FACTS], ids=["text", "blocks"])
 async def test_an_agents_reply_shows_its_name_and_picture_and_the_bots_shows_neither(
-    card_with_names, druks_db, slack
+    card_with_names, druks_db, slack, blocks
 ):
     ana = await Account.get_or_create(druks_db, "ana@example.com")
     agent = await create_agent(druks_db, ana, "Security engineer")
+    picture = await File.create(
+        name="face.png", content_type="image/png", content=b"png", app="core", uploaded_by=ana.id
+    )
     await agent.replace(
         druks_db,
         editor=ana,
@@ -302,16 +303,48 @@ async def test_an_agents_reply_shows_its_name_and_picture_and_the_bots_shows_nei
         model=agent.model,
         is_private=agent.is_private,
         channel_id=None,
-        picture_url="https://example.com/security.png",
+        picture=picture.id,
     )
 
-    await reply_in_slack(druks_db, card_with_names, ana, agent)
-    await reply_in_slack(druks_db, card_with_names, ana, None)
+    await reply_in_slack(druks_db, card_with_names, ana, agent.id, blocks=blocks)
+    await reply_in_slack(druks_db, card_with_names, ana, None, blocks=blocks)
 
     assert [(sent.get("username"), sent.get("icon_url")) for _, sent in slack] == [
-        ("Security engineer", "https://example.com/security.png"),
+        ("Security engineer", f"{get_settings().urls.webhook_base}/media/{picture.id}"),
         (None, None),
     ]
+
+
+@pytest.mark.parametrize(
+    ("body", "text"),
+    [("Let me look.Here are the facts.", ["Here are the facts."]), ("Let me look.", [])],
+    ids=["text-then-blocks", "blocks-only"],
+)
+async def test_a_reply_with_blocks_goes_out_as_one_message_of_its_text_and_slack_s_blocks(
+    card, druks_db, slack, monkeypatch, body, text
+):
+    ana = await Account.get_or_create(druks_db, "ana@example.com")
+    conversation = await thread_conversation(druks_db, card, ana, thread_id="C1:1.0")
+    message = await conversation.create_message(druks_db, "Show me the project")
+    assert await message.mark_delivered(druks_db)
+    await druks_db.commit()
+    await get_client().set(service.blocks_key(conversation.id, message.id), json.dumps(FACTS))
+    tool_calls = [{"toolCallId": "show-1", "textOffset": 12}]
+    monkeypatch.setattr(Bridge, "reply", AsyncMock(return_value=(body, tool_calls)))
+    monkeypatch.setattr(Conversation, "is_held", AsyncMock(return_value=False))
+
+    await service.finish_turn(
+        druks_db, conversation, message, Bridge(None), {"status": "replied", "archivePath": ""}
+    )
+
+    [(method, sent)] = slack
+    assert (method, sent["channel"], sent["thread_ts"]) == ("chat.postMessage", "C1", "1.0")
+    assert [block["type"] for block in sent["blocks"]] == [*("markdown" for _ in text), "section"]
+    assert sent["text"] == "\n\n".join([*text, "### Project\n\n- **Owner**: Ana\n- **Builds**: 12"])
+    reply = await Message.get_for_source_id(druks_db, "D1:1.0")
+    assert (reply.reply_to, reply.blocks) == (message.id, FACTS)
+    # The blocks answer the person, so Druks does not ask the agent again.
+    assert not await conversation.get_unanswered_message(druks_db)
 
 
 async def test_an_agents_reply_comes_from_the_app_until_the_workspace_approves_names(
@@ -320,7 +353,7 @@ async def test_an_agents_reply_comes_from_the_app_until_the_workspace_approves_n
     ana = await Account.get_or_create(druks_db, "ana@example.com")
     agent = await create_agent(druks_db, ana, "Security engineer")
 
-    await reply_in_slack(druks_db, card, ana, agent)
+    await reply_in_slack(druks_db, card, ana, agent.id)
 
     assert [("username" in sent, "icon_url" in sent) for _, sent in slack] == [(False, False)]
 
@@ -329,16 +362,7 @@ async def test_delivery_reacts_with_eyes_to_each_message_from_slack(
     card, druks_db, monkeypatch, caplog
 ):
     ana = await Account.get_or_create(druks_db, "ana@example.com")
-    conversation = await Conversation.get_or_create_for_user(
-        druks_db,
-        card,
-        ana.id,
-        source=ConversationSource.SLACK,
-        user_id=ANA,
-        user_name="",
-        user_phone="",
-        thread_id="",
-    )
+    conversation = await thread_conversation(druks_db, card, ana, thread_id="")
     # A Slack message with two files is two Druks messages.
     messages = [
         await conversation.create_message(druks_db, "Hi", source_id=source_id)
@@ -459,7 +483,12 @@ def room_event(user=ANA, text=f"<@{BOT}> read my runs", ts="10.0", channel="C1",
 
 
 class Answer(dict):
-    """One page of a Slack answer, which iterates over itself as the SDK's does."""
+    """One page of a Slack answer, which iterates over itself and holds its data as the
+    SDK's does."""
+
+    @property
+    def data(self) -> dict:
+        return self
 
     def __aiter__(self):
         return self.pages()
@@ -485,7 +514,7 @@ def thread_reads(monkeypatch, messages):
     return reads
 
 
-async def thread_conversation(session, card, account, *, thread_id="C1:10.0"):
+async def thread_conversation(session, card, account, *, thread_id="C1:10.0", agent_id=None):
     return await Conversation.get_or_create_for_user(
         session,
         card,
@@ -495,6 +524,7 @@ async def thread_conversation(session, card, account, *, thread_id="C1:10.0"):
         user_name="",
         user_phone="",
         thread_id=thread_id,
+        agent_id=agent_id,
     )
 
 
@@ -579,7 +609,7 @@ async def bind_channel(session, agent, channel_id):
         model=agent.model,
         is_private=agent.is_private,
         channel_id=channel_id,
-        picture_url=agent.picture_url,
+        picture=None,
     )
     await session.commit()
 
@@ -765,7 +795,7 @@ async def test_a_tag_naming_someone_elses_private_agent_is_refused_in_the_thread
     delivery.assert_not_awaited()
     [(method, sent)] = slack
     assert (method, sent["channel"], sent["thread_ts"]) == ("chat.postMessage", "C1", "10.0")
-    assert "Only the agent's owner can talk to a private agent." in json.dumps(sent)
+    assert PRIVATE_AGENT_MESSAGE in json.dumps(sent)
 
 
 async def test_an_unlinked_person_who_tags_the_bot_gets_the_link_by_direct_message(
@@ -898,7 +928,7 @@ async def test_the_bot_welcomes_a_room_when_it_joins_and_ignores_other_joins(car
 async def test_the_agent_reads_its_thread_and_knows_who_wrote_what(card, druks_db, monkeypatch):
     """Ben's agent answers in the same thread as the same bot: only the replies this
     conversation recorded are the agent's own. A reply that asked posted as its
-    question's message. A file on a message is listed by id."""
+    question's message. The tool lists each file on a message by its id."""
     ana = await Account.get_or_create(druks_db, "ana@example.com")
     reads = thread_reads(
         monkeypatch,

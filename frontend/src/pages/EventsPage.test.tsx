@@ -284,7 +284,7 @@ it('shows past request facts and preserves filters and selection after returning
 it('shows a recorded block context through the app pages, with no status it never recorded', async () => {
   vi.mocked(api.listApps).mockResolvedValue([{ ...app, pages: [
     { name: 'note', label: 'note', path: '/field_notes/notes/{note_id}', parent: '', order: 0, subjectType: 'note' },
-  ] }])
+  ], operations: [{ id: 'archive_note', method: 'POST', path: '/api/field_notes/notes/{note_id}/archive' }] }])
   const note = { block: 'link' as const, label: '', page: 'note', arguments: { note_id: '7' }, url: '', subject: null }
   history.mockResolvedValue({ items: [{ ...result, topic: 'workflow.parked',
     payload: { ...result.payload, artifact_id: null, gate: 'review',
@@ -296,6 +296,8 @@ it('shows a recorded block context through the app pages, with no status it neve
         ] },
         { block: 'table', title: 'Readings', columns: [{ label: 'Hour', align: 'start' }], empty: null, select: '', actions: [],
           rows: [{ cells: [{ value: 'number', number: 3, unit: 'bar', tone: 'neutral' }], detail: '', key: '' }] },
+        { block: 'action', label: 'Archive', operation: 'archive_note', arguments: { note_id: 7 }, fields: [],
+          tone: 'default', confirm: '', refresh: 'page', link: null },
       ],
     } } }], cursor: '10:20:10', nextCursor: null })
   mount()
@@ -306,6 +308,7 @@ it('shows a recorded block context through the app pages, with no status it neve
   expect(within(request).getByText('Work')).toBeTruthy()
   expect(within(request).queryByText(/needs you|summarizing|idle/)).toBeNull()
   expect(within(within(request).getByRole('table', { name: 'Readings' })).getByText('bar')).toBeTruthy()
+  expect(within(request).getByRole('button', { name: 'Archive' }).closest('fieldset')?.disabled).toBe(true)
 })
 
 it('retries the exact saved artifact and replaces it on another selection', async () => {

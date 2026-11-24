@@ -152,8 +152,7 @@ async def retry_run(
         str, Path(alias="run", description="The failed run, from list_open_subjects.")
     ],
 ) -> RetryRunResponse:
-    """Rerun a failed run from the step that killed it, reusing every
-    completed step."""
+    """Rerun a failed run from the step where it stopped, reusing the steps before it."""
     run = await session.get(Run, run_id)
     if not run:
         raise RunNotFound(run_id)

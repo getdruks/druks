@@ -1,11 +1,11 @@
 /** Shared API response shapes. App-specific types stay with their app. */
 
 
-// Served by the platform layer (durable/schemas.py) for every app. An
-// app keys its board/detail on its own subject summary; SubjectRow and
-// SubjectResponse are generic over that summary (a WorkItemSummary for build).
+// durable/schemas.py serves these shapes for every app. An app keys its board and
+// its detail page on its own subject summary. SubjectRow and SubjectResponse take
+// that summary as a type parameter.
 
-// The platform's canonical lifecycle states, each one a run's own.
+// The lifecycle states of a run.
 export type RunState =
   | 'scheduled'
   | 'running'
@@ -13,7 +13,7 @@ export type RunState =
   | 'finished'
   | 'failed'
   | 'cancelled'
-  // The run's DBOS workflow row is gone; it will never start.
+  // The DBOS workflow row of the run is gone. The run never starts.
   | 'orphaned'
 
 export interface DashboardRun {
@@ -69,30 +69,31 @@ export interface DashboardSchedules {
   rows: DashboardSchedule[]
 }
 
-// The header the platform shows a subject under; ``id`` keys its status,
-// timeline, and detail URL, and ``key`` is its name.
+// The header that the platform shows above a subject. ``id`` keys its status, its
+// timeline, and its detail URL. ``key`` is its name.
 export interface SubjectSummary {
   id: string
   key: string
 }
 
 export interface SubjectStatus {
-  // Null when no run drives the subject: druks has not run it.
+  // Null when no run drives the subject. Druks has not run it.
   state: RunState | null
   // The driving run's id.
   run: string | null
-  // Facts the app renders its lane copy from; the backend ships no prose.
-  // The driving run's kind and, while running, its latest agent call's agent.
+  // The app writes the words of its board lane from these facts. The backend sends
+  // no prose. ``kind`` is the kind of the driving run. While the run runs, ``agent``
+  // is the agent of its latest agent call.
   kind: string | null
   agent: string | null
-  // A parked run's gate identity; the app maps it to its own words.
+  // The gate of a parked run. The app maps it to its own words.
   gate: string | null
-  // The failed driving run's stop reason, and its machine classification
-  // ("gate_timeout" = unanswered gate, not a crash).
+  // ``failure`` tells why the failed driving run stopped. ``reason`` is the class of
+  // the stop for code. "gate_timeout" is an unanswered gate, not a crash.
   failure: string | null
   reason: string | null
-  // When druks last picked this subject up, and whose work it is — what a subject
-  // with a row of its own would keep in its own columns.
+  // When Druks last took up this subject, and whose work it is. A subject with a row
+  // of its own would keep these facts in its columns.
   triggeredAt: string | null
   accountUsername: string | null
 }
@@ -108,7 +109,7 @@ export interface TokenUsage {
 
 export interface AgentCallSummary {
   id: string
-  // Which agent made this call ("scope", "implement"); label is its display name.
+  // The agent that made this call, such as "summarize". ``label`` is its display name.
   agent: string
   label: string
   /** The subscription owner. Null for installation API keys. */
@@ -121,7 +122,7 @@ export interface AgentCallSummary {
   tokens?: TokenUsage | null
 }
 
-// A question the ask surfaces for the operator to answer with one offered option.
+// A question in the ask. The operator answers it with one of its options.
 export interface AskQuestion {
   id: string
   prompt: string
@@ -135,9 +136,9 @@ export interface AskControl {
   note_required: boolean
 }
 
-// The ask a parked run declares (input_request, snake_case keys). presentation
-// drives how the operator answers: "in_app" renders the controls, questions, and
-// artifact right here; "external" points at the PR/ticket.
+// The ask that a parked run declares, as input_request with snake_case keys.
+// ``presentation`` sets where the operator answers. With "in_app", the shell shows the
+// controls, the questions, and the artifact. With "external", it links to ``url``.
 export interface InputRequest {
   presentation: 'in_app' | 'external'
   label?: string
@@ -145,13 +146,13 @@ export interface InputRequest {
   controls?: AskControl[]
   questions?: AskQuestion[]
   artifact_id?: string | null
-  /** Workflow-declared prose or blocks, rendered beside the reviewed document. */
+  /** The prose or blocks of the workflow. The shell shows them beside the document. */
   context?: string | Block[]
   /** The reply fields the gate declares. */
   reply_fields?: string[]
 }
 
-// A call's renderable output, fetched to render inside an in-app review.
+// The output of a call that the shell shows inside an in-app review.
 export interface ArtifactContent {
   kind: string
   title: string
@@ -161,12 +162,13 @@ export interface ArtifactContent {
 // One run on the subject's timeline, with its agent calls in execution order.
 export interface RunSummary {
   id: string
-  // The app that declares the run's kind; it serves the run's transcripts.
+  // The app that declares the kind of the run. It serves the transcripts of the run.
   app: string
-  // The durable kind ("field_notes.summarize"); label is its backend display name ("Summarize").
+  // The durable kind, such as "field_notes.summarize". ``label`` is its display name
+  // from the backend, such as "Summarize".
   kind: string
   label: string
-  // The run this one was retried from; null for a run that was started.
+  // The run that this one retries. Null for a first run.
   retryFrom: string | null
   state: RunState
   failure?: string | null
@@ -179,27 +181,26 @@ export interface RunSummary {
   agentCalls: AgentCallSummary[]
 }
 
-// One run with its app and work item; subject is null for a run about no work item.
+// One run with its app and its subject. ``subject`` is null for a run about no subject.
 export interface RunDetail {
   subject: { type: string; id: string } | null
   run: RunSummary
 }
 
-// One row of the active board: the domain summary + the generic lifecycle status.
+// One row of the active board. It holds the subject summary and the lifecycle status.
 export interface SubjectRow<S extends SubjectSummary = SubjectSummary> {
   summary: S
   status: SubjectStatus
 }
 
-// A subject's full read view: domain summary, status, the platform timeline
-// (the subject's runs, oldest first, each with its agent calls), and the
-// driving run's live phase while it starts or waits.
+// The full read of one subject. It holds its summary, its status, and its timeline.
+// The timeline lists its runs, oldest first, each with its agent calls.
 export interface SubjectResponse<S extends SubjectSummary = SubjectSummary> {
   summary: S
   status: SubjectStatus
   timeline: RunSummary[]
-  // The driving run's live phase while it starts or waits. The shell supplies
-  // the words. A timed phase carries the time when it ends separately.
+  // The live phase of the driving run while it starts or waits. The shell writes the
+  // words. ``phaseEndsAt`` holds the end of a timed phase.
   phase?: string | null
   phaseEndsAt?: string | null
 }
@@ -210,18 +211,17 @@ export interface ArtifactFile {
   updatedAt: string
 }
 
-// A call's renderable output (a plan's markdown), rendered by kind — distinct
-// from the raw files. name is its file in the call dir, downloadable from the
-// transcript files route like any other.
+// The output of a call that the shell shows by its kind, apart from the raw files.
+// ``name`` is its file in the call folder. The transcript files route downloads it
+// like any other file.
 export interface ArtifactDescriptor {
   kind: string
   title: string
   name: string
 }
 
-// A call's on-disk artifacts by role. Each carries its file name; the client
-// composes the download URL from the transcript route it fetched this listing
-// from (subjectApi.transcriptFile).
+// The files of a call on disk, by role. Each one carries its file name. The client
+// builds the download URL with subjectApi.transcriptFile.
 export interface AgentCallFiles {
   prompt?: ArtifactFile | null
   stdout?: ArtifactFile | null
@@ -240,10 +240,10 @@ export interface TranscriptChunk {
   text: string
 }
 
-// One installed app, from the backend registry — what the shell derives
-// nav and generic pages from. ``hasFrontend`` means the package ships its own
-// built UI (an ESM module the shell mounts, served under /app/<name>);
-// ``navigation`` is the subnav tabs the app declares, as (url, name) pairs.
+// One installed app, from the backend registry. The shell builds its navigation and
+// generic pages from it. ``hasFrontend`` tells that the package ships its own built
+// UI, an ESM module that the shell mounts from /app/<name>. ``navigation`` holds the
+// subnav tabs that the app declares, as (url, name) pairs.
 export interface App {
   name: string
   icon: string
@@ -256,8 +256,8 @@ export interface App {
   operations: Operation[]
 }
 
-// The app's Python page declarations, as the shell sees them. They mirror
-// docs/druks-ui.md, and arrive in route-match order.
+// The page declarations of the app, as the shell sees them. They match
+// docs/druks-ui.md. They arrive in the order in which routes match.
 export interface PageEntry {
   name: string
   label: string
@@ -276,7 +276,7 @@ export interface Link {
   subject: Follows | null
 }
 
-// Where something stands. The app writes the word; the tone picks the paint.
+// Where something stands. The app writes the word. The tone selects the presentation.
 export interface StatusValue {
   value: 'status'
   label: string
@@ -313,12 +313,12 @@ export interface NumberValue {
 export interface TimeValue {
   value: 'time'
   when: string | null
-  // The word the shell shows when there is no moment.
+  // The word that the shell shows when there is no time.
   empty: string
 }
 
 // Where the work on one subject stands. Druks reads the status when it serves
-// the page; the shell writes the word.
+// the page. The shell writes the word.
 export interface SubjectStatusValue {
   value: 'subject_status'
   subject: Follows
@@ -443,8 +443,8 @@ export type Field =
   | (FieldBase & { field: 'multi_upload'; accept: string })
   | (FieldBase & { field: 'secret' })
 
-// A control that calls one of the app's own operations. The shell resolves the
-// operation to a method and a URL through the roster.
+// A control that calls one of the app's own operations. The shell finds the method
+// and the URL of the operation in the roster.
 export interface Action {
   block: 'action'
   label: string
@@ -457,7 +457,7 @@ export interface Action {
   link: Link | null
 }
 
-// One route an Action can call. Reads are left out: a GET is not an action.
+// One route that an Action can call. The list leaves out reads. A GET is not an action.
 export interface Operation {
   id: string
   method: string
@@ -489,7 +489,7 @@ export type Block =
   | { block: 'files'; title: string; files: FileSummary[] }
   | {
       block: 'chart'
-      kind: 'line' | 'bar' | 'area'
+      kind: 'line' | 'bar' | 'area' | 'pie'
       title: string
       categories: string[]
       series: ChartSeries[]
@@ -542,15 +542,15 @@ export type Block =
   | EmptyStateBlock
   | Link
 
-// The subject a page or a named region watches. The shell streams it and
-// rereads the page on every snapshot it sends. An empty ``subjectId`` watches
+// The subject that a page or a named region watches. The shell streams it. It
+// rereads the page on each snapshot of the stream. An empty ``subjectId`` watches
 // every subject of the type, through the board stream.
 export interface Follows {
   subjectType: string
   subjectId: string
 }
 
-// What a page function returned at one moment — the contract's ``Page``.
+// What a page function returned at one moment. It is the ``Page`` of the contract.
 export interface PageSnapshot {
   title: string
   description: string
@@ -560,8 +560,8 @@ export interface PageSnapshot {
   follows: Follows | null
 }
 
-// A parked run's open gate. ``parkedAt`` names the exact question being
-// answered, and the answer echoes it unchanged.
+// The open gate of a parked run. ``parkedAt`` names the exact question. The answer
+// sends it back unchanged.
 export interface Gate {
   run: string
   gate: string
@@ -580,13 +580,13 @@ export interface GateAnswer {
 
 export type AgentEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
-/** One picker entry — the provider's model id and its display label. */
+/** One entry of the model picker. It holds the model id of the provider and its label. */
 export interface CatalogModel {
   id: string
   label: string
 }
 
-/** A registered harness's provider and billing capabilities. */
+/** The provider and the billing options of a registered harness. */
 export interface Harness {
   name: string
   /** Null for a key-only CLI. */
@@ -596,18 +596,18 @@ export interface Harness {
   hasChat: boolean
 }
 
-/** One model provider — who answers and bills a request. An account holds at
- * most one credential per provider, and every harness that drives the
- * provider runs on it. */
+/** One model provider, which answers and bills a request. An account holds at
+ * most one credential for each provider. Every harness that drives the provider
+ * uses that credential. */
 export interface Provider {
   id: string
   label: string
   billingOptions: string[]
-  /** `login` runs the provider's own flow; `token` takes a pasted token. Empty for a key-only provider. */
+  /** `login` runs the sign-in flow of the provider. `token` takes a pasted token. Empty for a key-only provider. */
   signIn: string
 }
 
-/** One provider's model list; `label` names the provider. */
+/** The model list of one provider. `label` names the provider. */
 export interface ProviderCatalog {
   provider: string
   label: string
@@ -627,7 +627,7 @@ export interface ProviderDirectoryEntry {
 /** The requester's subscription at a provider. */
 export interface ProviderSubscription {
   provider: string
-  /** The email the provider reported at connect — display, never authority. Null for a pasted token. */
+  /** The email that the provider gave at connect. It is for display only, never for access. Null for a pasted token. */
   providerEmail: string | null
   expiresAt: string | null
   /** When the person must sign in again. Null when the provider names no end. */
@@ -636,7 +636,7 @@ export interface ProviderSubscription {
   lastRefreshedAt: string | null
   revokedAt: string | null
   revokedReason: string
-  // False once the token expires or the subscription is revoked.
+  // False after the token expires or after a revocation.
   connected: boolean
 }
 
@@ -680,14 +680,16 @@ export interface AgentInput {
   isPrivate: boolean
   ownerId: string
   channelId: string | null
-  pictureUrl: string | null
+  // The id of an uploaded png, jpg or gif.
+  picture: string | null
 }
 
-export interface Agent extends AgentInput {
+export interface Agent extends Omit<AgentInput, 'picture'> {
   id: string
+  picture: FileSummary | null
 }
 
-// A schedule set in one of the agent's conversations; lastRun is its newest due time.
+// A schedule set in a conversation of the agent. ``lastRun`` is the run of its newest due time.
 export interface AgentSchedule {
   id: string
   accountId: string
@@ -699,17 +701,17 @@ export interface AgentSchedule {
   lastRun: ScheduledRun | null
 }
 
-/** What /api/auth/me answers: how this deployment authenticates, who the
- * request resolved to (null in the none/zero setup state), and whether that
- * identity still needs its first provider credential. */
+/** What /api/auth/me answers. It tells how this deployment authenticates, and which
+ * account sent the request. The account is null in mode none before the first account
+ * exists. It also tells whether that account still needs its first provider credential. */
 export interface Identity {
   authMode: 'none' | 'header' | 'jwt'
   account: Account | null
   onboardingRequired: boolean
 }
 
-/** connectionId is the opaque id of this connect attempt; passed back so
- * concurrent connects never clobber each other's pending state. */
+/** connectionId is the opaque id of this connect attempt. The client sends it back.
+ * Two connects at the same time then keep their own pending state. */
 export type ConnectChallenge =
   | { method: 'code'; connectionId: string; authorizeUrl: string }
   | {
@@ -729,7 +731,7 @@ export interface ServiceField {
   isRequired: boolean
 }
 
-/** One signed-in provider account, owned by the user who consented. */
+/** One signed-in provider account. The person who consented owns it. */
 export interface Connection {
   id: string
   provider: string
@@ -752,7 +754,7 @@ export interface Connection {
   revokedReason: string
 }
 
-/** A linked WhatsApp number: one WAHA session. ``admin`` is the name of the person who
+/** A linked WhatsApp number, which is one WAHA session. ``admin`` is the name of the person who
  * sent its one-time code. */
 export interface WahaSession {
   id: string
@@ -788,7 +790,7 @@ export interface Call {
   lastLineAt: string
 }
 
-/** A line of a call: what the caller or the assistant said. */
+/** A line of a call. It is what the caller or the assistant said. */
 export interface CallLine {
   id: string
   role: 'user' | 'assistant'
@@ -801,8 +803,9 @@ export interface UnlinkedNumber {
   number: string
 }
 
-/** One declared service: the appliance's own registered app at an external
- * provider. Facts are identity only — stored secrets never leave the backend. */
+/** One declared service. It is the registered app of this installation at an
+ * outside provider. ``facts`` hold identity only. Stored secrets never leave the
+ * backend. */
 export interface Service {
   slug: string
   title: string
@@ -880,27 +883,27 @@ export type BrowserSessionPayloadFormat = 'storage_state' | 'profile_dir'
 export interface BrowserSession {
   name: string
   status: BrowserSessionStatus
-  /** Stored facts arrive with the row; a declared session nobody has acted
-   * on yet has none. */
+  /** Stored facts arrive with the row. A declared session that nobody used yet
+   * has none. */
   payloadFormat: BrowserSessionPayloadFormat | null
   site: string
-  /** False for a leftover row whose declaring app is gone. */
+  /** False for a leftover row of an app that is gone. */
   isDeclared: boolean
   createdAt: string | null
   lastRefreshedAt: string | null
   lastUsedAt: string | null
 }
 
-/** A timeout can also be the agent's declared value. */
-export type Source = 'agent' | 'default'
-export type TimeoutSource = 'agent' | 'declared' | 'default'
+export type Source = 'override' | 'default'
+/** A timeout can also be the declared value of the instruction. */
+export type TimeoutSource = 'override' | 'declared' | 'default'
 
 export interface InstructionSetting {
-  /** The agent's durable id, `<app>.<attribute>` — the key in an update's agent maps. */
+  /** The durable id of the instruction, `<app>.<attribute>`. It is the key in the instruction maps of an update. */
   name: string
   /** The declared display name, else the attribute name. */
   label: string
-  /** Short human-friendly blurb of what the agent does. */
+  /** A short text that says what the agent does. */
   description: string
   harness: string
   harnessSource: Source
@@ -915,39 +918,31 @@ export interface InstructionSetting {
   timeoutSource: TimeoutSource
 }
 
-export interface InstructionsApp {
-  name: string
-  instructions: InstructionSetting[]
-}
-
-export interface InstructionsResponse {
-  apps: InstructionsApp[]
-}
-
-
 export interface WorkflowSettingField {
   name: string
-  /** Human label + one-line help from the field's Field(title=, description=). */
+  /** The label and the one-line help of the field, from its Field(title=, description=). */
   label: string
   help: string
-  /** Wire kind driving the input control: bool | int | str | enum | secret | cron. */
+  /** The kind that selects the input control: bool, int, str, enum, secret, or cron. */
   type: string
   value: unknown
   default: unknown
-  /** An enum field's allowed values; null for every other kind. */
+  /** The allowed values of an enum field. Null for every other kind. */
   choices: string[] | null
   choiceDetails: Record<string, { label: string; help: string; group?: string }>
-  /** The heading this field groups under; empty for an ungrouped one. */
+  /** The heading that this field groups under. Empty for a field with no group. */
   section: string
-  /** The sibling field this one is shown for, and the values of it that show this one.
-   * The name is empty when the field is always shown. */
+  /** The sibling field and the values of it that show this field. The name is empty
+   * when the shell always shows the field. */
   visibleWhenField: string
   visibleWhenValues: unknown[]
-  /** For a secret field, whether a value is currently stored; null otherwise. */
+  /** For a secret field, whether Druks stores a value now. Null for every other field. */
   secretSet: boolean | null
-  /** The value carries meaningful newlines (a pasted PEM) — render a textarea. */
+  /** The value has newlines that matter, such as a pasted PEM. The shell shows a text area. */
   multiline: boolean
   overridden: boolean
+  /** A secret file sets the field, so the form cannot change or clear it. */
+  managed: boolean
 }
 
 export interface WorkflowSettings {
@@ -958,16 +953,16 @@ export interface WorkflowSettings {
 export interface AppSettings {
   name: string
   description: string
-  /** Lucide icon name for the rail glyph (see APP_ICONS); falls back if unknown. */
+  /** The Lucide icon name of the rail glyph, from APP_ICONS. An unknown name gets the default icon. */
   icon: string
-  /** Platform apps are excluded from the installed app roster. */
+  /** True for a platform app. The shell leaves it out of the app roster. */
   builtin: boolean
   /** The id of the app's Bot, which answers people on its channels. */
   bot: string | null
   botAccess: 'public' | 'private' | null
   instructions: InstructionSetting[]
   workflows: WorkflowSettings[]
-  /** The app's own settings (not tied to a workflow). */
+  /** The settings of the app itself, not of a workflow. */
   settings: WorkflowSettingField[]
 }
 
@@ -977,18 +972,18 @@ export type AppSettingChoices = Record<string, { value: string; label: string; g
 export interface AppsSettingsResponse {
   allowedEfforts: string[]
   apps: AppSettings[]
-  /** The chat channels a Bot answers on now: the registered ones whose service is connected. */
+  /** The chat channels that a Bot answers on now. They are the registered channels with a connected service. */
   channels: string[]
 }
 
 export type AppSettingsProblems = Record<string, Record<string, string>>
 
 export interface UpdateAppsSettingsRequest {
-  agentHarnesses?: Record<string, string | null>
-  agentModels?: Record<string, string | null>
-  agentBillings?: Record<string, Billing | null>
-  agentEfforts?: Record<string, string | null>
-  agentTimeouts?: Record<string, number | null>
+  instructionHarnesses?: Record<string, string | null>
+  instructionModels?: Record<string, string | null>
+  instructionBillings?: Record<string, Billing | null>
+  instructionEfforts?: Record<string, string | null>
+  instructionTimeouts?: Record<string, number | null>
   /** Keyed by workflow kind. */
   workflowSettings?: Record<string, Record<string, unknown>>
   /** Keyed by app name. */
@@ -1013,8 +1008,8 @@ export interface FeedItem {
   id: string
   seq: number
   at: string
-  // A lifecycle topic ("workflow.finished") or the milestone an app recorded
-  // ("merged"). The words are this client's — see lib/feed.
+  // A lifecycle topic, such as "workflow.finished", or a milestone that an app
+  // recorded, such as "merged". This client writes the words in lib/feed.
   topic: string
   app?: string | null
   subjectType?: string | null
@@ -1057,11 +1052,11 @@ export interface UsageMetric {
 }
 
 export interface UsageProviderSummary {
-  // Panels, colors, and legends key off the registered provider id.
+  // The panels, colors, and legends use the registered provider id as a key.
   id: string
   label: string
   available: boolean
-  /** The requesting account has its own connection; false renders a connect action. */
+  /** True when the requesting account has its own connection. False shows a connect action. */
   connected: boolean
   providerEmail: string | null
   planTier: string | null
@@ -1069,8 +1064,8 @@ export interface UsageProviderSummary {
   weeks: UsageMetric[]
   mainLimitReached: boolean | null
   reserve: UsageMetric | null
-  // An unmetered plan has permanently-full window metrics. Render "unmetered" plus
-  // actual consumption instead of a quota bar that never moves.
+  // The window metrics of an unmetered plan stay full. The shell shows "unmetered" and
+  // the real use, not a quota bar that never moves.
   unlimited: boolean
   scrapedAt: string | null
   ageSeconds: number | null
@@ -1106,13 +1101,13 @@ export interface UsageHistoryResponse {
 
 export interface UsageProviderToday {
   id: string
-  /** The viewer's own runs, billed to their subscription. */
+  /** The spend of the viewer's own runs on their subscription. */
   spendUsd: number
-  /** Runs anyone billed to the installation's API key. */
+  /** The spend of all runs on the API key of the installation. */
   keySpendUsd: number
   tokens: number
   runs: number
-  // Spend per local hour (24 buckets) for the histogram.
+  // The spend in each local hour, 24 buckets for the histogram.
   hours: number[]
 }
 
@@ -1140,16 +1135,16 @@ export interface SkillCollection {
 }
 
 export interface McpServerDirectoryEntry {
-  // One server the dashboard offers to add; name is the installed row's name.
+  // One server that the dashboard offers to add. ``name`` is the name of the installed row.
   name: string
   title: string
   description: string
   url: string
 }
 
-// A personal access token an agent presents as `Authorization: Bearer …` to
-// call this same API. Only the prefix ever appears here; the plaintext is
-// returned once, at mint, and nowhere else.
+// A personal access token that an agent sends as `Authorization: Bearer …` to call
+// this API. Only the prefix shows here. Druks returns the plaintext once, when it
+// creates the token.
 export interface Pat {
   id: string
   name: string
@@ -1167,15 +1162,15 @@ export interface McpServer {
   isEnabled: boolean
   isOauth: boolean
   identityMode: string | null
-  // The scopes a connect requests; null requests what the server advertises.
+  // The scopes that a connect requests. Null requests what the server advertises.
   scopes: string[] | null
-  // A catalog-declared server — managed by druks, can't be removed here,
-  // only disabled.
+  // A server from the catalog. Druks manages it. A person can disable it but not
+  // remove it.
   builtin: boolean
-  // The raw token never leaves the backend; ``hasToken`` says whether one is
-  // configured without revealing it.
+  // The raw token never leaves the backend. ``hasToken`` only tells whether a token
+  // is set.
   hasToken: boolean
-  // Where this account's credential for the server comes from.
+  // The source of the credential that this account uses for the server.
   credential: McpCredential
   // The service that owns the server's host.
   service: string | null
@@ -1184,13 +1179,13 @@ export interface McpServer {
 export type McpCredential = 'headers' | 'grant' | 'service_connection' | 'service_login'
 
 export interface McpServerScopes {
-  // What the server advertises, and what a connect requests; null requests
-  // the advertised list.
+  // What the server advertises, and what a connect requests. Null requests the
+  // advertised list.
   advertised: string[]
   requested: string[] | null
 }
 
 export interface McpServerConnection {
-  // Null identifies the shared connection every account uses.
+  // Null names the shared connection that every account uses.
   accountUsername: string | null
 }

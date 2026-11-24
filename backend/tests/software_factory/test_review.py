@@ -6,11 +6,12 @@ from unittest.mock import AsyncMock
 
 import httpx
 import pytest
-from conftest import connect_service
+from conftest import connect_anthropic_subscription, connect_service
 from druks.accounts.models import Account
 from druks.apps.settings import field_kind, field_multiline
 from druks.contrib.software_factory import subscribers  # noqa: F401 — the import registers it
 from druks.contrib.software_factory.app import check_review_identity
+from druks.contrib.software_factory.contracts import ReviewReport
 from druks.contrib.software_factory.datastructures import PullRequest
 from druks.contrib.software_factory.github import get_review_actor
 from druks.contrib.software_factory.models import Project, ProjectRepo
@@ -18,13 +19,14 @@ from druks.contrib.software_factory.services import GithubReviewer
 from druks.contrib.software_factory.workflows import PullRequestReview
 from druks.core.apis.github import GITHUB_AUTHORITY
 from druks.core.services import Github
+from druks.harnesses.exceptions import HarnessRateLimitError
 from druks.prompts import render_prompt
 from druks.secrets.datastructures import Audience
 from druks.secrets.models import VaultSecret
 from druks.services.exceptions import ServiceNotConnectedError
 from druks.settings import configure_settings
 from druks.testing import configure_app_for_test, make_settings, seed_run
-from druks.workflows import _bind_instance
+from druks.workflows import Instruction, _bind_instance, current_workflow
 from fastapi.testclient import TestClient
 
 pytestmark = pytest.mark.usefixtures("druks_without_remote_config")
@@ -95,6 +97,31 @@ async def test_a_queued_run_replays_through_its_subject():
     assert run_kwargs == {"note": ""}
     subject = await instance.subject
     assert (subject.repo, subject.number) == ("acme/app", 7)
+
+
+async def test_a_review_that_meets_a_usage_limit_waits_and_finishes(
+    druks_db, direct_steps, monkeypatch
+):
+    report = ReviewReport(decision="approve", summary="Fine.", findings=[], context_repos=[])
+    monkeypatch.setattr(
+        Instruction, "_run", AsyncMock(side_effect=[HarnessRateLimitError("quota"), report])
+    )
+    await connect_anthropic_subscription("dev@example.com")
+    dev = await Account.get_or_create(druks_db, "dev@example.com")
+    review, _ = _bind_instance(
+        PullRequestReview, PullRequest(id="acme/app#7").identity, {}, account=dev
+    )
+    review._workflow_id = "run-review"
+    review.sleep = AsyncMock(return_value=False)
+    token = current_workflow.set(review)
+    try:
+        result = await review.run_multistep()
+    finally:
+        current_workflow.reset(token)
+
+    assert result == report
+    [wait] = review.sleep.await_args_list
+    assert wait.kwargs == {"label": "waiting_for_quota", "until": "agents.quota"}
 
 
 async def test_the_reviewer_prompt_names_the_pull_request_it_is_about():

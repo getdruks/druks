@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import json
+import re
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -14,6 +15,7 @@ from druks import ui
 from druks.accounts.context import current_conversation_id
 from druks.accounts.enums import AccountKind
 from druks.accounts.models import Account, PersonalAccessToken
+from druks.agents.constants import PRIVATE_AGENT_MESSAGE
 from druks.agents.models import Agent
 from druks.chat import service, sockets
 from druks.chat.app import Chat
@@ -27,6 +29,7 @@ from druks.chat.constants import (
     NAMING_PROMPT,
     NO_ANSWER_MESSAGE,
     PARKED_BUTTONS_MESSAGE,
+    TIME_MESSAGE,
 )
 from druks.chat.enums import ConversationSource, MessageRole, MessageState
 from druks.chat.exceptions import (
@@ -74,13 +77,13 @@ from druks.testing import (
     seed_run,
 )
 from druks.user_settings.models import InstallationSettings, SettingsOverride
-from druks.workflows import _CONVERSATION_INPUT_KEY, FatalError, Subject
+from druks.workflows import _CONVERSATION_INPUT_KEY, FatalError, Subject, _replace_status
 from druks_field_notes.app import FieldNotes
 from druks_field_notes.models import Note
 from druks_field_notes.workflows import Summarize
 from fastapi import WebSocket, WebSocketDisconnect
 from pydantic_core import to_json
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 
 AGENT = {
     "name": "Security engineer",
@@ -142,7 +145,7 @@ async def sandbox(druks_db, conversation, monkeypatch):
     host.exec = AsyncMock(return_value=SimpleNamespace(returncode=0, stdout="Gate check\n"))
     monkeypatch.setattr(service, "get_sandbox", AsyncMock(return_value=(host, identity)))
     monkeypatch.setattr(service, "get_running_sandbox", AsyncMock(return_value=host))
-    # The box is not real, so it has no git to configure.
+    # The box is not real. It has no git to configure.
     monkeypatch.setattr(service_registry.get("github"), "prepare_sandbox", AsyncMock())
     config = SimpleNamespace(
         harness_class=ClaudeHarness,
@@ -351,7 +354,7 @@ async def test_conversations_share_the_account_sandbox_until_its_secrets_change(
         allowed_tools=Toolkit.ALL,
         secret_refs=[],
     )
-    # A pasted key's entries are bound when the box is created, so another key needs a new box.
+    # Druks binds a pasted key's entries when it creates the box. Another key needs a new box.
     rekeyed_host, _identity = await service.get_sandbox(
         druks_db,
         second.account_id,
@@ -397,7 +400,7 @@ async def test_each_operator_turn_prepares_the_box_for_its_sign_ins(
 
     await service.deliver_pending(druks_db, conversation)
 
-    # The sandbox fixture hands back a box that already runs: a reused box is prepared too.
+    # The sandbox fixture hands back a box that already runs. Druks prepares a reused box too.
     assert [
         (args[0], args[1].service, args[1].id) for args, _ in prepare_sandbox.await_args_list
     ] == [(host, github, sign_in.id)] * prepares
@@ -604,7 +607,7 @@ QUESTION = {**CHOICES_CALL, "fields": []}
 FORM = {"question": "Where does it ship?", "choices": [], "fields": parse_fields(FORM_TEXT)}
 
 
-async def record_question(conversation, message, question=QUESTION):
+async def record_question(conversation, message, question):
     """What chat_ask leaves for the end of the turn of ``message``."""
     await get_client().set(service.question_key(conversation.id, message.id), json.dumps(question))
 
@@ -627,8 +630,18 @@ async def slack_conversation(druks_db, conversation, monkeypatch):
 
 
 async def put_question(tmp_path, body: dict, conversation_id: str):
-    """Call chat_ask as the owner's agent does. A tool call from no chat names no
-    conversation."""
+    """Call chat_ask as the owner's agent does."""
+    return await put_tool(tmp_path, "/api/chat/question", body, conversation_id)
+
+
+async def put_blocks(tmp_path, blocks: str, conversation_id: str):
+    """Call chat_show as the owner's agent does."""
+    return await put_tool(tmp_path, "/api/chat/blocks", {"blocks": blocks}, conversation_id)
+
+
+async def put_tool(tmp_path, path: str, body: dict, conversation_id: str):
+    """Call the chat tool at ``path`` as the owner's agent does. A tool call from no chat
+    names no conversation."""
     api = configure_app_for_test(
         settings=make_settings(tmp_path, identity={"mode": "header", "header": "X-User"}),
         authenticated=False,
@@ -637,13 +650,13 @@ async def put_question(tmp_path, body: dict, conversation_id: str):
     if conversation_id:
         headers[CONVERSATION_HEADER] = conversation_id
     async with asgi_client(api) as client:
-        return await client.put("/api/chat/question", json=body, headers=headers)
+        return await client.put(path, json=body, headers=headers)
 
 
 async def test_a_question_waits_on_the_newest_message_of_the_turn(druks_db, conversation, tmp_path):
     first = await conversation.get_unanswered_message(druks_db)
     newest = await conversation.create_message(druks_db, "And the cache?")
-    # One turn takes both messages, and its newest message names it.
+    # One turn takes both messages. Its newest message names the turn.
     for message in (first, newest):
         assert await message.mark_delivered(druks_db)
     await druks_db.commit()
@@ -670,7 +683,7 @@ async def test_a_question_needs_a_turn_that_runs(druks_db, conversation, tmp_pat
 
 
 async def start_turn(session, conversation):
-    """The conversation's message, delivered to the agent, so its turn runs."""
+    """The conversation's message, delivered to the agent so that its turn runs."""
     message = await conversation.get_unanswered_message(session)
     assert await message.mark_delivered(session)
     await session.commit()
@@ -717,7 +730,7 @@ async def test_a_question_takes_choices_or_fields_and_not_both(
     druks_db, conversation, tmp_path, body
 ):
     message = await start_turn(druks_db, conversation)
-    await record_question(conversation, message)
+    await record_question(conversation, message, question=QUESTION)
 
     response = await put_question(tmp_path, body, conversation.id)
 
@@ -729,42 +742,35 @@ async def test_a_question_takes_choices_or_fields_and_not_both(
     assert json.loads(saved) == QUESTION
 
 
-@pytest.mark.parametrize(
-    "source",
-    ["", ConversationSource.WHATSAPP, ConversationSource.SLACK],
-    ids=["web", "whatsapp", "slack"],
-)
-@pytest.mark.parametrize("refused", ["SecretField", "UploadField", "MultiUploadField"])
-async def test_every_channel_refuses_a_secret_or_an_upload_and_keeps_the_question(
-    druks_db, conversation, tmp_path, source, refused
-):
-    if source:
-        conversation.source = source
+async def test_a_refused_field_keeps_the_question(druks_db, conversation, tmp_path):
     message = await start_turn(druks_db, conversation)
-    await record_question(conversation, message)
+    await record_question(conversation, message, question=QUESTION)
 
     response = await put_question(
         tmp_path,
-        {"question": "Which file?", "fields": f'[{refused}(name="f", label="F")]'},
+        {"question": "Which file?", "fields": '[SecretField(name="f", label="F")]'},
         conversation.id,
     )
 
     assert response.status_code == 422
-    assert response.json()["detail"].startswith(f"A form takes no {refused}.")
+    assert response.json()["detail"].startswith("A form takes no SecretField.")
     saved = await get_client().get(service.question_key(conversation.id, message.id))
     assert json.loads(saved) == QUESTION
 
 
 @pytest.mark.parametrize(
     ("source", "status"),
-    [("", 204), (ConversationSource.WHATSAPP, 204), (ConversationSource.SLACK, 422)],
+    [
+        (ConversationSource.WEB, 204),
+        (ConversationSource.WHATSAPP, 204),
+        (ConversationSource.SLACK, 422),
+    ],
     ids=["web", "whatsapp", "slack"],
 )
 async def test_only_a_channel_that_refuses_the_form_refuses_it(
     druks_db, conversation, tmp_path, source, status
 ):
-    if source:
-        conversation.source = source
+    conversation.source = source
     message = await start_turn(druks_db, conversation)
     # The question, 49 inputs, and the Submit button are one block more than Slack shows.
     fields = ", ".join(f'TextField(name="f{index}", label="F{index}")' for index in range(49))
@@ -810,7 +816,7 @@ async def test_a_question_goes_out_with_the_reply_as_one_message(
     monkeypatch.setattr(Bridge, "reply", AsyncMock(return_value=(body, tool_calls)))
     message = await slack_conversation.get_unanswered_message(druks_db)
     message.state = MessageState.DELIVERED
-    await record_question(slack_conversation, message, asked)
+    await record_question(slack_conversation, message, question=asked)
 
     await service.finish_turn(
         druks_db,
@@ -837,7 +843,7 @@ async def test_a_question_goes_out_with_the_reply_as_one_message(
         )
     )
     assert list(queued) == [f"{SEND_WORKFLOW}:{question.id}"]
-    # The question answers the person, so Druks does not ask the agent again.
+    # The question answers the person. Druks does not ask the agent again.
     assert not await slack_conversation.get_unanswered_message(druks_db)
 
 
@@ -854,7 +860,7 @@ async def test_a_web_reply_keeps_its_question_apart_from_the_agent_s_text(
     monkeypatch.setattr(Bridge, "reply", AsyncMock(return_value=(body, tool_calls)))
     message = await conversation.get_unanswered_message(druks_db)
     message.state = MessageState.DELIVERED
-    await record_question(conversation, message)
+    await record_question(conversation, message, question=QUESTION)
 
     await service.finish_turn(
         druks_db, conversation, message, Bridge(None), {"status": status, "archivePath": ""}
@@ -864,13 +870,13 @@ async def test_a_web_reply_keeps_its_question_apart_from_the_agent_s_text(
     assert (reply.body, reply.question) == (body, question)
 
 
-async def test_a_question_that_the_release_before_forms_staged_still_ends_its_turn(
+async def test_a_staged_question_with_no_fields_still_ends_its_turn(
     druks_db, conversation, monkeypatch
 ):
     monkeypatch.setattr(Bridge, "reply", AsyncMock(return_value=("Let me check.", [])))
     message = await conversation.get_unanswered_message(druks_db)
     message.state = MessageState.DELIVERED
-    await record_question(conversation, message, CHOICES_CALL)
+    await record_question(conversation, message, question=CHOICES_CALL)
 
     await service.finish_turn(
         druks_db, conversation, message, Bridge(None), {"status": "replied", "archivePath": ""}
@@ -943,7 +949,7 @@ async def test_a_reply_where_no_inputs_show_ends_with_the_numbered_fields(
         '[TextField(name="title", label="Title"), SelectField(name="where", label="Where", '
         'options=[Option("Staging", value="staging"), Option("Production", value="production")])]'
     )
-    await record_question(slack_conversation, message, {**FORM, "fields": fields})
+    await record_question(slack_conversation, message, question={**FORM, "fields": fields})
 
     await service.finish_turn(
         druks_db,
@@ -978,7 +984,7 @@ async def test_a_stopped_or_held_turn_sends_no_form(
     monkeypatch.setattr(Bridge, "reply", AsyncMock(return_value=reply))
     message = await slack_conversation.get_unanswered_message(druks_db)
     message.state = MessageState.DELIVERED
-    await record_question(slack_conversation, message, FORM)
+    await record_question(slack_conversation, message, question=FORM)
 
     await service.finish_turn(
         druks_db, slack_conversation, message, Bridge(None), {"status": status, "archivePath": ""}
@@ -1056,6 +1062,154 @@ async def test_a_person_s_message_closes_the_open_questions_of_its_conversation(
         )
     )
     assert list(queued) == [f"{CLOSE_QUESTION_WORKFLOW}:{closed_id}" for closed_id in closed]
+
+
+def dump_blocks(*blocks):
+    """The blocks as the API gives them."""
+    return [block.model_dump(mode="json", by_alias=True) for block in blocks]
+
+
+FACTS_TEXT = '[Facts([Fact("Owner", "Ana"), Fact("Builds", 12)], title="Project")]'
+FACTS = dump_blocks(ui.Facts([ui.Fact("Owner", "Ana"), ui.Fact("Builds", 12)], title="Project"))
+FACTS_FORM = "### Project\n\n- **Owner**: Ana\n- **Builds**: 12"
+CHART = dump_blocks(
+    ui.Chart(
+        kind="bar",
+        title="Builds this week",
+        categories=["Mon", "Tue"],
+        series=[ui.ChartSeries(label="Builds", points=[4, 7])],
+    )
+)
+CHART_FORM = (
+    "### Builds this week\n\n| category | Builds |\n| --- | --- |\n| Mon | 4 |\n| Tue | 7 |"
+)
+
+
+async def record_blocks(conversation, message, blocks):
+    """What chat_show leaves for the end of the turn of ``message``."""
+    await get_client().set(service.blocks_key(conversation.id, message.id), json.dumps(blocks))
+
+
+async def test_blocks_need_a_turn_that_runs(druks_db, conversation, tmp_path):
+    # The conversation's only message waits for its turn.
+    before_the_turn = await put_blocks(tmp_path, FACTS_TEXT, conversation.id)
+    outside_a_chat = await put_blocks(tmp_path, FACTS_TEXT, "")
+
+    assert (before_the_turn.status_code, outside_a_chat.status_code) == (409, 409)
+    assert not await get_client().keys("chat:*:blocks:*")
+
+
+async def test_a_refused_call_keeps_the_blocks_and_a_corrected_call_replaces_them(
+    druks_db, conversation, tmp_path
+):
+    message = await start_turn(druks_db, conversation)
+    key = service.blocks_key(conversation.id, message.id)
+
+    first = await put_blocks(tmp_path, '[Text("Builds: 12")]', conversation.id)
+    refused = await put_blocks(
+        tmp_path,
+        '[Facts([Fact("Builds", 12)]), Action(label="Ship", operation="ship")]',
+        conversation.id,
+    )
+    kept = json.loads(await get_client().get(key))
+    corrected = await put_blocks(tmp_path, FACTS_TEXT, conversation.id)
+
+    assert (first.status_code, refused.status_code, corrected.status_code) == (204, 422, 204)
+    assert refused.json()["detail"].startswith("A reply takes no Action.")
+    assert kept == dump_blocks(ui.Text("Builds: 12"))
+    assert json.loads(await get_client().get(key)) == FACTS
+
+
+@pytest.mark.parametrize(
+    ("source", "body_end", "blocks"),
+    [
+        (
+            ConversationSource.WEB,
+            "",
+            [
+                {"block": FACTS[0], "textForm": FACTS_FORM},
+                {"block": CHART[0], "textForm": CHART_FORM},
+            ],
+        ),
+        (
+            ConversationSource.WHATSAPP,
+            f"\n\n{FACTS_FORM}\n\n{CHART_FORM}"
+            "\n\nWhich database?\n1. Postgres\n2. MySQL\n3. SQLite",
+            [],
+        ),
+    ],
+    ids=["web", "whatsapp"],
+)
+async def test_a_reply_reads_its_blocks_apart_or_ends_with_their_text_form(
+    druks_db, conversation, tmp_path, monkeypatch, source, body_end, blocks
+):
+    conversation.source = source
+    body = "Let me look.Here are the facts."
+    tool_calls = [{"toolCallId": "show-1", "textOffset": 12}]
+    monkeypatch.setattr(Bridge, "reply", AsyncMock(return_value=(body, tool_calls)))
+    message = await start_turn(druks_db, conversation)
+    await record_blocks(conversation, message, blocks=[*FACTS, *CHART])
+    await record_question(conversation, message, question=QUESTION)
+
+    await service.finish_turn(
+        druks_db, conversation, message, Bridge(None), {"status": "replied", "archivePath": ""}
+    )
+
+    api = configure_app_for_test(
+        settings=make_settings(tmp_path, identity={"mode": "header", "header": "X-User"}),
+        authenticated=False,
+    )
+    async with asgi_client(api) as client:
+        response = await client.get(
+            f"/api/chat/conversations/{conversation.id}", headers={"X-User": "owner@example.com"}
+        )
+    assert response.status_code == 200
+    answer = response.json()["messages"][-1]
+    assert (answer["body"], answer["blocks"], answer["toolCalls"]) == (
+        body + body_end,
+        blocks,
+        tool_calls,
+    )
+
+
+async def test_a_stopped_turn_shows_no_blocks(druks_db, conversation, monkeypatch):
+    message = await start_turn(druks_db, conversation)
+    await record_blocks(conversation, message, blocks=FACTS)
+    monkeypatch.setattr(Bridge, "reply", AsyncMock(return_value=("Stopped.", [])))
+
+    await service.finish_turn(
+        druks_db, conversation, message, Bridge(None), {"status": "cancelled", "archivePath": ""}
+    )
+
+    reply = (await list_messages(druks_db, conversation))[-1]
+    assert (reply.body, reply.blocks) == ("Stopped.", None)
+    assert not await get_client().exists(service.blocks_key(conversation.id, message.id))
+
+
+async def test_a_question_goes_out_after_the_reply_and_its_blocks_as_one_message(
+    druks_db, slack_conversation, monkeypatch
+):
+    tool_calls = [{"toolCallId": "ask-1", "textOffset": 13}]
+    monkeypatch.setattr(
+        Bridge, "reply", AsyncMock(return_value=("Let me check.I read both.", tool_calls))
+    )
+    message = await slack_conversation.get_unanswered_message(druks_db)
+    message.state = MessageState.DELIVERED
+    await record_question(slack_conversation, message, question=QUESTION)
+    await record_blocks(slack_conversation, message, blocks=FACTS)
+
+    await service.finish_turn(
+        druks_db,
+        slack_conversation,
+        message,
+        Bridge(None),
+        {"status": "replied", "archivePath": ""},
+    )
+
+    [question] = await druks_db.scalars(select(Notification))
+    text = f"I read both.\n\n{FACTS_FORM}"
+    assert (question.body, question.question_offset) == (f"{text}\n\nWhich database?", len(text))
+    assert question.blocks == [*dump_blocks(ui.Markdown("I read both.")), *FACTS]
 
 
 def channel(answer: bytes) -> tuple[asyncio.StreamReader, MagicMock]:
@@ -1136,7 +1290,7 @@ async def test_bridge_start_retires_the_bridge_of_an_older_druks():
         exec=AsyncMock(return_value=SimpleNamespace(returncode=0)),
     )
 
-    # A busy bridge serves this turn; an idle one exits, and the launch carries the version.
+    # A busy bridge serves this turn. An idle one exits. The launch carries the version.
     await Bridge(host).start()
     host.upload_file.assert_not_awaited()
     await Bridge(host).start()
@@ -1225,7 +1379,7 @@ async def test_name_arrives_while_the_first_reply_runs(
             state.update(status="running", messageId=values["messageId"])
         elif method == "events":
             return {"events": []}
-        # The reply ends only after the name is saved.
+        # The reply ends only after Druks saves the name.
         elif method == "status" and conversation.title:
             state["status"] = "replied"
         return state
@@ -1645,6 +1799,100 @@ async def test_a_conversation_lists_the_runs_it_started_that_are_still_active(
     ]
 
 
+async def start_run(session, conversation_id, *, state="running", kind=Summarize.kind):
+    """A run in ``state``, which the conversation of ``conversation_id`` started if any."""
+    run = await seed_run(session, kind=kind, state=state)
+    run.conversation_id = conversation_id
+    await session.flush()
+    return run
+
+
+async def read_statuses(conversation, tmp_path):
+    """The statuses of the conversation, as its owner reads them."""
+    api = configure_app_for_test(
+        settings=make_settings(tmp_path, identity={"mode": "header", "header": "X-User"}),
+        authenticated=False,
+    )
+    async with asgi_client(api) as client:
+        response = await client.get(
+            f"/api/chat/conversations/{conversation.id}/statuses",
+            headers={"X-User": "owner@example.com"},
+        )
+    return response.json()
+
+
+async def test_a_conversation_lists_the_status_of_each_run_that_it_started(
+    druks_db, conversation, tmp_path
+):
+    work = ui.Markdown("Writing the gist.")
+    drawn = {"running": [work], "failed": [work, ui.Callout("Failed.", tone="danger")]}
+    expected = []
+    for state, blocks in drawn.items():
+        run = await start_run(druks_db, conversation.id, state=state)
+        await _replace_status(run.id, None, ui.Stack([work]))
+        status = await Notification.get_status(druks_db, run.id)
+        expected.append(
+            {
+                "id": status.id,
+                "run": run.id,
+                "app": "field_notes",
+                "blocks": dump_blocks(*blocks),
+                "startedAt": run.created_at.isoformat().replace("+00:00", "Z"),
+            }
+        )
+    # The status of the run that ended stays after its channel refused it.
+    await status.mark_failed("Slack is down.")
+    # The run's question in the conversation is not a status.
+    await Notification.create(
+        druks_db,
+        conversation_id=conversation.id,
+        reason="gate.parked",
+        body="Approve the gist?",
+        run_id=run.id,
+    )
+    other = await Conversation.create(druks_db, account_id=conversation.account_id, body="Hi")
+    for conversation_id in (other.id, None):
+        run = await start_run(druks_db, conversation_id)
+        await _replace_status(run.id, None, ui.Stack([work]))
+
+    assert await read_statuses(conversation, tmp_path) == expected
+
+
+async def test_a_retry_keeps_the_place_of_the_status(druks_db, conversation, tmp_path):
+    first = await start_run(druks_db, conversation.id, state="failed")
+    first.created_at = Base.utc_now() - timedelta(hours=1)
+    await druks_db.flush()
+    await _replace_status(first.id, None, ui.Stack([ui.Markdown("Writing the gist.")]))
+    status = await Notification.get_status(druks_db, first.id)
+    retry = await start_run(druks_db, conversation.id)
+    await druks_db.execute(
+        update(workflow_status)
+        .where(workflow_status.c.workflow_uuid == retry.id)
+        .values(forked_from=first.id)
+    )
+    # notifications.refresh_status gives the status to the retry, which runs.
+    await status.follow(retry, state="running")
+
+    [retried] = await read_statuses(conversation, tmp_path)
+
+    assert (retried["id"], retried["run"], retried["startedAt"]) == (
+        status.id,
+        retry.id,
+        first.created_at.isoformat().replace("+00:00", "Z"),
+    )
+
+
+async def test_the_status_of_a_workflow_that_no_app_declares_has_no_app(
+    druks_db, conversation, tmp_path
+):
+    run = await start_run(druks_db, conversation.id, kind="retired.build")
+    await _replace_status(run.id, None, ui.Stack([ui.Markdown("Building.")]))
+
+    [status] = await read_statuses(conversation, tmp_path)
+
+    assert (status["app"], status["blocks"]) == ("", dump_blocks(ui.Markdown("Building.")))
+
+
 async def test_a_cancel_from_the_chat_that_started_the_run_queues_no_report(
     druks_db, conversation, tmp_path
 ):
@@ -1820,15 +2068,13 @@ async def test_pending_send_and_cancel_have_one_winner_in_postgres(druks_db, can
             stop_message = await stopper.get(Message, message.id)
             if cancel_first:
                 assert await stop_message.cancel_pending(stopper)
-                other_update = asyncio.create_task(send_message.mark_delivered(sender))
                 await stopper.commit()
-                assert not await other_update
+                assert not await send_message.mark_delivered(sender)
                 await sender.commit()
             else:
                 assert await send_message.mark_delivered(sender)
-                other_update = asyncio.create_task(stop_message.cancel_pending(stopper))
                 await sender.commit()
-                assert not await other_update
+                assert not await stop_message.cancel_pending(stopper)
                 await stopper.commit()
         async with get_session(engine) as session:
             saved = await session.get(Message, message.id)
@@ -2125,7 +2371,7 @@ async def test_a_parked_run_asks_its_chat_with_its_blocks_and_where_their_work_s
             "presentation": "in_app",
             "controls": [{"id": "approve", "note_required": False}],
             "questions": [],
-            "context": [block.model_dump(mode="json", by_alias=True) for block in context],
+            "context": dump_blocks(*context),
         },
         account_id=conversation.account_id,
     )
@@ -2151,7 +2397,7 @@ async def test_each_turn_opens_with_the_local_time(monkeypatch):
     assert content == [
         {
             "type": "text",
-            "text": "[Internal: The time is 2026-10-17T23:14:57+02:00 (Europe/Madrid).]",
+            "text": TIME_MESSAGE.format(now="2026-10-17T23:14:57+02:00", timezone="Europe/Madrid"),
         },
         {"type": "text", "text": "Remind me in 5 minutes"},
     ]
@@ -2192,7 +2438,7 @@ async def test_each_agent_turn_answers_by_the_agents_instructions_at_that_turn(
                 druks_db,
                 editor=owner,
                 channel_id=None,
-                picture_url=None,
+                picture=None,
                 **{**AGENT, "owner_id": owner.id, "instructions": "Answer as a release manager."},
             )
             await conversation.create_message(druks_db, "And now?")
@@ -2309,14 +2555,14 @@ async def test_an_agent_box_holds_only_the_agents_enabled_skills(
     )
     assert removed == []
 
-    # Removing the collection deletes its rows, and the box still holds alpha.
+    # Removing the collection deletes its rows. The box still holds alpha.
     await collection.delete()
     host.upload_dir.reset_mock()
     second = await get_start_request(druks_db, agent_conversation, host, monkeypatch)
 
     host.upload_dir.assert_not_awaited()
     assert removed == [f"{folder}/alpha"]
-    # The bridge reopens the session, so the agent stops seeing the removed skill.
+    # The bridge reopens the session. The agent stops seeing the removed skill.
     assert first["setup"] != second["setup"]
 
 
@@ -2370,7 +2616,7 @@ async def test_a_public_agent_turn_runs_on_the_install_api_key(druks_db, monkeyp
 
     config = get_sandbox.await_args.kwargs["config"]
     assert config.api_key.id == key.id
-    assert config.subscription is None
+    assert not config.subscription
 
 
 async def test_the_agent_box_and_the_chat_box_never_replace_each_other(
@@ -2526,14 +2772,14 @@ async def test_a_task_run_refuses_once_a_public_agent_turns_private(druks_db, mo
         editor=owner,
         owner_id=owner.id,
         channel_id=None,
-        picture_url=None,
+        picture=None,
         **{**AGENT, "is_private": True},
     )
     await druks_db.commit()
     run_instruction = AsyncMock()
     monkeypatch.setattr(Chat, "run_instruction", run_instruction)
 
-    with pytest.raises(PermissionDenied, match="Only the agent's owner"):
+    with pytest.raises(PermissionDenied, match=re.escape(PRIVATE_AGENT_MESSAGE)):
         await run_workflow(
             RunInstruction,
             account_id=other.id,

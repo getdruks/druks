@@ -40,11 +40,13 @@ def test_saving_a_notebook_the_source_does_not_list_is_rejected(tmp_path):
             "/api/settings/apps", json={"appSettings": {"field_notes": {"notebook": "kitchen"}}}
         )
     assert response.status_code == 422
-    assert response.json()["detail"] == "notebook: 'kitchen' is not one of the listed choices"
+    assert response.json()["detail"] == (
+        "notebook: 'kitchen' is not one of the listed choices. Select a listed choice."
+    )
 
 
 def test_the_signing_key_declares_the_multiline_secret_presentation():
-    # The platform keeps the newlines of a pasted PEM key, so the stored value is the paste.
+    # The platform keeps the newlines of a pasted PEM key. The stored value is thus the paste.
     field = FieldNotes.Settings.model_fields["sync_signing_key"]
     assert field_kind(field) == "secret"
     assert field_multiline(field)

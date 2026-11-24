@@ -31,7 +31,6 @@ from .constants import (
     CI_TTL_SECONDS,
     GITHUB_MCP_NAME,
     GITHUB_MCP_URL,
-    REVIEW_TTL_SECONDS,
     TICKET_TOOLS,
 )
 from .datastructures import PullRequest
@@ -405,9 +404,7 @@ class Build(Workflow):
         await PullRequestReview.dispatch(
             repo=(await self.subject).repo, pr_number=self.pr_number, account=self.account
         )
-        facts = await self.wait(
-            "review.completed", label="Waiting for the review", ttl_seconds=REVIEW_TTL_SECONDS
-        )
+        facts = await self.wait("review.completed", label="Waiting for the review")
         review = ReviewReport.model_validate(facts)
         self.journal.add(review)
         return review
@@ -646,7 +643,7 @@ class PullRequestReview(Workflow):
             subject=PullRequest(id=f"{repo}#{pr_number}"), account_id=account.id, note=note
         )
 
-    async def run(self, note: str = "") -> ReviewReport:
+    async def run_multistep(self, note: str = "") -> ReviewReport:
         # The finished event carries this, so a build waiting on the review reads it there.
         return await SoftwareFactory.review_pull_request()
 

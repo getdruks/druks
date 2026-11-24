@@ -101,6 +101,7 @@ async def get_workflow_settings(
                 session, kind, name, field.default, overrides=overrides
             ),
             overridden=f"workflow:{kind}:{name}" in overrides,
+            managed=False,
         )
         for name, field in workflow.Settings.model_fields.items()
     ]
@@ -151,6 +152,20 @@ async def get_app_settings(
     overrides: dict[str, SettingsOverride],
 ) -> AppSettingsResponse:
     model = app.settings_model
+    fields = model.model_fields if model else {}
+    configured = app.configured_settings()
+    values = {
+        name: await SettingsOverride.app_setting(
+            session,
+            app.name,
+            name,
+            field.default,
+            is_secret=field_kind(field) == "secret",
+            overrides=overrides,
+        )
+        for name, field in fields.items()
+    }
+    values.update(configured)
     return AppSettingsResponse(
         name=app.name,
         description=app.description,
@@ -172,16 +187,10 @@ async def get_app_settings(
             SettingsFieldResponse.from_field(
                 name,
                 field,
-                value=await SettingsOverride.app_setting(
-                    session,
-                    app.name,
-                    name,
-                    field.default,
-                    is_secret=field_kind(field) == "secret",
-                    overrides=overrides,
-                ),
+                value=values[name],
                 overridden=f"app:{app.name}:{name}" in overrides,
+                managed=name in configured,
             )
-            for name, field in (model.model_fields if model else {}).items()
+            for name, field in fields.items()
         ],
     )

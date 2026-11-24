@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
+import { useContext, useEffect, useId, useRef, useState, type ReactNode } from 'react'
 
 import type {
   Action,
@@ -16,23 +16,26 @@ import type {
 import { RelTime } from '../components/RelTime'
 import { ActionButton } from './Form'
 import { LinkControl } from './LinkControl'
+import { HasTextFormContext } from './pages'
 import { Image, Status } from './RunBlocks'
 
-// The plot's own coordinates; CSS gives it its real size.
+// The plot's own coordinates. CSS gives it its real size.
 const PLOT_WIDTH = 300
 const PLOT_HEIGHT = 120
 const BAR_GAP = 1
 
-/** One datum, wherever it sits — a fact, a metric, a list item, a table cell. */
+/** One value: of a fact, a metric, a list item, or a table cell. */
 export function Datum({ value }: { value: Value }) {
+  const hasTextForm = useContext(HasTextFormContext)
+
   switch (value.value) {
     case 'text':
       return <TextDatum text={value.text} description={value.description} link={value.link} />
     case 'number':
       return (
         <span className={`dui-number mono dui-number-${value.tone}`}>
-          {/* Grouped for reading, but never rounded: the app's number is the
-              operator's number. */}
+          {/* Grouped for reading, but never rounded. The operator sees the
+              app's exact number. */}
           {value.number.toLocaleString(undefined, { maximumFractionDigits: 20 })}
           {value.unit && <span className="dui-unit dim"> {value.unit}</span>}
         </span>
@@ -50,12 +53,15 @@ export function Datum({ value }: { value: Value }) {
       )
     case 'controls':
       return <Controls controls={value.controls} />
-    default:
+    default: {
+      const kind = (value as { value: string }).value
+      if (hasTextForm) throw new Error(`this dashboard cannot render a ${kind} value`)
       return (
         <span className="dui-unknown mono" role="alert">
-          this dashboard cannot render a {(value as { value: string }).value} value
+          this dashboard cannot render a {kind} value
         </span>
       )
+    }
   }
 }
 
@@ -72,8 +78,8 @@ function subjectStatusWord(
   return ['idle', 'neutral']
 }
 
-/** Where the work on one subject stands: the shell's word for the run, the
- * app's verb while it works, and the message of a run that stopped. */
+/** The state of the work on one subject. It shows the shell's word for the run,
+ * the app's verb while it works, and the message of a run that stopped. */
 function SubjectStatus({ value: { status, working } }: { value: SubjectStatusValue }) {
   if (!status) return null
   const [label, tone] = subjectStatusWord(status, working)
@@ -131,15 +137,85 @@ export function Chart({
   categoryLabel,
   valueLabel,
 }: {
-  kind: 'line' | 'bar' | 'area'
+  kind: 'line' | 'bar' | 'area' | 'pie'
   title: string
   categories: string[]
   series: ChartSeries[]
   categoryLabel: string
   valueLabel: string
 }) {
-  // One scale for every series, and always through zero, so a negative point
-  // reads below the line rather than as a shorter bar.
+  const caption = title && <figcaption className="dui-block-title">{title}</figcaption>
+  // The same numbers, for a reader who gets no picture.
+  const data = (
+    <table className="dui-chart-data">
+      <caption>{[title, valueLabel].filter(Boolean).join(' — ') || 'chart data'}</caption>
+      <thead>
+        <tr>
+          <th scope="col">{categoryLabel || 'category'}</th>
+          {series.map((one) => (
+            <th key={one.label} scope="col">
+              {one.label}
+            </th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {categories.map((category, index) => (
+          <tr key={category}>
+            <th scope="row">{category}</th>
+            {series.map((one) => (
+              <td key={one.label}>{one.points[index] ?? ''}</td>
+            ))}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+  if (kind === 'pie') {
+    const shares = series[0]?.points ?? []
+    const total = shares.reduce((sum, share) => sum + share, 0)
+    // Where a part of the whole ends on the unit circle, clockwise from twelve o'clock.
+    const edge = (part: number) => {
+      const angle = (2 * Math.PI * part) / total
+      return `${Math.sin(angle)} ${-Math.cos(angle)}`
+    }
+    return (
+      <figure className="dui-chart" data-kind={kind}>
+        {caption}
+        <svg className="dui-chart-pie" viewBox="-1 -1 2 2" aria-hidden="true">
+          {shares.length === 1 ? (
+            <circle className="dui-chart-slice dui-chart-bar-0" r={1} />
+          ) : (
+            shares.map((share, index) => {
+              const start = shares.slice(0, index).reduce((sum, earlier) => sum + earlier, 0)
+              const largeArc = share * 2 > total ? 1 : 0
+              return (
+                <path
+                  key={index}
+                  className={`dui-chart-slice dui-chart-bar-${index % 4}`}
+                  d={`M0 0L${edge(start)}A1 1 0 ${largeArc} 1 ${edge(start + share)}Z`}
+                />
+              )
+            })
+          )}
+        </svg>
+        <div className="dui-chart-legend" aria-hidden="true">
+          {categories.map((category, index) => (
+            <span key={category} className="dui-chart-key">
+              <span className={`dui-chart-swatch dui-chart-bar-${index % 4}`} />
+              {category}
+              <span className="dui-chart-value">
+                {shares[index]?.toLocaleString(undefined, { maximumFractionDigits: 20 })}
+              </span>
+            </span>
+          ))}
+        </div>
+        {data}
+      </figure>
+    )
+  }
+  // One scale for every series, and always through zero. A negative point then
+  // reads below the line, not as a shorter bar.
   const points = series.flatMap((one) => one.points)
   const lowest = Math.min(0, ...points)
   const highest = Math.max(0, ...points)
@@ -150,7 +226,7 @@ export function Chart({
   const baseline = place(0)
   return (
     <figure className="dui-chart" data-kind={kind}>
-      {title && <figcaption className="dui-block-title">{title}</figcaption>}
+      {caption}
       <svg
         className="dui-chart-plot"
         viewBox={`0 0 ${PLOT_WIDTH} ${PLOT_HEIGHT}`}
@@ -174,8 +250,8 @@ export function Chart({
             ))
           }
           const line = one.points.map((value, index) => `${across(index)},${place(value)}`).join(' ')
-          // Markers as well as the line: one point draws no segment, and a
-          // series of one would otherwise show nothing at all.
+          // Markers as well as the line. A line of one point draws no segment
+          // and shows nothing.
           const marks = one.points.map((value, index) => (
             <circle
               key={`${one.label}:${index}`}
@@ -221,30 +297,7 @@ export function Chart({
           ))}
         </div>
       )}
-      {/* The same numbers, for a reader who gets no picture. */}
-      <table className="dui-chart-data">
-        <caption>{[title, valueLabel].filter(Boolean).join(' — ') || 'chart data'}</caption>
-        <thead>
-          <tr>
-            <th scope="col">{categoryLabel || 'category'}</th>
-            {series.map((one) => (
-              <th key={one.label} scope="col">
-                {one.label}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {categories.map((category, index) => (
-            <tr key={category}>
-              <th scope="row">{category}</th>
-              {series.map((one) => (
-                <td key={one.label}>{one.points[index] ?? ''}</td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      {data}
     </figure>
   )
 }
@@ -257,8 +310,8 @@ export function ImageGallery({ title, images }: { title: string; images: ImageBl
       <ul className="dui-gallery-grid">
         {images.map((image) => (
           <li key={image.url}>
-            {/* A plain link: the image opens in its own tab, so viewing needs no
-                trap to escape from and the keyboard reaches every one. */}
+            {/* A plain link opens the image in its own tab. The gallery needs no
+                focus trap. The keyboard reaches every image. */}
             <a href={image.url} target="_blank" rel="noreferrer" className="dui-gallery-item">
               <Image
                 url={image.url}
@@ -364,7 +417,7 @@ export function Table({
     ) : null
 
   if (rows.length === 0) {
-    // Nothing to show and nothing to say about it: a heading over an empty box
+    // Nothing to show and nothing to say about it. A heading over an empty box
     // is worse than no block at all.
     if (!empty) return null
     return (

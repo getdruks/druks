@@ -1,12 +1,15 @@
+import json
 import logging
 import os
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
 
 import asyncssh
 from jsonpointer import JsonPointer, JsonPointerException
+from opentelemetry import trace
 from pydantic import (
     AfterValidator,
     BaseModel,
@@ -167,7 +170,23 @@ class _SecretsSource(NestedSecretsSettingsSource):
     def __call__(self) -> dict[str, Any]:
         # Each file in the table of a configured service is a secret of its card.
         tables = tuple(f"services.{slug}" for slug in self.current_state.get("services", {}))
-        return _pick(super().__call__(), Settings.secret_keys() + tables)
+        values = _pick(super().__call__(), (*Settings.secret_keys(), *tables))
+        # Each file apps.<name>.<field> is a secret setting of an app, and its value is
+        # the text it holds: decoded as JSON, 12345 or a key file in JSON is no string.
+        apps: dict[str, dict[str, str]] = {}
+        for name, text in self.env_vars.items():
+            if not name.startswith("apps."):
+                continue
+            table, _, field = name.removeprefix("apps.").partition(".")
+            if field == "enabled":
+                raise ValueError(
+                    f"The secret file {name} switches the app {table!r}, which only "
+                    f"druks.toml does. Remove the file, and set [apps.{table}] enabled."
+                )
+            apps.setdefault(table, {})[field] = text
+        if apps:
+            values["apps"] = apps
+        return values
 
 
 class Manager(BaseModel):
@@ -338,7 +357,9 @@ class Settings(BaseSettings):
     providers: Providers = Providers()
     traces: Traces = Traces()
     # An [apps.<name>] table with enabled = false leaves that app out of this installation.
-    apps: dict[str, dict] = {}
+    # A file apps.<name>.<field> puts a secret setting of the app in its table as plain
+    # text, so no output shows the field.
+    apps: dict[str, dict] = Field(default={}, repr=False, exclude=True)
     # A [services.<slug>] table makes the card of that service managed, or leaves the
     # service out of this installation when enabled = false. Each table holds its
     # secrets as plain text, so no output shows the field.
@@ -392,6 +413,8 @@ class Settings(BaseSettings):
     )
 
     log_level: str = Field(default="INFO", alias="DRUKS_LOG_LEVEL")
+    # ``text`` writes each record as a line of text, ``json`` as one JSON object.
+    log_format: Literal["text", "json"] = "text"
 
     @classmethod
     def settings_customise_sources(
@@ -402,9 +425,9 @@ class Settings(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,
         file_secret_settings: PydanticBaseSettingsSource,
     ) -> tuple[PydanticBaseSettingsSource, ...]:
-        """Each setting has one source. druks.toml sets ``timezone`` and the tables. The
-        environment sets the settings that carry an alias. A secret comes from the
-        environment, or from its file when DRUKS_SECRETS_DIR names a directory."""
+        """Each setting has one source. druks.toml sets ``timezone``, ``log_format``, and
+        the tables. The environment sets the settings that carry an alias. A secret comes
+        from the environment, or from its file when DRUKS_SECRETS_DIR names a directory."""
         return (
             init_settings,
             _TomlSource(settings_cls, toml_file=_config_path()),
@@ -470,11 +493,44 @@ def get_settings() -> Settings:
     return _settings
 
 
+class _JsonFormatter(logging.Formatter):
+    """One JSON object per record. Inside a span that Druks sends, the record names
+    the span's trace."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        line = {
+            "time": datetime.fromtimestamp(record.created, UTC).isoformat(),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+            "exception": self.formatException(record.exc_info) if record.exc_info else None,
+        }
+        context = trace.get_current_span().get_span_context()
+        # The span of a request that the sampler drops is valid too, but its trace
+        # never reaches the collector.
+        if context.trace_flags.sampled:
+            line["trace_id"] = trace.format_trace_id(context.trace_id)
+            line["span_id"] = trace.format_span_id(context.span_id)
+        return json.dumps(line)
+
+
 def setup_logging(settings: Settings) -> None:
-    logging.basicConfig(
-        level=settings.log_level,
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    )
+    if settings.log_format == "text":
+        logging.basicConfig(
+            level=settings.log_level,
+            format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        )
+    else:
+        handler = logging.StreamHandler()
+        handler.setFormatter(_JsonFormatter())
+        logging.basicConfig(level=settings.log_level, handlers=[handler])
+        # DBOS, FastMCP and uvicorn give their loggers handlers of text and stop
+        # propagation. DBOS adds its handler only to a logger without one, and
+        # setup_logging runs before DBOS starts.
+        for name in ("dbos", "fastmcp", "uvicorn", "uvicorn.access"):
+            logger = logging.getLogger(name)
+            logger.handlers = [handler]
+            logger.propagate = False
     # asyncssh logs every channel and sftp event at INFO, dozens per sandbox
     # operation. Real failures stay audible at WARNING.
     asyncssh.set_log_level(logging.WARNING)

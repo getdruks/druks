@@ -1,6 +1,7 @@
 from dbos import DBOS
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import AwareDatetime
+from sqlalchemy import select
 
 from druks.accounts.dependencies import current_session_account
 from druks.accounts.models import Account
@@ -13,11 +14,14 @@ from druks.durable.models import AgentCall, Run
 from druks.durable.reads import get_run_response
 from druks.durable.schemas import RunResponse
 from druks.exceptions import PermissionDenied
+from druks.files import File
+from druks.files.routes import get_file
 from druks.notifications.services import list_notification_channels
 from druks.schedules.models import Schedule
 from druks.schedules.schemas import AgentScheduleResponse
 
 router = APIRouter(prefix="/api/agents", tags=["agents"])
+media_router = APIRouter(prefix="/media", tags=["media"])
 
 
 async def require_agent_editor(
@@ -161,3 +165,12 @@ async def delete_agent(
     for schedule in await Schedule.list_for_agent(session, agent.id):
         await DBOS.delete_schedule_async(schedule.schedule_name)
     await agent.delete()
+
+
+@media_router.get("/{file_id}")
+async def get_picture(session: SessionDep, file_id: str, request: Request) -> Response:
+    """A channel's servers fetch an agent's picture at a public address, with no sign-in.
+    Only a file that is an agent's picture answers here."""
+    if not await session.scalar(select(Agent.id).where(Agent.picture == File(id=file_id))):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "picture not found")
+    return await get_file(session, file_id, request)

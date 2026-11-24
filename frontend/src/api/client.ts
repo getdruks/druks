@@ -2,7 +2,6 @@ import type {
   Account,
   AgentSchedule,
   AccountRole,
-  InstructionsResponse,
   AgentCallFiles,
   ArtifactContent,
   Automation,
@@ -335,7 +334,6 @@ export const api = {
   updatePersonalSettings: (body: UpdatePersonalSettingsRequest) =>
     patchJSON<PersonalSettings>('/api/settings/personal', body),
   harnesses: () => getJSON<Harness[]>('/api/settings/harnesses'),
-  instructions: () => getJSON<InstructionsResponse>('/api/instructions'),
   accounts: () => getJSON<Account[]>('/api/auth/accounts'),
   setAccountRole: (accountId: string, role: AccountRole) =>
     patchJSON<Account>(`/api/auth/accounts/${encodeURIComponent(accountId)}`, { role }),
@@ -345,7 +343,7 @@ export const api = {
     postJSON<Team>(`/api/teams/${encodeURIComponent(teamId)}`, body, 'PUT'),
   deleteTeam: (teamId: string) => deleteRequest(`/api/teams/${encodeURIComponent(teamId)}`),
   agents: () => getJSON<Agent[]>('/api/agents'),
-  createAgent: (body: Omit<AgentInput, 'ownerId' | 'channelId' | 'pictureUrl'>) =>
+  createAgent: (body: Omit<AgentInput, 'ownerId' | 'channelId' | 'picture'>) =>
     postJSON<Agent>('/api/agents', body),
   updateAgent: (agentId: string, body: AgentInput) =>
     postJSON<Agent>(`/api/agents/${encodeURIComponent(agentId)}`, body, 'PUT'),

@@ -3,11 +3,12 @@ import json
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import jwt as pyjwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
+from dbos import DBOS
 from druks import tracing, workflows
 from druks.accounts import jwt as assertion
 from druks.accounts.models import Account
@@ -33,7 +34,7 @@ from druks.testing import (
     seed_call,
     seed_run,
 )
-from druks.workflows import Workflow
+from druks.workflows import Workflow, current_workflow
 from druks_field_notes.models import Note
 from druks_field_notes.workflows import Summarize
 from fastapi.testclient import TestClient
@@ -227,6 +228,7 @@ def _no_durable_dispatch(request, monkeypatch):
     monkeypatch.setattr("druks.durable.reads.get_run_phase_ends_at", _phase_noop)
     monkeypatch.setattr("dbos.DBOS.cancel_workflow_async", _dbos_cancel)
     monkeypatch.setattr("dbos.DBOS.start_workflow_async", _noop)
+    monkeypatch.setattr("dbos.DebouncerClient.debounce_async", _noop)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -407,6 +409,35 @@ async def seed_note_run(session, *, note=None, state: str = "running", **kwargs)
     """A run on a note, seeding one if the caller has none."""
     subject = note or await make_test_note()
     return await seed_run(session, kind=Summarize.kind, subject=subject, state=state, **kwargs)
+
+
+@pytest.fixture
+def direct_steps(monkeypatch):
+    """Run each DBOS step in place, and return the options of each step that ran. A run that
+    parks sends its account no notification."""
+    steps = []
+
+    async def call_through(options, function, *args, **kwargs):
+        steps.append(options)
+        return await function(*args, **kwargs)
+
+    monkeypatch.setattr(DBOS, "run_step_async", call_through)
+    monkeypatch.setattr("druks.workflows._notify_account", AsyncMock())
+    return steps
+
+
+@pytest.fixture
+async def summarize(druks_db, direct_steps):
+    """The proof app's workflow, in the body of its run on a note."""
+    note = await Note.create(body="A plan")
+    run = await seed_run(druks_db, kind=Summarize.kind, subject=note)
+    workflow = Summarize()
+    workflow._workflow_id = run.id
+    workflow._subject = note.identity
+    workflow.subject = note
+    token = current_workflow.set(workflow)
+    yield workflow
+    current_workflow.reset(token)
 
 
 async def seed_note_agent_run(*, agent: str = "implement", model: str = "openai/gpt-5.5", **kwargs):

@@ -7,6 +7,7 @@ import pytest
 from druks.accounts.constants import PAT_TOKEN_TAG
 from druks.accounts.exceptions import InvalidPatError
 from druks.accounts.models import Account, PersonalAccessToken
+from druks.api.client import call_route
 from druks.db import db_session as session_registry
 from druks.models import Base
 from druks.testing import configure_app_for_test, make_settings
@@ -293,3 +294,31 @@ def test_a_token_needs_a_name_that_fits(tmp_path, druks_db):
             "/api/auth/personal-tokens", json={"name": "x" * 81}, headers=OPERATOR
         )
         assert too_long.status_code == 422
+
+
+async def test_a_route_for_the_signed_in_person_refuses_a_call_from_inside_druks(
+    tmp_path, druks_db
+):
+    operator = await Account.get_or_create(druks_db, "op@example.com")
+    # With no sign-in, the route would answer the one operator.
+    configure_app_for_test(
+        settings=make_settings(tmp_path, identity={"mode": "none"}), authenticated=False
+    )
+
+    response = await call_route("GET", "/api/auth/personal-tokens", json={}, account_id=operator.id)
+
+    assert response.status_code == 401
+
+
+async def test_a_call_from_inside_druks_is_no_key_that_drives_a_browser(tmp_path, druks_db):
+    account = await Account.get_or_create(druks_db, "agent@example.com")
+    configure_app_for_test(settings=make_settings(tmp_path), authenticated=False)
+
+    response = await call_route(
+        "POST",
+        "/api/browser/navigate",
+        json={"url": "https://atlas.example"},
+        account_id=account.id,
+    )
+
+    assert (response.status_code, response.json()["detail"]) == (409, "This key drives no browser.")

@@ -75,7 +75,7 @@ beforeEach(() => {
     isPrivate: false,
     ownerId: 'admin',
     channelId: null,
-    pictureUrl: null,
+    picture: null,
   })
   vi.spyOn(api, 'accounts').mockResolvedValue([admin, member])
   vi.spyOn(api, 'agentSchedules').mockResolvedValue([

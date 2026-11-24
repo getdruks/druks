@@ -1,3 +1,4 @@
+from druks import ui
 from druks.sandbox import Sandbox
 from druks.workflows import Workflow, step
 from druks.workspaces import RepoWorkspace
@@ -16,7 +17,9 @@ class Summarize(Workflow):
         note = await self.subject
         operator_note = ""
         while True:
+            await self.report([ui.Markdown("Writing the gist.")])
             result = await FieldNotes.summarize(note_body=note.body, operator_note=operator_note)
+            await self.report([ui.Facts([ui.Fact("Gist", result.gist)])])
             reply = await self.review()
             if reply.action == "approve":
                 break

@@ -21,7 +21,12 @@ from mcp.types import CallToolRequestParams, ToolAnnotations
 
 from druks.accounts.exceptions import InvalidPatError
 from druks.accounts.models import Account, PersonalAccessToken
-from druks.api.exceptions import AgentApiError, InvalidToolArguments, ToolNotAvailable
+from druks.api.exceptions import (
+    AgentApiError,
+    InvalidToolArguments,
+    ToolNotAvailable,
+    get_refusal,
+)
 from druks.apps.exceptions import AppBotError
 from druks.database import session_scope
 from druks.mcp.exceptions import InvalidAgentToolError
@@ -38,7 +43,7 @@ answer_gate must echo that parkedAt unchanged — it names the exact question
 being answered, and a repeat answer reports already_answered. get_agent_call
 returns bounded transcript and stderr tails, never full payloads. cancel_run
 records its reason as the run's failure. retry_run reruns a failed run from
-the step that killed it. get_usage is the caller's quota and today's spend.
+where it stopped. get_usage is the caller's quota and today's spend.
 There is no push channel; poll list_open_subjects at ~30s intervals while
 waiting. A tool failure is one JSON object, {code, message, retryable}.
 """
@@ -95,23 +100,8 @@ class ToolErrors(Middleware):
         except AgentApiError as error:
             body = {"code": error.code, "message": str(error), "retryable": error.retryable}
         except ToolError as error:
-            body = self._parse_refusal(error.__cause__.response)
+            body = get_refusal(error.__cause__.response)
         raise ToolError(json.dumps(body))
-
-    @staticmethod
-    def _parse_refusal(response: httpx2.Response) -> dict:
-        # An agent route answers in this shape already. Every other route answers
-        # {error, detail}, and a validation error's detail lists the refused fields.
-        refusal = response.json()
-        if "code" in refusal:
-            return refusal
-        message = refusal["detail"]
-        if refusal["error"] == "VALIDATION_ERROR":
-            message = "; ".join(
-                f"{'.'.join(map(str, field_error['loc'][1:]))}: {field_error['msg']}"
-                for field_error in refusal["detail"]
-            )
-        return {"code": refusal["error"], "message": message, "retryable": False}
 
 
 class StrictInputValidation(Middleware):

@@ -9,6 +9,7 @@ from druks.registry import app_registry, iter_apps
 from druks.settings import get_settings
 
 from . import exceptions
+from .settings import field_kind
 
 if TYPE_CHECKING:
     from importlib.metadata import EntryPoint
@@ -21,7 +22,8 @@ _GROUP = "druks.apps"
 
 def load_installed_apps() -> None:
     """Fill the apps registry with every installed app that druks.toml leaves
-    enabled. A process calls this once where it starts."""
+    enabled, and check that each secret file of an app names a Secret setting of it.
+    A process calls this once where it starts."""
     # A model can name a model of another package: Account.teams names Team. The
     # name resolves only when that package is loaded, so a process loads it here.
     import druks.teams.models  # noqa: F401
@@ -31,8 +33,8 @@ def load_installed_apps() -> None:
     for name in tables:
         if name not in entries.names:
             raise exceptions.AppNotFound(
-                f"druks.toml configures the app {name!r}, and no installed package "
-                f"provides it. Remove [apps.{name}]."
+                f"druks.toml or a secret file configures the app {name!r}, and no installed "
+                f"package provides it. Remove [apps.{name}] and each file apps.{name}.*."
             )
     disabled = {name for name, table in tables.items() if not table.get("enabled", True)}
     app_registry.clear()
@@ -48,6 +50,15 @@ def load_installed_apps() -> None:
                 f"{app.name!r} — the entry-point name must match App.name"
             )
         app_registry.register(app)
+    for name, table in tables.items():
+        app = app_registry.get(name)
+        fields = app.settings_model.model_fields if app and app.settings_model else {}
+        for field in set(table) - {"enabled"}:
+            if field not in fields or field_kind(fields[field]) != "secret":
+                raise exceptions.SecretFileError(
+                    f"The file apps.{name}.{field} in DRUKS_SECRETS_DIR names no Secret "
+                    "setting of an enabled app. Remove the file."
+                )
 
 
 def load_app(name: str) -> type[App]:

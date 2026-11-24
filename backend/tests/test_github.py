@@ -548,6 +548,44 @@ async def test_post_check_run_updates_the_run_this_app_already_posted() -> None:
     ]
 
 
+def _actions_client(actions: Any) -> _TestGitHubClient:
+    return _TestGitHubClient(SimpleNamespace(rest=SimpleNamespace(actions=actions)))
+
+
+async def test_dispatch_workflow_returns_the_run_it_started() -> None:
+    dispatched = SimpleNamespace(parsed_data=SimpleNamespace(workflow_run_id=4512))
+    actions = SimpleNamespace(async_create_workflow_dispatch=AsyncMock(return_value=dispatched))
+
+    run_id = await _actions_client(actions).dispatch_workflow(
+        "acme/portal", "deploy.yml", ref="main", inputs={"environment": "dev"}
+    )
+
+    assert run_id == 4512
+    actions.async_create_workflow_dispatch.assert_awaited_once_with(
+        "acme", "portal", "deploy.yml", ref="main", inputs={"environment": "dev"}
+    )
+
+
+async def test_dispatch_workflow_without_inputs_omits_them() -> None:
+    dispatched = SimpleNamespace(parsed_data=SimpleNamespace(workflow_run_id=4512))
+    actions = SimpleNamespace(async_create_workflow_dispatch=AsyncMock(return_value=dispatched))
+
+    await _actions_client(actions).dispatch_workflow("acme/portal", "deploy.yml", ref="main")
+
+    actions.async_create_workflow_dispatch.assert_awaited_once_with(
+        "acme", "portal", "deploy.yml", ref="main", inputs=github_api.UNSET
+    )
+
+
+async def test_get_workflow_run_reads_its_status_and_conclusion() -> None:
+    run = {"status": "completed", "conclusion": "success", "html_url": "https://x/runs/4512"}
+    fetched = SimpleNamespace(parsed_data=SimpleNamespace(model_dump=lambda: run))
+    actions = SimpleNamespace(async_get_workflow_run=AsyncMock(return_value=fetched))
+
+    assert await _actions_client(actions).get_workflow_run("acme/portal", 4512) == run
+    actions.async_get_workflow_run.assert_awaited_once_with("acme", "portal", 4512)
+
+
 def test_github_clients_wait_with_a_limit() -> None:
     clients = [
         GitHubClient("token", app_id="1", slug="druks")._github,

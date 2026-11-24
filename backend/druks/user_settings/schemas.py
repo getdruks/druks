@@ -78,7 +78,7 @@ class UpdateSettingsRequest(BaseModel):
     default_timeout: PositiveInt | None = Field(default=None, validation_alias="defaultTimeout")
 
 
-Source = Literal["agent", "default"]
+Source = Literal["override", "default"]
 
 
 class InstructionSettingResponse(Schema):
@@ -94,16 +94,7 @@ class InstructionSettingResponse(Schema):
     effort: str
     effort_source: Source
     timeout: int
-    timeout_source: Literal["agent", "declared", "default"]
-
-
-class InstructionsAppResponse(Schema):
-    name: str
-    instructions: list[InstructionSettingResponse]
-
-
-class InstructionsResponse(Schema):
-    apps: list[InstructionsAppResponse]
+    timeout_source: Literal["override", "declared", "default"]
 
 
 class SettingsFieldResponse(Schema):
@@ -123,10 +114,12 @@ class SettingsFieldResponse(Schema):
     secret_set: bool | None
     multiline: bool = False
     overridden: bool
+    # A secret file sets the field, so the settings form cannot change or clear it.
+    managed: bool = False
 
     @classmethod
     def from_field(
-        cls, name: str, field: FieldInfo, *, value: Any, overridden: bool
+        cls, name: str, field: FieldInfo, *, value: Any, overridden: bool, managed: bool
     ) -> "SettingsFieldResponse":
         kind = field_kind(field)
         secret = kind == "secret"
@@ -146,6 +139,7 @@ class SettingsFieldResponse(Schema):
             secret_set=bool(value) if secret else None,
             multiline=field_multiline(field),
             overridden=overridden,
+            managed=managed,
         )
 
 
@@ -177,26 +171,28 @@ class AppsSettingsResponse(Schema):
 
 
 class AppsSettingsUpdate(BaseModel):
-    # Each map is agent name to value. Null inherits the operator default.
-    agent_harnesses: dict[str, str | None] = Field(
+    model_config = ConfigDict(extra="forbid")
+
+    # Each map is instruction or bot id to value. Null inherits the operator default.
+    instruction_harnesses: dict[str, str | None] = Field(
         default_factory=dict,
-        validation_alias="agentHarnesses",
+        validation_alias="instructionHarnesses",
     )
-    agent_models: dict[str, str | None] = Field(
+    instruction_models: dict[str, str | None] = Field(
         default_factory=dict,
-        validation_alias="agentModels",
+        validation_alias="instructionModels",
     )
-    agent_billings: dict[str, Billing | None] = Field(
+    instruction_billings: dict[str, Billing | None] = Field(
         default_factory=dict,
-        validation_alias="agentBillings",
+        validation_alias="instructionBillings",
     )
-    agent_efforts: dict[str, Effort | None] = Field(
+    instruction_efforts: dict[str, Effort | None] = Field(
         default_factory=dict,
-        validation_alias="agentEfforts",
+        validation_alias="instructionEfforts",
     )
-    agent_timeouts: dict[str, PositiveInt | None] = Field(
+    instruction_timeouts: dict[str, PositiveInt | None] = Field(
         default_factory=dict,
-        validation_alias="agentTimeouts",
+        validation_alias="instructionTimeouts",
     )
     # workflow kind -> {field -> value} (null clears).
     workflow_settings: dict[str, dict[str, Any]] = Field(

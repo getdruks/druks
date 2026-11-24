@@ -5,6 +5,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import HTTPConnection
 
+from druks.accounts.constants import ACCOUNT_SCOPE_KEY
 from druks.accounts.context import current_account_id
 from druks.accounts.exceptions import (
     AuthConfigurationError,
@@ -93,7 +94,7 @@ async def _resolve_operator(session: AsyncSession, connection: HTTPConnection) -
 
 
 def _require_no_bearer(connection: HTTPConnection) -> None:
-    if "Authorization" in connection.headers:
+    if "Authorization" in connection.headers or ACCOUNT_SCOPE_KEY in connection.scope:
         raise HTTPException(
             status_code=401,
             detail="This API accepts your edge or local operator identity only, "
@@ -106,13 +107,12 @@ async def require_operator(session: AsyncSession, websocket: WebSocket) -> Accou
     identity HTTP uses — druks re-asserts it here rather than trusting the edge,
     as every /api route does."""
     _require_no_bearer(websocket)
-    account = await _resolve_operator(session, websocket)
-    if not account:
-        raise HTTPException(
-            status_code=409,
-            detail="No operator account exists yet — connect a provider to finish setup.",
-        )
-    return account
+    if account := await _resolve_operator(session, websocket):
+        return account
+    raise HTTPException(
+        status_code=409,
+        detail="No operator account exists yet — connect a provider to finish setup.",
+    )
 
 
 async def current_account(
@@ -120,12 +120,16 @@ async def current_account(
     session: SessionDep,
     bearer: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
 ) -> AsyncIterator[Account]:
-    """The Bearer PAT when Authorization is present — present-but-empty still
-    challenges — else the session identity."""
-    if "Authorization" in request.headers:
+    """The account that a call from inside Druks names, else the Bearer PAT when
+    Authorization is present — present-but-empty still challenges — else the session
+    identity."""
+    # Only a request that authenticates with a key carries one, for a route that acts per key.
+    request.state.pat = None
+    if account_id := request.scope.get(ACCOUNT_SCOPE_KEY):
+        account = await session.get(Account, account_id)
+    elif "Authorization" in request.headers:
         account = await resolve_pat_account(session, request, bearer)
     else:
-        request.state.pat = None
         account = await _resolve_operator(session, request)
         if not account:
             raise HTTPException(

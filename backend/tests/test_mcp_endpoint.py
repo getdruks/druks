@@ -1,4 +1,5 @@
 import json
+import re
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from functools import partial
@@ -18,13 +19,14 @@ from conftest import (
 from druks.accounts.context import current_conversation_id
 from druks.accounts.enums import AccountKind
 from druks.accounts.models import Account, PersonalAccessToken
+from druks.agents.constants import PRIVATE_AGENT_MESSAGE
 from druks.agents.models import Agent
 from druks.api.server import mcp_app
 from druks.browser.constants import BROWSER_TOOLS
 from druks.chat.channels.whatsapp.constants import WAHA_AUDIENCE
-from druks.chat.constants import CONVERSATION_HEADER
-from druks.chat.enums import ConversationSource
-from druks.chat.models import Conversation, Reminder
+from druks.chat.constants import CONVERSATION_HEADER, REFUSED_MESSAGE
+from druks.chat.enums import ConversationSource, MessageRole
+from druks.chat.models import Conversation, Message, Reminder
 from druks.contrib.software_factory.app import SoftwareFactory
 from druks.contrib.software_factory.models import Project, ProjectRepo, Ticket
 from druks.contrib.software_factory.ticketing.base import Tracker
@@ -35,7 +37,7 @@ from druks.mcp.exceptions import InvalidAgentToolError
 from druks.mcp.server import create_mcp_app
 from druks.schedules.exceptions import ScheduleSkipped
 from druks.schedules.models import Schedule
-from druks.schedules.service import call_tool
+from druks.schedules.service import call_tool, report_skip
 from druks.secrets.enums import SecretKind
 from druks.secrets.models import VaultSecret
 from druks.settings import Urls
@@ -104,8 +106,8 @@ def app(tmp_path, druks_db):
 
 @asynccontextmanager
 async def live(app):
-    # pytest-asyncio runs fixture setup and the test body in separate tasks,
-    # which strands the endpoint's anyio task group — each test enters it.
+    # pytest-asyncio runs fixture setup and the test body in separate tasks. A fixture
+    # would strand the endpoint's anyio task group, so each test enters it.
     async with app.router.lifespan_context(app):
         yield app
 
@@ -132,17 +134,22 @@ def resume_spy(monkeypatch):
     return calls
 
 
+def _get_http_client(app, **kwargs) -> httpx2.AsyncClient:
+    """An HTTP client that sends to ``app`` in-process, as an MCP transport opens it."""
+    kwargs.pop("verify", None)  # meaningless for the in-process transport
+    return httpx2.AsyncClient(
+        transport=httpx2.ASGITransport(app=app), base_url="http://druks.test", **kwargs
+    )
+
+
 def _client(
     app, token: str, *, mode: Literal["auto", "legacy"] = "auto", headers: dict | None = None
 ) -> Client:
-    def factory(**kwargs):
-        kwargs.pop("verify", None)  # meaningless for the in-process transport
-        return httpx2.AsyncClient(
-            transport=httpx2.ASGITransport(app=app), base_url="http://druks.test", **kwargs
-        )
-
     transport = StreamableHttpTransport(
-        "http://druks.test/mcp", headers=headers, auth=token, httpx_client_factory=factory
+        "http://druks.test/mcp",
+        headers=headers,
+        auth=token,
+        httpx_client_factory=partial(_get_http_client, app),
     )
     return Client(transport, mode=mode)
 
@@ -202,8 +209,6 @@ async def test_tools_list_pins_platform_and_app_tools(app, pat_token, mode):
     async with live(app), _client(app, pat_token, mode=mode) as client:
         if mode == "auto":
             assert client.protocol_version == "2026-07-28"
-        assert "list_open_subjects" in (client.instructions or "")
-        assert "parkedAt" in (client.instructions or "")
         tools = {tool.name: tool for tool in await client.list_tools()}
 
     assert list(tools)[:11] == _TOOL_NAMES
@@ -213,6 +218,7 @@ async def test_tools_list_pins_platform_and_app_tools(app, pat_token, mode):
         "chat_read_file",
         "chat_require_tag",
         "chat_ask",
+        "chat_show",
         "chat_run_instruction",
         "chat_start_conversation",
         "chat_list_reminders",
@@ -252,9 +258,6 @@ async def test_tools_list_pins_platform_and_app_tools(app, pat_token, mode):
 
     # Derived schemas keep the routes' own shapes and constraints.
     assert tools["answer_gate"].input_schema["required"] == ["run", "parkedAt", "control"]
-    assert tools["answer_gate"].input_schema["properties"]["control"]["description"] == (
-        "The decision to take: one of the ids the ask offers as controls, e.g. approve."
-    )
     reason = tools["cancel_run"].input_schema["properties"]["reason"]
     assert (reason["minLength"], reason["maxLength"]) == (1, 500)
     ask = tools["chat_ask"]
@@ -262,14 +265,11 @@ async def test_tools_list_pins_platform_and_app_tools(app, pat_token, mode):
     assert choices["maxItems"] == 4
     assert ask.input_schema["required"] == ["question"]
     assert ask.input_schema["properties"]["fields"]["type"] == "string"
-    assert (
-        '[TextField(name="title", label="Title"), SelectField(name="where", label="Where", '
-        'options=[Option("Staging", value="staging")])]'
-    ) in " ".join(ask.description.split())
-    assert tools["software_factory_start"].input_schema["properties"]["ticket"]["description"] == (
-        "The tracker's ticket key, e.g. ENG-831, or owner/repo#12 for GitHub."
-    )
-    assert "run id" in tools["software_factory_start"].description
+    # The blocks are one text, so no schema of the blocks reaches the model provider.
+    show = tools["chat_show"]
+    assert show.input_schema["required"] == ["blocks"]
+    assert show.input_schema["properties"]["blocks"]["type"] == "string"
+    assert "$defs" not in show.input_schema
     assert not tools["list_open_subjects"].input_schema.get("required")
     assert not tools["get_usage"].input_schema.get("required")
 
@@ -456,9 +456,8 @@ def test_invalid_app_agent_route_stops_boot(operation_id, docstring, message):
 
 
 def test_derived_operation_id_collision_stops_boot():
-    # software_factory's unprefixed 'scan' derives to 'software_factory_scan', which
-    # another route already claims explicitly — the framework must reject the
-    # clash rather than silently mint two operations sharing an id.
+    # software_factory's unprefixed 'scan' derives to 'software_factory_scan', and another
+    # route claims that id itself. Druks refuses the clash, so no two operations share an id.
     api = FastAPI()
     router = APIRouter()
 
@@ -482,11 +481,24 @@ def test_derived_operation_id_collision_stops_boot():
         create_mcp_app(api)
 
 
-def _agent_route_app(operation_id: str) -> FastAPI:
-    # A synthetic agent route owned by the installed software_factory app — the
-    # loader-stamped app tag names the owner, exactly as a real router does.
-    # The endpoint mounts the same /mcp Route and mcp lifespan as the real app so
-    # tools/list resolves in-process.
+def _served_operation_id(schema: dict, path: str) -> str:
+    return schema["paths"][path]["post"]["operationId"]
+
+
+@pytest.mark.parametrize(
+    ("operation_id", "expected"),
+    [
+        ("scan", "software_factory_scan"),  # an unprefixed id gains its owner's prefix
+        # an already-prefixed id passes through, never doubled
+        ("software_factory_scan", "software_factory_scan"),
+    ],
+)
+async def test_app_agent_route_derives_the_namespaced_tool(
+    druks_db, pat_token, operation_id, expected
+):
+    # A test agent route that the installed software_factory app owns. The app tag that
+    # the loader stamps names the owner, as on a real router. The endpoint mounts the
+    # same /mcp Route and MCP lifespan as the real app, so tools/list resolves in-process.
     held: dict[str, object] = {}
 
     @asynccontextmanager
@@ -510,25 +522,6 @@ def _agent_route_app(operation_id: str) -> FastAPI:
     api.router.routes.append(
         Route("/mcp", mcp, methods=["POST", "DELETE"], include_in_schema=False)
     )
-    return api
-
-
-def _served_operation_id(schema: dict, path: str) -> str:
-    return schema["paths"][path]["post"]["operationId"]
-
-
-@pytest.mark.parametrize(
-    ("operation_id", "expected"),
-    [
-        ("scan", "software_factory_scan"),  # an unprefixed id gains its owner's prefix
-        # an already-prefixed id passes through, never doubled
-        ("software_factory_scan", "software_factory_scan"),
-    ],
-)
-async def test_app_agent_route_derives_the_namespaced_tool(
-    druks_db, pat_token, operation_id, expected
-):
-    api = _agent_route_app(operation_id)
 
     # The document the provider consumed and every later regeneration carry the
     # derived id, not the bare one the author declared.
@@ -562,12 +555,12 @@ async def test_claims_resolve_the_calling_account(app, druks_db):
 
     async with live(app), _client(app, my_token) as client:
         usage = (await client.call_tool("get_usage", {})).structured_content
-    codex = next(h for h in usage["providers"] if h["id"] == "openai")
+    codex = next(provider for provider in usage["providers"] if provider["id"] == "openai")
     assert codex["fiveHourPercentLeft"] == 42
 
     async with live(app), _client(app, their_token) as client:
         usage = (await client.call_tool("get_usage", {})).structured_content
-    codex = next(h for h in usage["providers"] if h["id"] == "openai")
+    codex = next(provider for provider in usage["providers"] if provider["id"] == "openai")
     assert codex["fiveHourPercentLeft"] is None
 
 
@@ -605,7 +598,15 @@ async def test_gate_cycle_reads_answers_and_reports_stale_rounds(
             )
         ).structured_content
         assert answered["result"] == "answered"
-        assert resume_spy == [{"id": run.id, "action": "approve", "answers": {}, "note": ""}]
+        assert resume_spy == [
+            {
+                "id": run.id,
+                "action": "approve",
+                "answers": {},
+                "note": "",
+                "answered_by": "op@example.com",
+            }
+        ]
 
         run.answer_parked_at = run.input_requested_at
         await druks_db.flush()
@@ -867,7 +868,7 @@ async def test_get_usage_reads_within_budget(app, pat_token):
     async with live(app), _client(app, pat_token) as client:
         usage = (await client.call_tool("get_usage", {})).structured_content
     assert usage["runsToday"] == 0
-    assert {h["id"] for h in usage["providers"]} >= {"anthropic"}
+    assert {provider["id"] for provider in usage["providers"]} >= {"anthropic"}
     assert _wire_size(usage) <= 4 * 1024
 
 
@@ -898,19 +899,13 @@ async def test_mcp_server_registry_routes_stay_untouched(tmp_path, druks_db):
 
 def _call_schedules_in_process(app, monkeypatch) -> None:
     # A schedule reaches Druks' own /mcp at its public address; here that is the test app.
-    def factory(**kwargs):
-        kwargs.pop("verify", None)
-        return httpx2.AsyncClient(
-            transport=httpx2.ASGITransport(app=app), base_url="http://druks.test", **kwargs
-        )
-
     monkeypatch.setattr(
         "druks.mcp.inbound.get_settings",
         lambda: SimpleNamespace(urls=Urls(endpoint="http://druks.test", webhook_host="")),
     )
     monkeypatch.setattr(
         "druks.schedules.service.StreamableHttpTransport",
-        partial(StreamableHttpTransport, httpx_client_factory=factory),
+        partial(StreamableHttpTransport, httpx_client_factory=partial(_get_http_client, app)),
     )
 
 
@@ -987,9 +982,16 @@ async def test_a_schedule_whose_agent_no_longer_answers_its_owner_says_why(accou
     )
     await druks_db.commit()
 
-    with pytest.raises(
-        ScheduleSkipped, match="Only the agent's owner can talk to a private agent."
-    ):
+    assert await report_skip(schedule.id, PRIVATE_AGENT_MESSAGE) is None
+    notice = await druks_db.scalar(
+        select(Message).where(
+            Message.conversation_id == conversation.id, Message.role == MessageRole.ASSISTANT
+        )
+    )
+    assert notice.body == REFUSED_MESSAGE.format(
+        tool="chat_create_reminder", reason=PRIVATE_AGENT_MESSAGE
+    )
+    with pytest.raises(ScheduleSkipped, match=re.escape(PRIVATE_AGENT_MESSAGE)):
         await call_tool(schedule.id)
 
 

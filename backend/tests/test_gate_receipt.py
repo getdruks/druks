@@ -2,14 +2,18 @@ from unittest.mock import AsyncMock
 
 import pytest
 from dbos import DBOS
-from dbos._error import DBOSWorkflowCancelledError
+from dbos import error as dbos_error
 from druks import ui
+from druks.accounts.models import Account
 from druks.contrib.software_factory.workflows import PullRequestReview
-from druks.durable.exceptions import GateTimeout
+from druks.durable.exceptions import GateTimeout, WorkflowError
 from druks.durable.models import Run
 from druks.durable.reads import read_ask
 from druks.events.models import Event
+from druks.exceptions import ObjectNotFound, PermissionDenied
+from druks.teams.models import Team
 from druks.testing import seed_run
+from druks.ui.blocks import iter_parts
 from druks.ui.exceptions import NoTextFormError
 from druks.workflows import OperatorReply, YesNo, current_workflow
 from druks_field_notes.models import Note
@@ -27,29 +31,6 @@ _STORED_ASK = {
     "reply_fields": ["action", "answers", "note"],
 }
 _NOTE = ui.Follows(subject_type="note", subject_id="7")
-
-
-@pytest.fixture
-def direct_steps(monkeypatch):
-    async def call_through(options, function, *args, **kwargs):
-        return await function(*args, **kwargs)
-
-    monkeypatch.setattr(DBOS, "run_step_async", call_through)
-    monkeypatch.setattr("druks.workflows._notify_account", AsyncMock())
-
-
-@pytest.fixture
-async def summarize(druks_db, direct_steps):
-    """The proof app's workflow, in the body of its run on a note."""
-    note = await Note.create(body="A plan")
-    run = await seed_run(druks_db, kind=Summarize.kind, subject=note)
-    workflow = Summarize()
-    workflow._workflow_id = run.id
-    workflow._subject = note.identity
-    workflow.subject = note
-    token = current_workflow.set(workflow)
-    yield workflow
-    current_workflow.reset(token)
 
 
 @pytest.fixture(params=["gate", "review"])
@@ -91,7 +72,12 @@ async def test_valid_reply_records_the_request_round_before_current_fields_clear
         assert event.payload["gate"] == "review"
         assert event.payload["input_requested_at"] == run.input_requested_at.isoformat()
     assert request.payload["input_request"] == _STORED_ASK
-    assert receipt.payload["result"] == {"action": "approve", "answers": {}, "note": ""}
+    assert receipt.payload["result"] == {
+        "action": "approve",
+        "answers": {},
+        "note": "",
+        "answered_by": "",
+    }
 
 
 async def test_yes_no_parks_with_its_own_controls(druks_db, direct_steps, monkeypatch):
@@ -120,6 +106,42 @@ async def test_yes_no_parks_with_its_own_controls(druks_db, direct_steps, monkey
         ],
         "reply_fields": ["action", "note"],
     }
+
+
+async def test_an_in_app_ask_checks_its_approver(druks_db, direct_steps, monkeypatch):
+    paulo = await Account.get_or_create(druks_db, "paulo@example.com")
+    await Account.get_or_create(druks_db, "outsider@example.com")
+    await Team.create(druks_db, name="Notes", member_ids=[paulo.id], apps=[Summarize.app])
+    note = await Note.create(body="A quote")
+    run = await seed_run(druks_db, kind=Summarize.kind, subject=note)
+    workflow = Summarize()
+    workflow._workflow_id = run.id
+    workflow._subject = note.identity
+    token = current_workflow.set(workflow)
+    monkeypatch.setattr(DBOS, "recv_async", AsyncMock(return_value={"action": "yes"}))
+    ask = {"presentation": "in_app", "label": "Keep it?"}
+    try:
+        with pytest.raises(ObjectNotFound):
+            await YesNo.wait(input_request={**ask, "approver": "nobody@example.com"})
+        with pytest.raises(PermissionDenied):
+            await YesNo.wait(input_request={**ask, "approver": "outsider@example.com"})
+        await YesNo.wait(input_request={**ask, "approver": "Paulo@Example.com"})
+    finally:
+        current_workflow.reset(token)
+
+    druks_db.expunge_all()
+    parked = await druks_db.scalar(select(Event).where(Event.type == "workflow.parked"))
+    # The ask keeps the name as the account spells it.
+    assert parked.payload["input_request"]["approver"] == "paulo@example.com"
+
+
+async def test_an_app_cannot_name_who_answered_a_gate(druks_db):
+    note = await Note.create(body="A quote")
+
+    with pytest.raises(WorkflowError, match="sets answered_by, and only Druks"):
+        await OperatorReply.answer(
+            note, workflow=Summarize, action="approve", answered_by="paulo@example.com"
+        )
 
 
 @pytest.mark.parametrize(
@@ -186,7 +208,7 @@ async def test_a_block_context_reads_where_the_work_stands_each_time(
     async def answer(*args, **kwargs):
         parked = await druks_db.get(Run, summarize.workflow_id, populate_existing=True)
         asks.append(await read_ask(druks_db, parked))
-        # Another app works on the other note, and its run is not this app's work.
+        # A run of another app is about the other note. That run is not this app's work.
         await seed_run(druks_db, kind=PullRequestReview.kind, subject=other, state="running")
         asks.append(await read_ask(druks_db, parked))
         await seed_run(druks_db, kind=Summarize.kind, subject=other, state="failed")
@@ -210,48 +232,55 @@ async def test_a_block_context_reads_where_the_work_stands_each_time(
     assert "status" not in stored[0]["context"][0]["facts"][0]["value"]
 
 
-@pytest.mark.parametrize(
-    "context, refused",
-    [
-        (
-            [ui.Section(blocks=[ui.GateControls(_NOTE)])],
-            "GateControls",
-        ),
-        (
-            [
-                ui.Callout(
-                    "Retry it.",
-                    controls=[ui.Action(label="Retry", operation="write_note", refresh="region")],
-                )
-            ],
-            "Action",
-        ),
-        (
-            [
-                ui.Table(
-                    columns=[ui.TableColumn("Do")],
-                    rows=[
-                        ui.TableRow(
-                            [ui.ControlsValue([ui.Action(label="Go", operation="write_note")])]
-                        )
-                    ],
-                )
-            ],
-            "Action",
-        ),
-        ([ui.Cards(drop=ui.Action(label="Move", operation="write_note"))], "Action"),
-        ([ui.Stack([ui.Form(action=ui.Action(label="Save", operation="write_note"))])], "Form"),
-    ],
-    ids=["gate controls", "action in a region it lacks", "table cell", "drop", "form"],
-)
-async def test_review_refuses_a_part_with_no_text_form_before_it_parks(
-    druks_db, summarize, context, refused
-):
+async def test_review_refuses_a_part_with_no_text_form_before_it_parks(druks_db, summarize):
     with pytest.raises(NoTextFormError) as raised:
-        await summarize.review(context=context)
+        await summarize.review(context=[ui.Section(blocks=[ui.GateControls(_NOTE)])])
 
-    assert raised.value.block == refused
+    assert raised.value.block == "GateControls"
     assert not list(await druks_db.scalars(select(Event)))
+
+
+async def test_review_refuses_a_secret_field_before_it_parks(druks_db, summarize):
+    form = ui.Form(
+        fields=[ui.SecretField(name="token", label="Token")],
+        action=ui.Action(label="Save", operation="write_note"),
+    )
+
+    with pytest.raises(ValueError) as refused:
+        await summarize.review(context=[form])
+
+    assert str(refused.value) == (
+        "review takes no SecretField in its context. Field 'token' is one. A chat message "
+        "that shows the review holds no secret input and no file input. Remove the field from "
+        "the review. Ask for it on a page of the app."
+    )
+    assert not list(await druks_db.scalars(select(Event)))
+
+
+async def test_review_refuses_an_action_that_names_no_write_of_its_app_before_it_parks(
+    druks_db, summarize
+):
+    with pytest.raises(ValueError, match="names operation 'shred_note', which none of its routes"):
+        await summarize.review(context=[ui.Action(label="Shred", operation="shred_note")])
+
+    assert not list(await druks_db.scalars(select(Event)))
+
+
+async def test_review_stores_an_action_inside_a_block_with_the_page_of_its_run(
+    druks_db, summarize, monkeypatch
+):
+    monkeypatch.setattr(DBOS, "recv_async", AsyncMock(return_value={"action": "approve"}))
+    go = ui.Action(label="Go", operation="write_note")
+    table = ui.Table(columns=[ui.TableColumn("Do")], rows=[ui.TableRow([ui.ControlsValue([go])])])
+
+    await summarize.review(context=[table])
+
+    parked = await druks_db.scalar(select(Event).where(Event.type == "workflow.parked"))
+    stored = ui.Stack.from_context(parked.payload["input_request"]["context"])
+    (action,) = iter_parts(stored.blocks, ui.Action)
+    assert action.url == f"/runs/{summarize.workflow_id}"
+    # The app's own action stays as the app wrote it.
+    assert not go.url
 
 
 async def test_review_refuses_a_part_that_is_not_a_block_before_it_parks(druks_db, summarize):
@@ -298,10 +327,10 @@ async def test_invalid_reply_or_timeout_records_no_receipt(
 async def test_cancel_records_no_receipt(druks_db, request_reply, monkeypatch):
     run_id, call = request_reply
     monkeypatch.setattr(
-        DBOS, "recv_async", AsyncMock(side_effect=DBOSWorkflowCancelledError(run_id))
+        DBOS, "recv_async", AsyncMock(side_effect=dbos_error.DBOSWorkflowCancelledError(run_id))
     )
 
-    with pytest.raises(DBOSWorkflowCancelledError):
+    with pytest.raises(dbos_error.DBOSWorkflowCancelledError):
         await call
 
     druks_db.expunge_all()

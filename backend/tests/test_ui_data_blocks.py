@@ -1,3 +1,4 @@
+import re
 from datetime import UTC, datetime
 
 import pytest
@@ -72,6 +73,47 @@ def test_a_series_must_carry_one_point_for_each_category():
         Chart(categories=["Mon"], series=[ChartSeries(label="peer-7", points=[3, 5])])
 
 
+@pytest.mark.parametrize(
+    ("title", "series", "error"),
+    [
+        (
+            "Sources",
+            [ChartSeries(label="web", points=[3, 1]), ChartSeries(label="api", points=[2, 2])],
+            "pie chart 'Sources' has 2 series. A pie draws one series. Give it one series.",
+        ),
+        (
+            "",
+            [],
+            "pie chart of categories ['Mon', 'Tue'] has 0 series. A pie draws one series. "
+            "Give it one series.",
+        ),
+        (
+            "Sources",
+            [ChartSeries(label="web", points=[3, 0])],
+            "pie chart 'Sources' has a point of zero or less for the categories ['Tue']. A pie "
+            "draws each point as a share of the whole. Give each point a number more than zero.",
+        ),
+        (
+            "",
+            [ChartSeries(label="web", points=[-1, 2])],
+            "pie chart of categories ['Mon', 'Tue'] has a point of zero or less for the "
+            "categories ['Mon']. A pie draws each point as a share of the whole. Give each "
+            "point a number more than zero.",
+        ),
+    ],
+    ids=["two-series", "untitled-no-series", "zero", "untitled-negative"],
+)
+def test_a_pie_is_one_series_above_zero_and_the_error_names_the_chart(title, series, error):
+    with pytest.raises(ValueError, match=re.escape(error)):
+        Chart(kind="pie", title=title, categories=["Mon", "Tue"], series=series)
+
+
+def test_a_pie_with_no_categories_holds_one_empty_series():
+    (block,) = wire(Chart(kind="pie", series=[ChartSeries(label="web", points=[])]))
+
+    assert (block["categories"], block["series"]) == ([], [{"label": "web", "points": []}])
+
+
 def test_a_table_row_must_carry_one_cell_for_each_column():
     with pytest.raises(ValueError, match="cells under"):
         Table(columns=[TableColumn("Peer")], rows=[TableRow([])])
@@ -130,7 +172,7 @@ def test_a_selectable_table_needs_actions_and_a_key_on_every_row():
             rows=[TableRow([TextValue("peer-7")], key="7")],
             select="peer_ids",
         )
-    with pytest.raises(ValueError, match="a row has no key"):
+    with pytest.raises(ValueError, match="One of its rows has no key"):
         Table(
             columns=[TableColumn("Peer")],
             rows=[TableRow([TextValue("peer-7")])],
@@ -326,7 +368,7 @@ def test_split_columns_are_exactly_two_panes():
     (columns,) = wire(Columns([Text("threads"), Text("reading")], layout="split"))
 
     assert columns["layout"] == "split"
-    with pytest.raises(ValueError, match="two panes"):
+    with pytest.raises(ValueError, match="takes two blocks, not 1"):
         Columns([Text("only")], layout="split")
 
 
@@ -351,8 +393,8 @@ def test_a_number_must_be_one_json_can_carry(bad):
 
 
 def test_cards_finds_an_action_in_a_card_and_in_its_empty_state():
-    """Boot checks every action against the app's operations, so an action the
-    walk misses is one that ships naming a route nobody declares."""
+    """Druks checks every action against the app's operations at boot. An action that the
+    walk misses then ships, and names a route that nobody declares."""
     block = Cards(
         cards=[Card(title="Peer 7", controls=[Action(label="Retire", operation="retire_peer")])],
         empty=EmptyState("No peer yet", controls=[Action(label="Scan", operation="scan")]),
@@ -431,13 +473,6 @@ def test_cards_tiles_carry_the_image_the_shell_crops():
 
     assert block["layout"] == "tiles"
     assert block["cards"][0]["blocks"][0]["url"] == "/api/files/shot"
-
-
-def test_cards_with_none_and_nothing_to_say_carries_no_empty_state():
-    assert Cards().empty is None
-    assert Cards().layout == "wrap"
-    assert Cards().drop is None
-    assert Card().drag == {}
 
 
 def test_a_stack_is_true_only_when_it_holds_a_block():

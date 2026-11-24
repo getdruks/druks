@@ -928,7 +928,7 @@ def _reviewing_flow(monkeypatch, facts: dict) -> tuple[Build, list[dict]]:
     async def dispatch(cls, **kwargs):
         dispatched.append(kwargs)
 
-    async def wait(topic, *, label, ttl_seconds):
+    async def wait(topic, *, label):
         assert topic == "review.completed"
         return facts
 

@@ -1,9 +1,8 @@
-
- :root {
+:root {
   --font-sans: 'IBM Plex Sans', system-ui, sans-serif;
   --font-mono: 'IBM Plex Mono', ui-monospace, Menlo, monospace;
 
-    --row-h:        40px;
+  --row-h:        40px;
   --row-pad:      8px;
   --gap:          10px;
   --pad:          14px;
@@ -190,7 +189,7 @@ button { background: none; border: none; color: inherit; cursor: pointer; font: 
 .breadcrumb:hover { color: var(--druks-color-text-primary); }
 
 .wi-stat { display: flex; flex-direction: column; gap: 2px; }
-.wi-stat-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; }
+.wi-stat-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; white-space: nowrap; }
 .wi-stat-value { font-size: 13px; }
 
 .status-done    { color: var(--druks-color-status-success); border-color: var(--druks-color-status-success); }
@@ -362,7 +361,6 @@ button { background: none; border: none; color: inherit; cursor: pointer; font: 
 
 .empty-action { margin-top: 12px; }
 
-
 .panel-empty { padding: 16px; }
 
 .table-head {
@@ -375,8 +373,6 @@ button { background: none; border: none; color: inherit; cursor: pointer; font: 
   gap: 14px;
 }
 .table-head .th-right { text-align: right; }
-
-.table-head { font-size: 10px; }
 
 .row-repo {
   font-size: 12px;
@@ -422,15 +418,11 @@ a.row-repo:hover { color: var(--druks-color-accent); text-decoration: underline;
 }
 .row-fin-what { font-size: 11px; white-space: nowrap; }
 
-@media (max-width: 1100px) {
-}
-
 .row-work-item {
-
   grid-template-columns:
     16px minmax(0, 104px) minmax(0, 540px) 1fr 120px 64px minmax(0, 160px) 70px;
+  gap: 14px; padding: 0 20px;
 }
-.row-work-item { gap: 14px; padding: 0 20px; }
 .row-work-item:hover { background: var(--druks-color-surface-subtle); }
 .wi-updated { text-align: right; white-space: nowrap; font-size: 11px; }
 
@@ -692,8 +684,6 @@ textarea.set-textarea { background-image: none; height: auto; min-height: 96px; 
 .model-chooser-warning { font-size: 11.5px; color: var(--druks-color-status-warning); }
 .model-chooser-option:focus-visible, .model-chooser-setup:focus-visible { outline: 2px solid var(--druks-color-accent); outline-offset: 2px; }
 
-
-
 .skill-add { display: flex; align-items: center; gap: 10px; }
 .skill-add input { flex: 1; min-width: 0; }
 .skill-cols { display: flex; flex-direction: column; gap: 8px; }
@@ -788,7 +778,6 @@ textarea.set-textarea { background-image: none; height: auto; min-height: 96px; 
 .mcp-enable { display: inline-flex; align-items: center; gap: 9px; }
 .mcp-enable-label { font-size: 12.5px; color: var(--druks-color-text-secondary); }
 .mcp-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
-
 
 .svc-detail-head { display: flex; align-items: center; gap: 12px; }
 .svc-facts { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; }
@@ -1260,7 +1249,6 @@ textarea.set-textarea { background-image: none; height: auto; min-height: 96px; 
 .wi-fact { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .wi-fact-k { color: var(--druks-color-text-tertiary); text-transform: uppercase; letter-spacing: 0.08em; font-size: 9.5px; }
 .wi-fact-v { color: var(--druks-color-text-secondary); overflow-wrap: anywhere; }
-.wi-stat-label { white-space: nowrap; }
 
 :root {
   --wic-scheduled: var(--druks-color-text-tertiary);
@@ -1298,7 +1286,7 @@ textarea.set-textarea { background-image: none; height: auto; min-height: 96px; 
 .wic-op-row1 { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .wic-op-kind { font-size: 13px; color: var(--druks-color-text-primary); white-space: nowrap; }
 .wic-op-owner { font-family: var(--font-mono); font-size: 10.5px; color: var(--druks-color-text-tertiary); margin-left: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.wic-op-sub { font-family: var(--font-mono); font-size: 11px; color: var(--druks-color-text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wic-op-sub { font-family: var(--font-mono); font-size: 11px; color: var(--druks-color-text-tertiary); overflow-wrap: anywhere; }
 .wic-sub-running, .wic-sub-cancelling { color: var(--druks-color-status-info); }
 .wic-sub-parked { color: var(--wic-human); }
 .wic-sub-failed    { color: var(--wic-failed); }
@@ -1389,9 +1377,8 @@ textarea.set-textarea { background-image: none; height: auto; min-height: 96px; 
 .ins-step-body { padding: 18px 24px 32px; }
 
 .ins-xscript { border: 1px solid var(--druks-color-border-default); border-radius: 5px; padding: 14px 16px; background: color-mix(in oklch, var(--druks-color-background) 70%, var(--druks-color-surface-subtle)); }
-/* The boxed transcript scrolls itself (stick-to-bottom lives in
-   StreamTranscript); the full-run page leaves it uncapped and scrolls the
-   page instead. */
+/* The boxed transcript scrolls itself. StreamTranscript keeps it at the bottom.
+   The page of a whole run leaves it uncapped and scrolls the page. */
 .ins-xscript .stream-transcript { max-height: min(68vh, 760px); overflow-y: auto; overscroll-behavior: contain; padding-right: 6px; }
 .ins-stream { font-family: var(--font-mono); font-size: 12px; line-height: 1.7; display: flex; flex-direction: column; gap: 1px; border: 1px solid var(--druks-color-border-default); border-radius: 5px; padding: 14px 16px; background: color-mix(in oklch, var(--druks-color-background) 70%, var(--druks-color-surface-subtle)); }
 .ins-stream-line { display: grid; grid-template-columns: 78px 1fr; gap: 14px; padding: 1px 0; }
@@ -1440,8 +1427,8 @@ textarea.set-textarea { background-image: none; height: auto; min-height: 96px; 
 .review-controls { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .review-error { margin-top: 8px; font-size: 12px; color: var(--druks-color-status-danger); }
 
-.ins .wic-op-sub { display: inline-flex; align-items: center; gap: 7px; }
-.ins .wic-op-sub-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--druks-color-text-tertiary); box-shadow: none; flex-shrink: 0; }
+.ins .wic-op-sub { display: inline-flex; align-items: flex-start; gap: 7px; }
+.ins .wic-op-sub-dot { width: 5px; height: 5px; margin-top: calc(0.5lh - 2.5px); border-radius: 50%; background: var(--druks-color-text-tertiary); box-shadow: none; flex-shrink: 0; }
 
 .landing { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 40px 20px; position: relative; overflow: hidden; }
 .landing::before { content: ""; position: absolute; inset: 0; background-image: linear-gradient(var(--druks-color-border-default) 1px, transparent 1px), linear-gradient(90deg, var(--druks-color-border-default) 1px, transparent 1px); background-size: 56px 56px; opacity: 0.28; mask-image: radial-gradient(120% 100% at 50% 42%, #000 0%, transparent 70%); }
@@ -1496,14 +1483,15 @@ textarea.set-textarea { background-image: none; height: auto; min-height: 96px; 
 .subject-run-head { display: flex; align-items: center; gap: 10px; font-size: 12.5px; margin-bottom: 8px; }
 .subject-run-more { margin: 6px 0; }
 
-.dui-page {
-  --dui-measure: clamp(20rem, 68%, 70rem);
+:root {
   --dui-radius-control: 6px;
   --dui-radius-surface: 8px;
   --dui-radius-large: 12px;
   --dui-primary: var(--druks-color-accent);
-  --dui-primary-hover: color-mix(in oklch, var(--druks-color-accent) 92%, var(--druks-color-on-accent));
-  --dui-primary-active: color-mix(in oklch, var(--druks-color-accent) 88%, var(--druks-color-on-accent));
+}
+
+.dui-page {
+  --dui-measure: clamp(20rem, 68%, 70rem);
   --dui-control-height: 40px;
 }
 .dui-parent { display: inline-block; margin-bottom: 12px; font-size: 13px; text-underline-offset: 3px; }
@@ -1589,7 +1577,7 @@ a.dui-card:hover { border-color: var(--druks-color-text-secondary); }
 .dui-unknown { font-size: 12px; color: var(--druks-color-status-danger); border: 1px solid color-mix(in oklch, var(--druks-color-status-danger) 30%, transparent); border-radius: 6px; padding: 9px 12px; margin: 10px 0; }
 
 @media (max-width: 720px) {
-  .dui-page-head, .dui-section-head, .dui-table-head { align-items: flex-start; flex-direction: column; }
+  .dui-page-head, .dui-section-head { align-items: flex-start; flex-direction: column; }
   .dui-title { font-size: 24px; line-height: 32px; }
   .dui-tabs { overflow-x: auto; }
 }
@@ -1737,18 +1725,21 @@ a.dui-status:hover { text-decoration: underline; }
 .dui-chart-bar { fill: var(--druks-color-chart-series-1); }
 .dui-chart-line { fill: none; stroke: var(--druks-color-chart-series-1); stroke-width: 2; vector-effect: non-scaling-stroke; }
 .dui-chart-area { fill: var(--druks-color-chart-series-1); fill-opacity: 0.28; stroke: var(--druks-color-chart-series-1); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.dui-chart-pie { display: block; width: 140px; height: 140px; }
+.dui-chart-slice { fill: var(--druks-color-chart-series-1); }
+.dui-chart-pie .dui-chart-slice { stroke: var(--druks-color-surface); stroke-width: 2; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
 .dui-chart-bar-1 { fill: var(--druks-color-chart-series-2); stroke: var(--druks-color-chart-series-2); }
 .dui-chart-bar-2 { fill: var(--druks-color-chart-series-3); stroke: var(--druks-color-chart-series-3); }
 .dui-chart-bar-3 { fill: var(--druks-color-chart-series-4); stroke: var(--druks-color-chart-series-4); }
 .dui-chart-swatch.dui-chart-bar-1 { background: var(--druks-color-chart-series-2); }
 .dui-chart-swatch.dui-chart-bar-2 { background: var(--druks-color-chart-series-3); }
 .dui-chart-swatch.dui-chart-bar-3 { background: var(--druks-color-chart-series-4); }
-.dui-chart-swatch { background: var(--druks-color-chart-series-1); }
 .dui-chart-categories { display: flex; margin-top: 5px; }
 .dui-chart-label { flex: 1 1 0; font-size: 12px; line-height: 16px; text-align: center; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .dui-chart-legend { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 10px; font-size: 13px; line-height: 18px; color: var(--druks-color-text-tertiary); }
 .dui-chart-key { display: inline-flex; align-items: center; gap: 6px; }
-.dui-chart-swatch { width: 9px; height: 9px; border-radius: 2px; }
+.dui-chart-value { color: var(--druks-color-text-secondary); font-variant-numeric: tabular-nums; }
+.dui-chart-swatch { width: 9px; height: 9px; border-radius: 2px; background: var(--druks-color-chart-series-1); }
 
 .dui-chart-data { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
@@ -1801,9 +1792,10 @@ a.dui-status:hover { text-decoration: underline; }
 .dui-cards-tiles .dui-links { margin-top: 0; }
 .dui-cards > li { display: grid; }
 /* A board column stretches to the tallest neighbor. The drop target has to
-   fill that height, or an empty column only accepts a drop on its empty copy.
-   min-width: 0 keeps columns from growing with empty copy, which would shove
-   the next column under the pointer when the ghost replaces it. */
+   fill that height. If it does not, an empty column only accepts a drop on its
+   empty copy. min-width: 0 keeps an empty column from growing. A wider column
+   would push the next column under the pointer when the ghost replaces the
+   empty copy. */
 .dui-column > .dui-section { flex: 1; min-width: 0; }
 .dui-cards-drop { min-height: 48px; flex: 1; display: flex; flex-direction: column; min-width: 0; }
 .dui-cards-drop .dui-cards-block { flex: 1; display: flex; flex-direction: column; min-width: 0; }
@@ -1820,18 +1812,19 @@ a.dui-status:hover { text-decoration: underline; }
 .dui-gallery-item { display: block; }
 .dui-gallery .dui-image { margin: 0; }
 
-/* A narrow screen scrolls the table sideways rather than restacking it: a
-   stacked row loses the header each cell belongs to, and a screen reader reads
-   the values without knowing what they are. */
+/* On a narrow screen, a table scrolls sideways and keeps its rows. A stacked
+   row loses the header of each cell. A screen reader then reads the values
+   without their meaning. */
 @media (max-width: 720px) {
+  .dui-table-head { align-items: flex-start; flex-direction: column; }
   .dui-columns { flex-direction: column; }
   .dui-columns-sidebar > .dui-column:last-child { flex: 1 1 auto; }
   .dui-table { font-size: 13px; }
   .dui-table thead th { padding: 10px 12px; }
   .dui-table :is(td, tbody th) { padding: 12px; }
   .dui-table tr > :last-child { padding-right: 12px; }
-  /* Times and figures ride one line; prose wraps, so a long sentence no
-     longer decides how far the table scrolls. */
+  /* Times and figures stay on one line. Prose wraps. A long sentence does not
+     set how far the table scrolls. */
   .dui-table .mono { white-space: nowrap; }
 }
 .dui-chart-mark { stroke: none; }
@@ -1914,11 +1907,10 @@ a.dui-status:hover { text-decoration: underline; }
 .dui-choice { display: inline-flex; min-height: 32px; align-items: center; gap: 8px; font-size: 14px; line-height: 20px; }
 .dui-choices-search { display: flex; flex-direction: column; gap: 8px; }
 .dui-choices-list { flex-direction: column; flex-wrap: nowrap; gap: 0; max-height: 320px; overflow-y: auto; }
-/* A scrolling column shrinks its rows below their text, so a wrapped label would overlap the next one. */
+/* A scrolling column shrinks its rows below their text. A wrapped label would overlap the next one. */
 .dui-choices-list .dui-choice { flex-shrink: 0; }
 .dui-choices-none { font-size: 14px; line-height: 32px; color: var(--druks-color-text-secondary); }
-.dui-form-submit { margin-top: 20px; }
-.dui-form-submit { display: flex; flex-wrap: wrap; gap: 8px; }
+.dui-form-submit { margin-top: 20px; display: flex; flex-wrap: wrap; gap: 8px; }
 
 .dui-dialog {
   width: min(480px, calc(100vw - 32px));
@@ -1986,8 +1978,8 @@ a.dui-status:hover { text-decoration: underline; }
 .dui-card { gap: 8px; }
 .dui-page :is(.dui-section, .dui-card, .dui-column, .dui-stack) > * { margin-top: 0; margin-bottom: 0; }
 
-/* A control is as wide as its label. Stretching is the flex default, which
-   welds two buttons into one bar the width of the page. */
+/* A control is as wide as its label. Flex stretches its items by default. Two
+   stretched buttons look like one bar as wide as the page. */
 .dui-page > .page-shell-body > :is(.dui-action, .dui-link, .dui-parent, .dui-retry),
 .dui-stack > :is(.dui-action, .dui-link),
 .dui-section > :is(.dui-action, .dui-link) { align-self: flex-start; }
@@ -2004,8 +1996,8 @@ a.dui-status:hover { text-decoration: underline; }
   outline-offset: 2px;
 }
 
-/* A run's length is not a reason to animate at someone. The indeterminate bar
-   has to give up its width too: frozen at 35% it reads as 35% done. */
+/* With reduced motion, the status dot and the bar stop moving. The bar of an
+   unknown progress also takes the full width. At 35% it would read as 35% done. */
 @media (prefers-reduced-motion: reduce) {
   .dui-status-active::before,
   .dui-progress-unknown .dui-progress-fill { animation: none; }

@@ -13,7 +13,7 @@ def test_a_region_follows_the_subject_it_watches(note: Note):
 
     assert section.follows
     assert section.follows.subject_type == "note"
-    # A subject id reaches the stream through a URL, so it travels as text.
+    # A subject id goes to the stream through a URL. It thus travels as text.
     assert section.follows.subject_id == str(note.id)
 
 
@@ -108,7 +108,7 @@ def test_a_nested_region_cannot_take_a_name_already_used(note: Note):
 
 
 def test_follows_takes_a_subject_and_says_so_when_it_does_not(note: Note):
-    with pytest.raises(ValueError, match="takes the subject a page watches"):
+    with pytest.raises(ValueError, match="takes the subject that a page watches"):
         Page(title="Note", follows="run-6f0a")
 
 

@@ -1,6 +1,6 @@
 import type { PlanEntry, SessionNotification, SessionUpdate, ToolCall } from '@agentclientprotocol/sdk'
 
-import type { Field, FileSummary } from '../api/types'
+import type { Block, Field, FileSummary } from '../api/types'
 
 export interface ConversationSummary {
   id: string
@@ -21,6 +21,8 @@ export interface Message {
   id: string
   role: 'user' | 'assistant'
   body: string
+  /** The blocks that the agent showed after the reply's text, in order. */
+  blocks: ReplyBlock[]
   state: 'pending' | 'deferred' | 'delivered' | 'replied' | 'interrupted' | 'cancelled' | 'failed' | null
   replyTo: string | null
   createdAt: string
@@ -28,18 +30,24 @@ export interface Message {
   toolCalls: Array<ToolCall & { textOffset: number }>
   /** The question that the agent asked with its reply in the web chat. */
   question: Question | null
-  /** Druks wrote this message for the agent. The person on WhatsApp never sees it. */
+  /** Druks wrote this message for the agent. It never reaches the source. */
   isInternal: boolean
   file: FileSummary | null
   /** What the person said in the message's voice note. */
   transcript: string
 }
 
-/** A question asks with its choices, or with its fields. */
+/** A question with its choices, or with its fields. */
 export interface Question {
   question: string
   choices: string[]
   fields: Field[]
+}
+
+/** A block of a reply, and its text form, which the page shows when it cannot draw the block. */
+export interface ReplyBlock {
+  block: Block
+  textForm: string
 }
 
 /** A run that the conversation started and that still works or waits. */
@@ -53,6 +61,17 @@ export interface ActiveRun {
   phaseEndsAt: string | null
 }
 
+/** The status that a run of the conversation reported, as its message shows it. */
+export interface RunStatus {
+  id: string
+  run: string
+  /** The app of the run's workflow. Empty when no loaded app declares it. */
+  app: string
+  blocks: Block[]
+  /** When the first run of the retry chain started. */
+  startedAt: string
+}
+
 export interface Conversation extends ConversationSummary {
   messages: Message[]
 }
@@ -61,6 +80,10 @@ export type ReplyRow =
   | { type: 'text'; text: string }
   | { type: 'tool'; call: ToolCall }
   | { type: 'plan'; entries: PlanEntry[] }
+
+export type ThreadRow =
+  | { type: 'turn'; message: Message }
+  | { type: 'status'; status: RunStatus }
 
 interface LiveTurn {
   epoch: string
@@ -82,7 +105,7 @@ export type ConversationAction =
 
 export const initialConversation: ConversationState = { conversation: null, turns: {}, error: null }
 
-// A WhatsApp conversation has no title, so the person's name stands in.
+// A channel's conversation can have no title. Then the page shows the person's name.
 export function conversationTitle(conversation: ConversationSummary): string {
   return conversation.title ?? (conversation.userName || conversation.userId || 'New conversation')
 }
@@ -137,17 +160,33 @@ export function savedReplyRows(message: Message): ReplyRow[] {
   return rows
 }
 
+/** The turns and the run statuses in page order. A status follows each turn that started at or before its run. */
+export function threadRows(messages: Message[], statuses: RunStatus[]): ThreadRow[] {
+  const waiting = statuses.toSorted((left, right) =>
+    Date.parse(left.startedAt) - Date.parse(right.startedAt) || left.id.localeCompare(right.id))
+  const rows: ThreadRow[] = []
+  for (const message of messages) {
+    if (message.role === 'assistant' && message.replyTo) continue
+    while (waiting.length > 0 && Date.parse(waiting[0]!.startedAt) < Date.parse(message.createdAt)) {
+      rows.push({ type: 'status', status: waiting.shift()! })
+    }
+    rows.push({ type: 'turn', message })
+  }
+  for (const status of waiting) rows.push({ type: 'status', status })
+  return rows
+}
+
 export function questionAnswer(messages: Message[], reply: Message): Message | undefined {
   const index = messages.findIndex((message) => message.id === reply.replyTo)
   return messages.slice(index + 1).find((message) => message.role === 'user' && !message.isInternal)
 }
 
-// The lines of a Slack Submit, so the agent reads the answers of a web form the same way.
+// The lines of a Slack Submit, so that the agent reads the answers of a web form the same way.
 export function formAnswer(fields: Field[], values: Record<string, unknown>): string {
   return fields.map((field) => `${field.label}: ${fieldAnswer(field, values[field.name]) || '(no answer)'}`).join('\n')
 }
 
-// A radio group and a multi-select have no native required check, and blank text passes one.
+// A radio group and a multi-select have no native required check. Blank text passes one.
 export function formErrors(fields: Field[], values: Record<string, unknown>): Record<string, string> {
   const errors: Record<string, string> = {}
   for (const field of fields) {

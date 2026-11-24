@@ -45,7 +45,7 @@ async def get_overview(
     if app is not None:
         if app not in apps:
             raise HTTPException(
-                status_code=404, detail=f"Unknown app '{app}'. Select an installed app."
+                status_code=404, detail=f"Druks has no app '{app}'. Select an installed app."
             )
         apps = {app: apps[app]}
     owners = {
@@ -76,6 +76,16 @@ async def get_overview(
     my_runs = (
         select(Run.id).join(Run.account).where((Account.id == account.id) | Account.is_default)
     )
+    # A waiting ask that names an approver needs that account alone, whoever started
+    # the run.
+    approver = current_runs.c.approver
+    is_mine = case(
+        (
+            (current_runs.c.state == RunState.PARKED) & approver.is_not(None),
+            approver == account.username,
+        ),
+        else_=current_runs.c.run_id.in_(my_runs),
+    )
     ranked_runs = (
         select(
             current_runs,
@@ -97,7 +107,7 @@ async def get_overview(
             (current_runs.c.state != RunState.PARKED)
             | (current_runs.c.input_requested_at.is_not(None) & (current_runs.c.presentation != ""))
         )
-        .where(current_runs.c.run_id.in_(my_runs))
+        .where(is_mine)
         .subquery()
     )
     previews = (
@@ -154,7 +164,8 @@ async def get_overview(
 async def list_current_schedules(
     session: SessionDep, response: Response, account: Account = Depends(current_account)
 ) -> DashboardSchedules:
-    """Configured cadence and recorded invocations, not scheduler health."""
+    """The configured cadence and the recorded invocations of each schedule, not the
+    health of the scheduler."""
     response.headers["Cache-Control"] = "no-store"
     timezone = get_settings().timezone
     declared = [
@@ -202,7 +213,7 @@ async def list_current_schedules(
 async def run_schedule(kind: str) -> dict[str, str]:
     workflow = get_workflow(kind)
     if not workflow or not workflow.every:
-        raise HTTPException(404, "Schedule not found. Select a declared schedule.")
+        raise HTTPException(404, "The schedule does not exist. Select a declared schedule.")
     try:
         run = await trigger_schedule(kind)
     except ScheduleUnavailable as error:

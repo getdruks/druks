@@ -31,7 +31,7 @@ jobs:
           platforms: linux/amd64
           push: false
           load: true
-          tags: ghcr.io/czpython/druks:e2e
+          tags: ghcr.io/getdruks/druks:e2e
           cache-from: type=gha,scope=backend
       - name: Install the stack
         env:

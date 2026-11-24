@@ -161,7 +161,6 @@ export function SettingsPages({
     enabled: Boolean(appName && isAdmin),
   })
   const harnessesQuery = useQuery({ queryKey: ['harnesses'], queryFn: api.harnesses })
-  const instructionsQuery = useQuery({ queryKey: ['instructions'], queryFn: api.instructions })
   const accountsQuery = useQuery({ queryKey: ['accounts'], queryFn: api.accounts })
   const providersQuery = useQuery({ queryKey: ['providers'], queryFn: api.providers })
   const subscriptionsQuery = useQuery({
@@ -178,7 +177,7 @@ export function SettingsPages({
     subscriptionsQuery,
     keysQuery,
     catalogsQuery,
-    ...(!appName ? [instructionsQuery, accountsQuery] : []),
+    ...(!appName ? [accountsQuery] : []),
   ]
   const executionReady = executionQueries.every((query) => query.isSuccess)
   const executionFailed = executionQueries.some((query) => query.isError)
@@ -241,7 +240,13 @@ export function SettingsPages({
     ...Object.entries(appEdits)
       .filter(
         ([, edits]) =>
-          ['agentHarnesses', 'agentModels', 'agentBillings', 'agentEfforts', 'agentTimeouts'].some(
+          [
+            'instructionHarnesses',
+            'instructionModels',
+            'instructionBillings',
+            'instructionEfforts',
+            'instructionTimeouts',
+          ].some(
             (key) => Object.keys(edits[key as keyof UpdateAppsSettingsRequest] ?? {}).length > 0,
           ) ||
           Object.values(edits.workflowSettings ?? {}).some(
@@ -391,7 +396,6 @@ export function SettingsPages({
           }
           const saved = await api.updateSettings(body)
           queryClient.setQueryData(['settings'], saved)
-          await queryClient.invalidateQueries({ queryKey: ['instructions'] })
           await queryClient.invalidateQueries({ queryKey: ['appSettings'] })
         } else {
           const owner = apps.find((entry) => page === `apps/${entry.name}`)!
@@ -434,7 +438,6 @@ export function SettingsPages({
           await queryClient.invalidateQueries({ queryKey: ['appSettings'] })
           // A choices source can read other saved settings. Save does not wait for the new choices.
           void queryClient.invalidateQueries({ queryKey: ['appSettingChoices'] })
-          await queryClient.invalidateQueries({ queryKey: ['instructions'] })
         }
         discard(page)
       }
@@ -793,7 +796,7 @@ export function SettingsPages({
                   defaults={effectiveDefaults}
                   onDefaults={setDefaults}
                   accounts={accountsQuery.data ?? []}
-                  resolved={instructionsQuery.data ?? { apps: [] }}
+                  apps={apps}
                   harnessByName={harnessByName}
                   harnessColor={harnessColor}
                   catalog={catalog}
@@ -896,31 +899,31 @@ export function SettingsPages({
                       onAgentHarness={(name, value) =>
                         editApp(entry.name, (current) => ({
                           ...current,
-                          agentHarnesses: { ...current.agentHarnesses, [name]: value },
+                          instructionHarnesses: { ...current.instructionHarnesses, [name]: value },
                         }))
                       }
                       onAgentModel={(name, value) =>
                         editApp(entry.name, (current) => ({
                           ...current,
-                          agentModels: { ...current.agentModels, [name]: value },
+                          instructionModels: { ...current.instructionModels, [name]: value },
                         }))
                       }
                       onAgentBilling={(name, value) =>
                         editApp(entry.name, (current) => ({
                           ...current,
-                          agentBillings: { ...current.agentBillings, [name]: value },
+                          instructionBillings: { ...current.instructionBillings, [name]: value },
                         }))
                       }
                       onAgentEffort={(name, value) =>
                         editApp(entry.name, (current) => ({
                           ...current,
-                          agentEfforts: { ...current.agentEfforts, [name]: value },
+                          instructionEfforts: { ...current.instructionEfforts, [name]: value },
                         }))
                       }
                       onAgentTimeout={(name, value) =>
                         editApp(entry.name, (current) => ({
                           ...current,
-                          agentTimeouts: { ...current.agentTimeouts, [name]: value },
+                          instructionTimeouts: { ...current.instructionTimeouts, [name]: value },
                         }))
                       }
                       onWorkflowField={(kind, field, value) =>

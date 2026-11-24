@@ -1,4 +1,4 @@
-from typing import Annotated, Any
+from typing import Annotated
 
 from dbos import DBOS
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, Request
@@ -19,8 +19,8 @@ router = APIRouter(prefix="/api/schedules", tags=["schedules"])
 async def require_schedule_stopper(
     request: Request, session: SessionDep, account: Account = Depends(current_account)
 ) -> None:
-    """The caller must be the schedule's owner or an admin. An unknown schedule is the
-    route's to answer."""
+    """The caller must be the schedule's owner or an admin. The route itself answers a
+    request for an unknown schedule."""
     schedule = await session.get(Schedule, request.path_params["schedule_id"])
     if schedule and not account.can_stop(schedule):
         raise PermissionDenied("Only the schedule's owner or an admin can stop it.")
@@ -39,21 +39,21 @@ async def create_schedule(
     session: SessionDep,
     tool: Annotated[str, Body(description="The name of one of your tools to call.")],
     arguments: Annotated[
-        dict[str, Any],
+        dict,
         Body(description="The tool's arguments, the same at every call. Give {} for none."),
     ],
     cron: Annotated[str, Body(description="A cron for when to call, local time.")],
     account: Account = Depends(current_account),
 ) -> Schedule:
-    """Call one of your tools again and again on a cron, as the person in this chat, such
-    as a tool that starts a run. When none of your tools does the task, schedule
-    chat_run_instruction with the task in words. Each call checks what it checks when
-    you make it, and its runs report to this chat. Local time is the installation
-    timezone. The answer's nextRunAt is local: tell the person that time as it is. When
-    Druks refuses the time, ask the person rather than guess."""
+    """Call one of your tools again and again on a cron, as the person in this chat. For
+    example, schedule a tool that starts a run. When none of your tools does the task,
+    schedule chat_run_instruction with the task in words. Each call goes through the same
+    checks as when you call the tool. Its runs report to this chat. Local time is the
+    installation timezone. The answer's nextRunAt is local. Tell the person that time as
+    it is. When Druks refuses the time, ask the person rather than guess."""
     conversation_id = current_conversation_id.get()
     if not conversation_id:
-        raise HTTPException(422, "Make a schedule from a chat. This call comes from no chat.")
+        raise HTTPException(422, "This call comes from no chat. Make a schedule from a chat.")
     schedule = await Schedule.create(
         session,
         account_id=account.id,
@@ -97,14 +97,14 @@ async def change_schedule(
     schedule_id: Annotated[str, Path(description="A schedule from list_schedules.")],
     tool: Annotated[str, Body(description="The name of one of your tools to call.")],
     arguments: Annotated[
-        dict[str, Any],
+        dict,
         Body(description="The tool's arguments, the same at every call. Give {} for none."),
     ],
     cron: Annotated[str, Body(description="A cron for when to call, local time.")],
     account: Account = Depends(current_account),
 ) -> Schedule:
-    """Change one of your schedules. Give all three: the tool, its arguments, and the cron
-    replace the old ones."""
+    """Change one of your schedules. Give all three: the tool, its arguments, and the cron.
+    They replace the old ones."""
     schedule = await Schedule.get_for_account(session, schedule_id, account.id)
     if not schedule:
         raise HTTPException(404, "Schedule not found. Choose one from list_schedules.")

@@ -1,21 +1,23 @@
-# An unlinked person's link, and the message it holds, live this long.
+# An unlinked person's link, and the message that it holds, stay valid this long.
 LINK_TTL_SECONDS = 600
 LINK_KEY = "chat:slack:link:{token}"
-# A person who stays unlinked hears the welcome again after this long.
+# A person who stays unlinked gets the welcome again after this long.
 WELCOME_TTL_SECONDS = 30 * 24 * 60 * 60
 WELCOME_KEY = "chat:slack:welcome:{user}"
-# A person's untagged replies in a thread reach their agent while the last message
+# A person's untagged replies in a thread go to their agent while the last message
 # of their conversation there is younger than this.
 JOINED_THREAD_SECONDS = 24 * 60 * 60
 # How much of a thread the agent reads.
 THREAD_MESSAGES = 200
-LINK_MESSAGE = "Connect your Slack account to Druks, and I answer your message: {url}"
+LINK_MESSAGE = (
+    "I answer your message after you connect your Slack account to Druks. Connect it here: {url}"
+)
 UNLINKED_REPLY = (
     "<@{user}>, your Slack account is not connected to Druks yet. "
-    "I sent you a direct message with the link to connect it."
+    "Connect it with the link in the direct message that I sent you."
 )
 UNACCEPTED_AUTOMATION_REPLY = (
-    "I do not answer this automation yet. A Druks admin can accept it here: {url}"
+    "I do not answer this automation yet. Ask a Druks admin to accept it here: {url}"
 )
 WELCOME_TEMPLATE = "chat/channels/slack/welcome.md"
 # Slack's limit for the text of all the markdown blocks of one message.
@@ -48,7 +50,29 @@ BUTTON_URL_LIMIT = 3000
 TABLE_ROWS_LIMIT = 200
 TABLE_COLUMNS_LIMIT = 20
 MESSAGE_CELL_TEXT_LIMIT = 20_000
-# Slack takes no empty cell. An empty cell or column label of a data table shows this.
+# Slack takes no empty cell or label. An empty one in a data table or a chart shows this.
 EMPTY_CELL_TEXT = "—"
-# What a button that opens a link sends as its action, so that a click on it answers nothing.
+# Slack's limits for a chart, from the Block Kit reference.
+MESSAGE_CHARTS_LIMIT = 2
+CHART_SERIES_LIMIT = 12
+CHART_POINTS_LIMIT = 20
+CHART_SEGMENTS_LIMIT = 12
+CHART_LABEL_LIMIT = 20
+CHART_TITLE_LIMIT = 50
+CHART_AXIS_TITLE_LIMIT = 50
+# Slack's limits for the dialog that confirms a click. Its title is the label of the button.
+CONFIRM_TEXT_LIMIT = 300
+CONFIRM_BUTTON_LIMIT = 30
+# What the button that closes the dialog says, as on the dashboard.
+CONFIRM_DENY_TEXT = "Back"
+# The image formats that Slack draws, and its limits for an image, from the Block Kit reference.
+IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif")
+IMAGE_URL_LIMIT = 3000
+IMAGE_ALT_TEXT_LIMIT = 2000
+IMAGE_TITLE_LIMIT = 2000
+# What a button that opens a link sends as its action. A click on it answers no notification.
 LINK_BUTTON_ACTION_ID = "link"
+# The id of each input of a block of a notification starts with the position of the block.
+# Two blocks can then have fields of one name. The inputs of an approval keep the names of
+# their fields.
+INPUT_ID_PREFIX = "{position}."

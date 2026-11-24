@@ -58,6 +58,12 @@
 .chat-reply .markdown-content table { display: block; max-width: 100%; overflow: auto; overflow-wrap: normal; }
 .chat-reply .markdown-content img { max-width: 100%; }
 .chat-reply .markdown-content:not(.druks-prose) a { color: var(--druks-color-accent); text-underline-offset: 3px; }
+.chat-reply:has(.chat-blocks) { align-self: stretch; }
+.chat-reply:has(.chat-blocks) > .druks-chat-message { inline-size: auto; }
+/* An app page gives the dashboard's blocks their measure, text color, word breaks, and spacing. The chat is not an app page. */
+.chat-blocks { --dui-measure: 100%; display: grid; gap: var(--druks-spacing-step-4); min-width: 0; color: var(--druks-color-text-primary); overflow-wrap: break-word; }
+.chat-blocks > * { min-width: 0; margin-block: 0; }
+.chat-blocks :is(.dui-section, .dui-card, .dui-column, .dui-stack) > * { margin-block: 0; }
 .chat-waiting { display: flex; align-items: center; gap: 10px; margin: 0; font-size: 13px; color: var(--druks-color-text-secondary); }
 .chat-runs { display: flex; flex-direction: column; gap: 8px; margin-top: 28px; }
 .chat-runs:empty { display: none; }
@@ -78,13 +84,16 @@
 .chat-plan li { padding: 3px 0; }
 .chat-plan-status { margin-left: 12px; font-size: 12px; color: var(--druks-color-text-secondary); }
 .chat-plan li[data-state="completed"] .chat-plan-status { color: var(--druks-color-status-success); }
-/* The dashboard's field styles read their control tokens from an app page, which the chat is not. */
-.chat-question { --dui-control-height: 36px; --dui-radius-control: 6px; --dui-primary: var(--druks-color-accent); display: flex; flex-direction: column; gap: 12px; max-width: 75ch; min-width: 0; padding: 14px 16px; border: 1px solid var(--druks-color-border-default); border-radius: 6px; background: var(--druks-color-surface); overflow-wrap: anywhere; }
+/* An app page gives the dashboard's fields their control height. The chat is not an app page. */
+.chat-question { --dui-control-height: 36px; display: flex; flex-direction: column; gap: 12px; max-width: 75ch; min-width: 0; padding: 14px 16px; border: 1px solid var(--druks-color-border-default); border-radius: 6px; background: var(--druks-color-surface); overflow-wrap: anywhere; }
 .chat-question-choices { display: flex; flex-wrap: wrap; gap: 8px; }
 .chat-question-choices > .druks-button { flex-shrink: 1; max-width: 100%; white-space: normal; }
 .chat-question-form { display: flex; flex-direction: column; align-items: flex-start; }
 .chat-question-form .dui-field { align-self: stretch; }
 .chat-question-answer { display: flex; flex-direction: column; gap: 6px; padding-left: 12px; border-left: 2px solid var(--druks-color-border-default); }
+.chat-run-status { min-inline-size: 0; max-inline-size: 75ch; padding: var(--druks-spacing-step-4); border: var(--druks-size-border-width) solid var(--druks-color-border-default); border-radius: var(--druks-radius-surface); background: var(--druks-color-surface); color: var(--druks-color-text-secondary); overflow-wrap: anywhere; overflow-x: auto; }
+.chat-run-status > :first-child { margin-block-start: 0; }
+.chat-run-status > :last-child { margin-block-end: 0; }
 .chat-agent-status { display: inline-flex; align-items: center; gap: var(--druks-spacing-content-gap); }
 .chat-interrupted { font-size: 14px; }
 .chat-interrupted p { margin: 0 0 12px; color: var(--druks-color-text-secondary); }

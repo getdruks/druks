@@ -545,7 +545,7 @@ describe('Chart', () => {
 })
 
 describe('Chart kinds', () => {
-  function chart(kind: 'line' | 'bar' | 'area', points: number[]): Block {
+  function chart(kind: 'line' | 'bar' | 'area' | 'pie', points: number[]): Block {
     return {
       block: 'chart',
       kind,
@@ -587,6 +587,82 @@ describe('Chart kinds', () => {
       5,
     )
     expect(Number(below?.getAttribute('y'))).toBeCloseTo(baseline, 5)
+  })
+
+  // A slice's path is M0 0 L start A1 1 0 large-arc 1 end Z. A turn starts at twelve o'clock.
+  function sliceOf(path: Element) {
+    const [, , startX = 0, startY = 0, , , , largeArc, , endX = 0, endY = 0] =
+      path.getAttribute('d')?.match(/[-\d.e]+/g)?.map(Number) ?? []
+    const turn = (x: number, y: number) => Math.atan2(x, -y) / (2 * Math.PI)
+    const start = turn(startX, startY)
+    return { start, share: (turn(endX, endY) - start + 1) % 1, largeArc }
+  }
+
+  it('draws each category as a slice of its share, on a circle with no axes', () => {
+    const { container } = renderBlocks([chart('pie', [1, 2, 5])])
+
+    expect(Array.from(container.querySelectorAll('path.dui-chart-slice'), sliceOf)).toEqual([
+      { start: expect.closeTo(0), share: expect.closeTo(1 / 8), largeArc: 0 },
+      { start: expect.closeTo(1 / 8), share: expect.closeTo(2 / 8), largeArc: 0 },
+      { start: expect.closeTo(3 / 8), share: expect.closeTo(5 / 8), largeArc: 1 },
+    ])
+    const circle = container.querySelector('svg.dui-chart-pie')
+    expect(circle?.getAttribute('aria-hidden')).toBe('true')
+    expect(circle?.hasAttribute('preserveAspectRatio')).toBe(false)
+    expect(container.querySelector('.dui-chart-zero, .dui-chart-categories')).toBeNull()
+  })
+
+  it('draws the one category of a pie as the whole circle', () => {
+    const { container } = renderBlocks([chart('pie', [7])])
+
+    const slices = container.querySelectorAll('.dui-chart-slice')
+    expect(slices).toHaveLength(1)
+    expect(slices[0]?.tagName).toBe('circle')
+    expect(slices[0]?.getAttribute('r')).toBe('1')
+  })
+
+  it('draws no slice for a pie with no categories', () => {
+    const { container } = renderBlocks([chart('pie', [])])
+
+    expect(container.querySelector('svg.dui-chart-pie')?.childElementCount).toBe(0)
+  })
+
+  it('colours the slices and legend keys in turn, and writes each value by its category', () => {
+    const { container } = renderBlocks([
+      {
+        block: 'chart',
+        kind: 'pie',
+        title: 'Answers by source',
+        categories: ['web', 'api', 'cli', 'mail', 'chat', 'phone'],
+        series: [{ label: 'answers', points: [6, 5, 4, 3, 2, 1] }],
+        categoryLabel: 'Source',
+        valueLabel: 'Answers',
+      },
+    ])
+
+    const colourOf = (mark: Element | null) =>
+      mark?.getAttribute('class')?.match(/dui-chart-bar-\d/)?.[0]
+    const slices = Array.from(container.querySelectorAll('.dui-chart-slice'), colourOf)
+    expect(slices).toEqual([
+      'dui-chart-bar-0',
+      'dui-chart-bar-1',
+      'dui-chart-bar-2',
+      'dui-chart-bar-3',
+      'dui-chart-bar-0',
+      'dui-chart-bar-1',
+    ])
+    const keys = Array.from(container.querySelectorAll('.dui-chart-key'), (key) => [
+      colourOf(key.querySelector('.dui-chart-swatch')),
+      key.textContent,
+    ])
+    expect(keys).toEqual([
+      [slices[0], 'web6'],
+      [slices[1], 'api5'],
+      [slices[2], 'cli4'],
+      [slices[3], 'mail3'],
+      [slices[4], 'chat2'],
+      [slices[5], 'phone1'],
+    ])
   })
 })
 

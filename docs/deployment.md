@@ -46,6 +46,8 @@ The Druks services use the **host network** so they can connect to Postgres, Red
 Drukbox, and provider-specific sandbox addresses from the host network
 namespace. The exe.dev shape reaches VMs over the host tailnet. Other providers
 can return SSH addresses that are directly reachable.
+Postgres listens on `127.0.0.1:5432` and Redis on `127.0.0.1:6379`, so neither
+answers from the network.
 
 ## First-time setup on a fresh box
 
@@ -99,13 +101,13 @@ If you want another installation directory, set
 To install the deploy files of one commit, push it and set `DRUKS_REF` to its
 full SHA. If the commit is in a fork, also set `DRUKS_REPO` to that repository,
 as `<owner>/<name>`. To run a backend image that you built, tag it
-`ghcr.io/czpython/druks:<tag>`, set `DRUKS_TAG` to that tag, and set
+`ghcr.io/getdruks/druks:<tag>`, set `DRUKS_TAG` to that tag, and set
 `DRUKS_SKIP_PULL=1`. The installer then skips `docker pull` and
 `docker compose pull`. Compose still pulls each image that is missing. From a
 checkout of the commit:
 
 ```bash
-docker build -t ghcr.io/czpython/druks:dev .
+docker build -t ghcr.io/getdruks/druks:dev .
 DRUKS_REF="$(git rev-parse HEAD)" DRUKS_TAG=dev DRUKS_SKIP_PULL=1 bash scripts/install.sh
 ```
 
@@ -185,9 +187,9 @@ Configure public webhook access:
 4. Run the installer again.
 
 Caddy provisions a Let's Encrypt certificate for that hostname. It serves only
-`POST /_external/*`, the PAT-authenticated `/mcp` endpoint, and the call streams
-at `/_calls/*`. It does not serve dashboard routes or the identity header. Thus,
-a public client cannot forge the SSO gate.
+`POST /_external/*`, agents' pictures at `GET /media/*`, the PAT-authenticated
+`/mcp` endpoint, and the call streams at `/_calls/*`. It does not serve dashboard
+routes or the identity header. Thus, a public client cannot forge the SSO gate.
 
 Webhook URLs become
 `https://druks.example.com/_external/<provider>/events/`. Agents connect at
@@ -230,7 +232,7 @@ it is not in the default stack. To run it, add this service to
 ```yaml
 services:
   calls:
-    image: ghcr.io/czpython/druks-calls:latest
+    image: ghcr.io/getdruks/druks-calls:latest
     restart: unless-stopped
     network_mode: host
     environment:
@@ -433,6 +435,9 @@ image, host network, port `:8000`, and the Caddyfile from the installer:
   class authenticates each request. Per-provider paths land under
   `/_external/<provider>/<category>/`. App role-module discovery
   registers them at import time.
+- **Agent pictures:** Druks serves an agent's picture at
+  `GET /media/<file-id>` with no sign-in, because a channel's servers fetch it.
+  Any other file id answers 404.
 - **MCP:** Druks exposes `/mcp` publicly. A personal access token authenticates
   each request inside Druks. Caddy does not buffer this route, so its SSE frames stream.
 - **Calls:** Druks exposes `/_calls/*` publicly. Twilio streams a call's audio

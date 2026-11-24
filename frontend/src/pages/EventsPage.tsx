@@ -454,7 +454,8 @@ function ActivityDetail({ event }: { event: FeedItem }) {
       <h3>Input was requested</h3>
       {request.label && <p>{request.label}</p>}
       {typeof request.context === 'string' && request.context && <Markdown source={request.context} />}
-      {Array.isArray(request.context) && <AppPagesProvider app={event.app ?? ''}><Blocks blocks={request.context} /></AppPagesProvider>}
+      {/* A recorded request runs nothing, so each button and input in it is disabled. */}
+      {Array.isArray(request.context) && <fieldset disabled className="activity-request-context"><AppPagesProvider app={event.app ?? ''}><Blocks blocks={request.context} /></AppPagesProvider></fieldset>}
       {request.questions?.map((question) => <div key={question.id}>
         <p>{question.prompt}</p><ul>{question.options.map((option) => <li key={option.id}>{option.label}</li>)}</ul>
       </div>)}
