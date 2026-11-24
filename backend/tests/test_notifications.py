@@ -232,7 +232,7 @@ async def _parked_notification(druks_db, *, ask=None, run_state="parked"):
 
 APPROVE = {"id": "approve", "label": "Approve"}
 REQUEST_CHANGES = {"id": "request_changes", "label": "Request changes"}
-# A question's id is any text: one of these is the note's name, and one is a question's.
+# A question's id is any text. One of these is the note's name. One is a question's.
 QUESTIONS = [
     {
         "id": "note",
@@ -490,18 +490,14 @@ async def test_a_control_that_needs_a_note_takes_an_answer_when_the_review_takes
     [
         ({**_IN_APP_ASK, "questions": []}, "request_changes", "Request changes", False),
         (_IN_APP_ASK, "approve", "Approve", False),
-        # The review takes no answers and no note, so its notification holds no inputs.
+        # The notification holds no inputs, because the review takes no answers and no note.
         ({**_IN_APP_ASK, "reply_fields": ["action"]}, "request_changes", "Request changes", True),
     ],
     ids=["channel-note", "channel-questions", "notification"],
 )
 async def test_a_click_that_needs_more_goes_to_the_chat_when_its_message_shows_no_inputs(
-    druks_db, resume_spy, monkeypatch, ask, control, label, has_inputs
+    druks_db, resume_spy, started, monkeypatch, ask, control, label, has_inputs
 ):
-    started = AsyncMock()
-    monkeypatch.setattr(
-        "druks.notifications.services.DBOS", SimpleNamespace(start_workflow_async=started)
-    )
     monkeypatch.setattr(SlackChannel, "has_inputs", has_inputs)
     run, notification = await _thread_notification(druks_db, ask=ask)
     await request_approval(druks_db, run)
@@ -537,7 +533,7 @@ ANSWERS = {
 
 async def _question_notification(druks_db, *, person="U1", ask=CHOICES):
     """A question that the agent of a Slack chat with ``person`` asked, as its turn left
-    it: with choices, or with the fields of a form."""
+    it. It has choices, or the fields of a form."""
     account = await Account.get_or_create(druks_db, "op@example.com")
     conversation = Conversation(
         account_id=account.id,
@@ -585,17 +581,12 @@ async def test_a_click_on_a_chat_question_is_the_person_s_next_message(druks_db,
     )
 
     assert question.is_acknowledged
-    messages = await druks_db.execute(
-        select(Message.body, Message.is_internal, Message.state).where(
-            Message.conversation_id == question.conversation_id
-        )
-    )
-    assert messages.all() == [("MySQL", False, "pending")]
+    assert await _list_messages(druks_db, question) == [("MySQL", False, "pending")]
     started.assert_awaited_once_with(deliver, question.conversation_id)
 
 
 async def test_a_link_answers_no_chat_question(druks_db, started):
-    # A link names nobody, so it answers no chat, even one whose person is unknown.
+    # A link names nobody. It answers no chat, even one whose person is unknown.
     question = await _question_notification(druks_db, person=None)
 
     with pytest.raises(AnswerNotAllowedError):
@@ -615,7 +606,7 @@ async def test_a_chat_without_a_run_takes_only_a_choice_that_its_question_offere
         druks_db, conversation_id=question.conversation_id, reason="r", body="No buttons."
     )
 
-    with pytest.raises(InvalidChoiceError, match="unknown control '9'"):
+    with pytest.raises(InvalidChoiceError, match="This question offers no choice '9'"):
         await respond_to_notification(
             druks_db, question.correlation_token, {"control": "9"}, user_id="U1", account_id=None
         )
@@ -910,8 +901,8 @@ async def test_respond_run_no_longer_parked_409(tmp_path, druks_db, resume_spy):
 
 
 async def test_respond_direct_call_rejects_whitespace_only_content(druks_db, resume_spy):
-    # The core is also the direct-call boundary (the Slack rail bypasses the
-    # HTTP models' whitespace stripping) — blank means blank on every path.
+    # The core is also the boundary of a direct call. The Slack rail skips the whitespace
+    # strip of the HTTP models. Blank means blank on every path.
     run, notification = await _parked_notification(druks_db)
 
     with pytest.raises(InvalidChoiceError):
@@ -935,8 +926,8 @@ async def test_respond_direct_call_rejects_whitespace_only_content(druks_db, res
 
 
 async def test_respond_ask_without_presentation_not_answerable(tmp_path, druks_db, resume_spy):
-    # An ask that doesn't declare in_app isn't answerable via this rail — the
-    # mapped 422, not a crash.
+    # An ask that does not declare in_app takes no answer on this rail. The rail answers
+    # with a 422, not a crash.
     run, notification = await _parked_notification(
         druks_db, ask={"label": "legacy ask", "controls": ["approve"]}
     )

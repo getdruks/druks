@@ -49,15 +49,15 @@ RUN_STATE_STEPS = {
 # The ends that a run announces in its own last step. DBOS records them after that step.
 RUN_ENDS = ("finished", "failed")
 
-# Druks sends a status this long after its last change, so changes that come close
-# together go out in one edit.
+# Druks sends a status this long after its last change. Changes that come close together
+# then go out in one edit.
 STATUS_DELAY_SECONDS = 1
 
 # A status that keeps changing goes out this long after its first unsent change.
 STATUS_DELAY_LIMIT_SECONDS = 5
 
-# The lock that keeps one send of a status at a time. A retry gives the status to another
-# run, so the id of the status names the lock.
+# The lock that keeps one send of a status at a time. The id of the status names it,
+# because a retry gives the status to another run.
 STATUS_LOCK = "notifications:status:{status}"
 
 # What a person reads when they cannot answer a run of an app that a team lists.
