@@ -16,6 +16,7 @@ class ScheduleResponse(Schema):
     tool: str
     arguments: dict
     cron: str
+    channel_id: str | None
     next_run_at: datetime
 
 
@@ -36,6 +37,7 @@ class AgentScheduleResponse(ScheduleResponse):
             tool=schedule.tool,
             arguments=schedule.arguments,
             cron=schedule.cron,
+            channel_id=schedule.channel_id,
             next_run_at=schedule.next_run_at,
             last_run=last_run,
         )

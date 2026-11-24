@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Annotated
 
 from dbos import DBOS
-from fastapi import APIRouter, Body, Depends, HTTPException, Path
+from fastapi import APIRouter, Body, Depends, HTTPException, Path, Request
 from githubkit.exception import RequestFailed
 from pydantic import StringConstraints
 from slack_sdk.errors import SlackApiError
@@ -25,6 +25,7 @@ from druks.sandbox.exceptions import SandboxUploadError
 
 from .blocks import parse_blocks
 from .channels.whatsapp.exceptions import NumberNotOnWhatsAppError, WahaError
+from .constants import SCHEDULE_HEADER
 from .enums import MessageState
 from .exceptions import (
     ChannelHasNoThreadsError,
@@ -436,6 +437,7 @@ async def show(
 
 @router.post("/instructions", operation_id="run_instruction", status_code=202, tags=["agent"])
 async def run_instruction(
+    request: Request,
     instruction: Annotated[
         str, Body(embed=True, description="The task, in words, as the person gave it.")
     ],
@@ -447,7 +449,11 @@ async def run_instruction(
     own. Do other work yourself."""
     if not current_conversation_id.get():
         raise HTTPException(422, "This call comes from no chat. Start a task from a chat.")
-    return await RunInstruction.start(subject=None, instruction=instruction)
+    return await RunInstruction.start(
+        subject=None,
+        instruction=instruction,
+        schedule_id=request.headers.get(SCHEDULE_HEADER, ""),
+    )
 
 
 @router.post(

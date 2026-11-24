@@ -536,10 +536,31 @@ agent has no schedule of its own.
 | `tool` | The name of one of the agent's tools | `software_factory_review` |
 | `arguments` | The tool's arguments, the same at every call | `{"repo": "acme/api", "prNumber": 7}` |
 | `cron` | When to call, in local time | `0 9 * * *` |
+| `channel` | Optional. The Slack channel where each run posts its answer | `#eng` |
 
 Druks checks that the tool exists and that the cron has five fields when the
 agent saves the schedule. Local time is the installation `timezone`, as for
 reminders.
+
+A schedule can name one Slack channel, by its id or by its name. In a Slack
+chat, a mention of the channel holds the id, and the agent gives that. Say
+"every Monday at 8:00, brief #eng on last week's merges". Only a schedule of
+`chat_run_instruction` takes a channel, because only its run answers in words.
+Druks refuses a new channel while Slack is not connected. Druks also refuses a
+channel that the bot is not a member of: invite the bot to the channel first.
+Druks saves the id of the channel, so the schedule keeps its channel when
+someone renames it in Slack. `list_schedules` gives that id as `channelId`.
+Each run then posts its answer in the channel as a new message, with the name
+and picture of the conversation's agent. Slack shows them when the Slack app
+has the `chat:write.customize` scope. The post is text. Druks sends an answer
+that is too long for one Slack message as several messages, and it sends no
+files. The run still reports to the conversation, so a failure or a question
+goes to the owner there. The report names the channel that took the post, so
+the agent can say where the answer is. When Slack does not take the post, such
+as after the bot left the channel, the run still finishes, and its report to
+the conversation gives the reason. The schedule goes on. The run reads the channel when it posts, so a
+change to the schedule also applies to a run that has started. An interrupted
+run does its task again, so it can post again.
 
 Each schedule has its own DBOS schedule. At each due time, Druks makes the tool
 call through its own MCP server. It calls as the owner, from the
@@ -556,13 +577,14 @@ A due time makes one call, also when two Druks servers run. An interrupted call
 can run again. Druks does not call a due time that passes while it is down.
 
 `list_schedules` lists the caller's schedules with each one's tool, arguments,
-cron, and next time. `change_schedule` replaces the tool, the arguments, and the
-cron of one of the caller's schedules. `stop_schedule` stops it. The runs its
+cron, Slack channel, and next time. `change_schedule` replaces the tool, the
+arguments, the cron, and the Slack channel of one of the caller's schedules. An
+empty `channel` removes the channel. `stop_schedule` stops it. The runs its
 calls already started go on. An admin can also stop another person's schedule.
 
 An agent's page lists the schedules that people set in the agent's conversations, each
-with its owner, its last run, and how that run ended. A person sees the schedules whose
-tool belongs to an app that they can use.
+with its Slack channel, its owner, its last run, and how that run ended. A person sees the
+schedules whose tool belongs to an app that they can use.
 
 ## Tasks
 

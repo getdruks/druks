@@ -76,6 +76,8 @@ async def test_a_person_chooses_a_channel_the_bot_is_in(tmp_path, druks_db, slac
         assert outside.status_code == 422
         assert "Invite it to the channel" in outside.json()["detail"]
         assert client.get("/api/settings/personal").json()["notificationChannelId"] == "C1"
+        by_name = client.patch("/api/settings/personal", json={"notificationChannelId": "#ops"})
+        assert by_name.json()["notificationChannelId"] == "C3"
         direct = client.patch("/api/settings/personal", json={"notificationChannelId": None})
         assert direct.status_code == 200
         assert direct.json()["notificationChannelId"] is None

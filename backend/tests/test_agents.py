@@ -154,7 +154,7 @@ async def test_only_an_admin_gives_an_agent_a_channel_the_bot_is_in(
     tmp_path: Path, druks_db, monkeypatch
 ):
     channels = AsyncMock(return_value=[{"id": "C1", "name": "security"}])
-    monkeypatch.setattr("druks.agents.routes.list_notification_channels", channels)
+    monkeypatch.setattr("druks.notifications.services.list_notification_channels", channels)
     admin = await Account.get_or_create(druks_db, "admin@example.com")
     owner = await Account.get_or_create(druks_db, "owner@example.com")
 
@@ -169,6 +169,11 @@ async def test_only_an_admin_gives_an_agent_a_channel_the_bot_is_in(
             url, json={**update, "channelId": "C2"}, headers={IDENTITY_HEADER: admin.username}
         )
         by_admin = client.put(url, json=update, headers={IDENTITY_HEADER: admin.username})
+        by_name = client.put(
+            url,
+            json={**update, "channelId": "#security"},
+            headers={IDENTITY_HEADER: admin.username},
+        )
         # The bot has left the channel since: an edit that keeps the channel still saves.
         channels.return_value = []
         kept_by_owner = client.put(
@@ -177,13 +182,13 @@ async def test_only_an_admin_gives_an_agent_a_channel_the_bot_is_in(
 
     assert by_owner.status_code == 403
     assert outside.status_code == 422
-    assert by_admin.json()["channelId"] == "C1"
+    assert (by_admin.json()["channelId"], by_name.json()["channelId"]) == ("C1", "C1")
     assert kept_by_owner.json()["channelId"] == "C1"
 
 
 async def test_a_channel_has_one_agent_and_only_a_public_one(tmp_path: Path, druks_db, monkeypatch):
     monkeypatch.setattr(
-        "druks.agents.routes.list_notification_channels",
+        "druks.notifications.services.list_notification_channels",
         AsyncMock(return_value=[{"id": "C1", "name": "security"}]),
     )
     admin = await Account.get_or_create(druks_db, "admin@example.com")

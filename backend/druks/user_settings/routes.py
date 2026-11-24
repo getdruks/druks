@@ -9,7 +9,7 @@ from druks.harnesses.base import Harness
 from druks.harnesses.config import check_config
 from druks.harnesses.exceptions import AgentConfigError
 from druks.harnesses.registry import get_harnesses
-from druks.notifications.services import list_notification_channels
+from druks.notifications.services import require_bot_in_channel
 from druks.registry import (
     channel_registry,
     get_app,
@@ -104,13 +104,8 @@ async def update_personal_settings(
     fields = body.model_dump(exclude_unset=True, exclude_none=True)
     if "notification_channel_id" in body.model_fields_set:
         channel_id = body.notification_channel_id
-        if channel_id and channel_id not in [
-            channel["id"] for channel in await list_notification_channels()
-        ]:
-            raise HTTPException(
-                status_code=422,
-                detail=f"The bot is not in {channel_id}. Invite it to the channel first.",
-            )
+        if channel_id:
+            channel_id = await require_bot_in_channel(channel_id)
         fields["notification_channel_id"] = channel_id or None
     if fields:
         await account.update_preferences(**fields)

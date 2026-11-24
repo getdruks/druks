@@ -8,6 +8,7 @@ from druks.accounts.dependencies import current_account
 from druks.accounts.models import Account
 from druks.api.dependencies import SessionDep
 from druks.exceptions import PermissionDenied
+from druks.notifications.services import require_bot_in_channel
 
 from .models import Schedule
 from .schemas import ScheduleResponse
@@ -43,17 +44,28 @@ async def create_schedule(
         Body(description="The tool's arguments, the same at every call. Give {} for none."),
     ],
     cron: Annotated[str, Body(description="A cron for when to call, local time.")],
+    channel: Annotated[
+        str,
+        Body(
+            description="A Slack channel where each run of chat_run_instruction posts its "
+            "answer. Give its id, such as C0123ABCD: a mention <#C0123ABCD|eng> holds it. "
+            "With no id, give its name, such as #eng. Leave it out to post in no channel."
+        ),
+    ] = "",
     account: Account = Depends(current_account),
 ) -> Schedule:
     """Call one of your tools again and again on a cron, as the person in this chat. For
     example, schedule a tool that starts a run. When none of your tools does the task,
     schedule chat_run_instruction with the task in words. Each call goes through the same
-    checks as when you call the tool. Its runs report to this chat. Local time is the
-    installation timezone. The answer's nextRunAt is local. Tell the person that time as
-    it is. When Druks refuses the time, ask the person rather than guess."""
+    checks as when you call the tool. Its runs report to this chat. With channel,
+    each run also posts its answer in that channel. The bot must be a member of it. Local
+    time is the installation timezone. The answer's nextRunAt is local. Tell the person
+    that time as it is. When Druks refuses the time, ask the person rather than guess."""
     conversation_id = current_conversation_id.get()
     if not conversation_id:
         raise HTTPException(422, "This call comes from no chat. Make a schedule from a chat.")
+    if channel:
+        channel = await require_bot_in_channel(channel)
     schedule = await Schedule.create(
         session,
         account_id=account.id,
@@ -61,6 +73,7 @@ async def create_schedule(
         tool=tool,
         arguments=arguments,
         cron=cron,
+        channel_id=channel,
         tool_names=request.app.state.agent_tools.values(),
     )
     await apply_schedule(schedule)
@@ -79,8 +92,8 @@ async def create_schedule(
 async def list_schedules(
     session: SessionDep, account: Account = Depends(current_account)
 ) -> list[Schedule]:
-    """Your schedules, newest first: each one's conversation, tool, arguments, cron, and
-    next time."""
+    """Your schedules, newest first: each one's conversation, tool, arguments, cron, Slack
+    channel, and next time."""
     return await Schedule.list_for_account(session, account.id)
 
 
@@ -101,17 +114,29 @@ async def change_schedule(
         Body(description="The tool's arguments, the same at every call. Give {} for none."),
     ],
     cron: Annotated[str, Body(description="A cron for when to call, local time.")],
+    channel: Annotated[
+        str,
+        Body(
+            description="A Slack channel where each run of chat_run_instruction posts its "
+            "answer. Give its id, such as C0123ABCD: a mention <#C0123ABCD|eng> holds it. "
+            'With no id, give its name, such as #eng. Give "" to post in no channel.'
+        ),
+    ],
     account: Account = Depends(current_account),
 ) -> Schedule:
-    """Change one of your schedules. Give all three: the tool, its arguments, and the cron.
-    They replace the old ones."""
+    """Change one of your schedules. Give all four: the tool, its arguments, the cron, and
+    the Slack channel. They replace the old ones."""
     schedule = await Schedule.get_for_account(session, schedule_id, account.id)
     if not schedule:
         raise HTTPException(404, "Schedule not found. Choose one from list_schedules.")
+    # The bot can leave the channel later. A change that gives the saved id still saves.
+    if channel and channel != schedule.channel_id:
+        channel = await require_bot_in_channel(channel)
     schedule.change(
         tool=tool,
         arguments=arguments,
         cron=cron,
+        channel_id=channel,
         tool_names=request.app.state.agent_tools.values(),
     )
     await apply_schedule(schedule)

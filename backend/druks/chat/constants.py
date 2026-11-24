@@ -14,6 +14,10 @@ BRIDGE_SETTLED_STATUSES = ("idle", "replied", "cancelled")
 TRANSCRIPTION_TIMEOUT_SECONDS = 120.0
 # The header an agent's MCP calls carry to name their conversation.
 CONVERSATION_HEADER = "X-Druks-Conversation"
+# Names the schedule that makes a tool call, so the run it starts knows its schedule.
+SCHEDULE_HEADER = "X-Druks-Schedule"
+# The agent's name for the tool that starts a chat.run_instruction run.
+RUN_INSTRUCTION_TOOL = "chat_run_instruction"
 # Every agent's prompt ends with this, so the agent knows an internal message when it
 # reads one.
 INTERNAL_MESSAGES_PROMPT = (

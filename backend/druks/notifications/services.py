@@ -15,7 +15,7 @@ from druks.durable.enums import RunState
 from druks.durable.exceptions import ArtifactContentMissing
 from druks.durable.models import Artifact, Run
 from druks.durable.reads import read_ask
-from druks.exceptions import ObjectNotFound
+from druks.exceptions import ObjectNotFound, ValidationError
 from druks.notifications.constants import (
     APPROVER_ONLY_MESSAGE,
     NOTE_FIELD,
@@ -42,6 +42,16 @@ async def list_notification_channels() -> list[dict]:
     posts only in a channel that it is a member of."""
     client = await Slack.get_client()
     return sorted(await client.list_member_channels(), key=lambda channel: channel["name"])
+
+
+async def require_bot_in_channel(channel: str) -> str:
+    """The id of a channel that a person gives by its id or by its name. Refuse a channel
+    that the bot is not a member of."""
+    name = channel.removeprefix("#")
+    for member_channel in await list_notification_channels():
+        if name in (member_channel["id"], member_channel["name"]):
+            return member_channel["id"]
+    raise ValidationError(f"The bot is not in {channel}. Invite it to the channel first.")
 
 
 async def get_rendered_ask(session: AsyncSession, run: Run) -> dict:

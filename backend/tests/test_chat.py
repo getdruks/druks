@@ -2949,7 +2949,7 @@ async def test_an_agent_starts_a_task_run_only_from_a_chat(
 ):
     started_from = []
 
-    async def start(*, subject, instruction):
+    async def start(*, subject, instruction, schedule_id):
         started_from.append((subject, instruction, current_conversation_id.get()))
         return "run-1"
 

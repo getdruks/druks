@@ -6,8 +6,8 @@ from fastmcp import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
 from druks.agents.constants import PRIVATE_AGENT_MESSAGE
+from druks.chat import constants as chat_constants
 from druks.chat import service as chat_service
-from druks.chat.constants import CONVERSATION_HEADER, REFUSED_MESSAGE, SKIPPED_MESSAGE
 from druks.chat.enums import MessageRole
 from druks.chat.models import Conversation
 from druks.durable.engine import step_session
@@ -83,7 +83,10 @@ async def call_tool(schedule_id: str) -> None:
     try:
         transport = StreamableHttpTransport(
             get_druks_mcp_server(allowed_tools=()).url,
-            headers={CONVERSATION_HEADER: conversation_id},
+            headers={
+                chat_constants.CONVERSATION_HEADER: conversation_id,
+                chat_constants.SCHEDULE_HEADER: schedule_id,
+            },
             auth=bearer,
         )
         async with Client(transport) as client:
@@ -109,7 +112,7 @@ async def report_skip(schedule_id: str, reason: str) -> str | None:
         if conversation.agent and not conversation.account.can_talk_to(conversation.agent):
             notice = await conversation.create_message(
                 session,
-                REFUSED_MESSAGE.format(tool=schedule.tool, reason=reason),
+                chat_constants.REFUSED_MESSAGE.format(tool=schedule.tool, reason=reason),
                 role=MessageRole.ASSISTANT,
             )
             await session.commit()
@@ -118,5 +121,5 @@ async def report_skip(schedule_id: str, reason: str) -> str | None:
         return await chat_service.report_outcome(
             session,
             schedule.conversation_id,
-            SKIPPED_MESSAGE.format(tool=schedule.tool, reason=reason),
+            chat_constants.SKIPPED_MESSAGE.format(tool=schedule.tool, reason=reason),
         )

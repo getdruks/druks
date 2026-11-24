@@ -2449,7 +2449,12 @@ async def test_a_person_makes_their_schedule_in_a_chat_and_only_they_change_it(
     owner = {"Authorization": f"Bearer {owner_token}"}
     other = {"Authorization": f"Bearer {other_token}"}
     scan = {"tool": "list_schedules", "arguments": {}, "cron": "0 */2 * * *"}
-    change = {"tool": "list_schedules", "arguments": {"page": 2}, "cron": "0 9 * * *"}
+    change = {
+        "tool": "list_schedules",
+        "arguments": {"page": 2},
+        "cron": "0 9 * * *",
+        "channel": "",
+    }
 
     async with asgi_client(api) as client:
         nowhere = await client.post("/api/schedules", json=scan, headers=owner)

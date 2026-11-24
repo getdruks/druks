@@ -292,13 +292,7 @@ class SlackChannel(Channel):
         them. An agent's reply shows the agent's name and picture."""
         client = SlackClient(token=await Slack.get_bot_token())
         room, _, thread_ts = conversation.thread_id.partition(":")
-        # Slack takes a custom name only with the scope. A workspace that has not
-        # approved the app again gets the reply under the app's own name.
-        agent = None
-        if SLACK_CUSTOMIZE_SCOPE in (await Slack.get_grant()).scopes:
-            agent = conversation.agent
-        username = agent.name if agent else None
-        icon_url = agent.picture_url if agent else None
+        identity = await cls.get_identity(conversation.agent)
         if reply.blocks:
             blocks = reply.answer_blocks
             posted = await deliver_notification(
@@ -309,8 +303,7 @@ class SlackChannel(Channel):
                 account=conversation.account,
                 blocks=blocks,
                 thread_ts=thread_ts,
-                username=username,
-                icon_url=icon_url,
+                **identity,
             )
         else:
             posted, *_ = [
@@ -318,13 +311,39 @@ class SlackChannel(Channel):
                     room or conversation.user_id,
                     reply.answer[start : start + MARKDOWN_TEXT_LIMIT],
                     thread_ts=thread_ts,
-                    username=username,
-                    icon_url=icon_url,
+                    **identity,
                 )
                 for start in range(0, len(reply.answer), MARKDOWN_TEXT_LIMIT)
             ]
         reply.source_id = f"{posted['channel']}:{posted['ts']}"
         await session.commit()
+
+    @classmethod
+    async def send_in_room(
+        cls, session: AsyncSession, room: str, text: str, *, agent: Agent | None
+    ) -> None:
+        """Post ``text`` at the top of ``room``, in pieces that fit a markdown block. Each
+        piece shows the agent's name and picture."""
+        client = SlackClient(token=await Slack.get_bot_token())
+        identity = await cls.get_identity(agent)
+        for start in range(0, len(text), MARKDOWN_TEXT_LIMIT):
+            await deliver_notification(
+                client,
+                room,
+                text[start : start + MARKDOWN_TEXT_LIMIT],
+                session=session,
+                account=None,
+                **identity,
+            )
+
+    @classmethod
+    async def get_identity(cls, agent: Agent | None) -> dict:
+        """The name and the picture that a message of ``agent`` shows. Slack takes them
+        only with the scope. A workspace that has not approved the app again gets the
+        message under the app's own name."""
+        if agent and SLACK_CUSTOMIZE_SCOPE in (await Slack.get_grant()).scopes:
+            return {"username": agent.name, "icon_url": agent.picture_url}
+        return {}
 
     @classmethod
     def validate_fields(cls, fields: list[dict]) -> None:

@@ -2,6 +2,7 @@ from typing import ClassVar
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from druks.agents.models import Agent
 from druks.chat.exceptions import ChannelHasNoThreadsError, ChannelStartsNoConversationsError
 from druks.chat.models import Conversation, Message
 from druks.notifications.models import Notification
@@ -48,6 +49,14 @@ class Channel:
         cls, session: AsyncSession, conversation: Conversation, reply: Message
     ) -> None:
         """Send the agent's reply to where the conversation lives."""
+        raise NotImplementedError
+
+    @classmethod
+    async def send_in_room(
+        cls, session: AsyncSession, room: str, text: str, *, agent: Agent | None
+    ) -> None:
+        """Send ``text`` as a new message at the top of ``room``, outside a conversation,
+        as ``agent``. ``room`` is the id that the channel gives the place."""
         raise NotImplementedError
 
     @classmethod

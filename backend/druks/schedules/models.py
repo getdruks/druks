@@ -9,6 +9,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
+from druks.chat.constants import RUN_INSTRUCTION_TOOL
 from druks.chat.models import Conversation
 from druks.core.models import Uuid7Pk
 from druks.exceptions import ValidationError
@@ -36,6 +37,8 @@ class Schedule(Base, Uuid7Pk):
     arguments: Mapped[dict[str, Any]] = mapped_column(JSONB)
     # A cron in the installation timezone.
     cron: Mapped[str]
+    # The id of the channel where each run posts its answer. None posts nowhere.
+    channel_id: Mapped[str | None] = mapped_column(default=None)
     created_at: Mapped[datetime] = mapped_column(default=Base.utc_now)
 
     @classmethod
@@ -48,30 +51,41 @@ class Schedule(Base, Uuid7Pk):
         tool: str,
         arguments: dict[str, Any],
         cron: str,
+        channel_id: str = "",
         tool_names: Collection[str],
     ) -> "Schedule":
         cls._check_tool(tool, tool_names)
         cls._check_cron(cron)
+        cls._check_channel(channel_id, tool)
         schedule = cls(
             account_id=account_id,
             conversation_id=conversation_id,
             tool=tool,
             arguments=arguments,
             cron=cron,
+            channel_id=channel_id or None,
         )
         session.add(schedule)
         await session.flush()
         return schedule
 
     def change(
-        self, *, tool: str, arguments: dict[str, Any], cron: str, tool_names: Collection[str]
+        self,
+        *,
+        tool: str,
+        arguments: dict[str, Any],
+        cron: str,
+        channel_id: str,
+        tool_names: Collection[str],
     ) -> None:
-        """Set the tool, its arguments and the cron."""
+        """Set the tool, its arguments, the cron and the channel."""
         self._check_tool(tool, tool_names)
         self._check_cron(cron)
+        self._check_channel(channel_id, tool)
         self.tool = tool
         self.arguments = arguments
         self.cron = cron
+        self.channel_id = channel_id or None
 
     @staticmethod
     def _check_tool(tool: str, tool_names: Collection[str]) -> None:
@@ -93,6 +107,15 @@ class Schedule(Base, Uuid7Pk):
             raise ValidationError(
                 f"'{cron}' never comes due. Write a date that exists, such as '0 9 28 2 *'."
             ) from error
+
+    @staticmethod
+    def _check_channel(channel_id: str, tool: str) -> None:
+        """Only the tool whose run answers in words takes a channel."""
+        if channel_id and tool != RUN_INSTRUCTION_TOOL:
+            raise ValidationError(
+                f"A run of '{tool}' has no answer to post in a channel. "
+                f"Schedule {RUN_INSTRUCTION_TOOL}, or leave channel out."
+            )
 
     @classmethod
     async def list_for_account(cls, session: AsyncSession, account_id: str) -> list["Schedule"]:
