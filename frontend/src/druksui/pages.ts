@@ -3,9 +3,9 @@ import { getAppUI, type SubjectTarget } from '../apps/registry'
 
 import type { Block, Follows, Link, Operation, PageEntry, PageSnapshot } from '../api/types'
 
-// Which app's pages a block tree belongs to. A Link carries a page name, and
-// only this table turns that name into a URL — so the renderer reads it here
-// rather than threading it through every nested block.
+// Which app's pages a block tree belongs to. A Link carries a page name. Only
+// this table turns that name into a URL. The renderer reads the table here. No
+// nested block passes it on.
 export const PagesContext = createContext<{
   app: string
   target?: SubjectTarget
@@ -21,6 +21,10 @@ export const PagesContext = createContext<{
 // The named region a block sits in, if any. An action that refreshes its region
 // reads this to know which one.
 export const RegionContext = createContext('')
+
+// Whether the surface around a block shows the block's text form when the page
+// cannot draw the block, or a value inside it.
+export const HasTextFormContext = createContext(false)
 
 /** Empty when an argument is missing, which reads as a broken link. */
 export function fillPath(path: string, args: Record<string, string>): string {
@@ -70,16 +74,16 @@ export function tabsFor(pages: PageEntry[], root: PageEntry): PageEntry[] {
   return [root, ...children]
 }
 
-/** A detail page: the path it adds to its parent — its whole path when it has
- * none — carries a route parameter. Every other child is a tab. */
+/** A detail page has a route parameter in the path that it adds to its parent.
+ * With no parent, the parameter is in its whole path. Every other child is a tab. */
 export function isDetail(pages: PageEntry[], current: PageEntry): boolean {
   const parent = pages.find((entry) => entry.name === current.parent)
   const own = parent ? current.path.slice(parent.path.length) : current.path
   return own.includes('{')
 }
 
-/** Where a detail page links back to: the page it was declared under, else the
- * declared page whose path is the longest proper prefix of its own. */
+/** Where a detail page links back to: the parent that its entry names. Else it is
+ * the declared page whose path is the longest proper prefix of its own. */
 export function parentOf(pages: PageEntry[], current: PageEntry): PageEntry | undefined {
   const declared = pages.find((entry) => entry.name === current.parent)
   if (declared) return declared
@@ -89,7 +93,7 @@ export function parentOf(pages: PageEntry[], current: PageEntry): PageEntry | un
 }
 
 /** The live URL of an ancestor page: the current location cut to that page's
- * depth, so the parameters already in the URL come along. */
+ * depth. The parameters already in the URL come along. */
 export function hrefUnder(location: string, ancestor: PageEntry): string {
   return location.split('/').slice(0, ancestor.path.split('/').length).join('/')
 }
@@ -119,7 +123,7 @@ export function pageQueryKey(
 }
 
 /** Every subject this snapshot watches: the page's own, and each named
- * region's. One entry per subject, so a page that follows the same subject
+ * region's. One entry per subject. A page that follows the same subject
  * twice opens one stream. */
 export function followedSubjects(snapshot: PageSnapshot): Follows[] {
   const found = new Map<string, Follows>()
@@ -134,8 +138,8 @@ export function followedSubjects(snapshot: PageSnapshot): Follows[] {
 
 /** Take the regions that watch ``subject`` from ``fresh`` and put them in place
  * of the ones ``previous`` holds. Everything else stays the object it already
- * was, so nothing else re-renders. A page that watches ``subject`` itself is
- * replaced whole. */
+ * was. Nothing else re-renders. The fresh snapshot replaces a page that watches
+ * ``subject`` itself. */
 export function mergeRegions(
   previous: PageSnapshot,
   fresh: PageSnapshot,
@@ -149,8 +153,8 @@ export function mergeRegions(
       .filter((region) => watches(region.follows, subject))
       .map((region) => [region.name, region]),
   )
-  // A page that dropped or renamed one of these regions is a different page, so
-  // nothing is left to merge into: take the new one whole.
+  // A page that dropped or renamed one of these regions is a different page.
+  // Nothing is left to merge into. Take the new one whole.
   if (standing.length !== replacements.size) return fresh
   if (standing.some((region) => !replacements.has(region.name))) return fresh
   return { ...previous, blocks: replaceRegions(previous.blocks, replacements) }
@@ -165,8 +169,8 @@ function watches(follows: Follows | null, subject: Follows): boolean {
 }
 
 /** Take one named region from ``fresh`` and put it in place of the one
- * ``previous`` holds. What an action refreshes is the region it sits in, and
- * nothing else on the page moves. */
+ * ``previous`` holds. What an action refreshes is the region it sits in. Nothing
+ * else on the page moves. */
 export function mergeRegion(
   previous: PageSnapshot,
   fresh: PageSnapshot,
@@ -179,16 +183,16 @@ export function mergeRegion(
 
 type Region = Extract<Block, { block: 'section' }>
 
-// A page snapshot is data an app produced, and this runs in the component body
-// where no error boundary can catch a throw. A shape that is not a block list
-// simply holds no regions; the renderer is where the app hears about it.
-// Every block that holds other blocks; a region can sit inside any of them.
+// Every block that holds other blocks. A region can sit inside any of them.
 function inside(block: Block): Block[] | undefined {
   if (block.block === 'section' || block.block === 'card') return block.blocks
   if (block.block === 'stack' || block.block === 'columns') return block.blocks
   return undefined
 }
 
+// A page snapshot is data that an app produced. This code runs in the component
+// body, where no error boundary catches a throw. A shape that is not a block
+// list holds no regions. The renderer tells the app about it.
 function regionsIn(blocks: Block[]): Region[] {
   if (!Array.isArray(blocks)) return []
   const found: Region[] = []
@@ -221,7 +225,7 @@ function replaceRegions(blocks: Block[], replacements: Map<string, Region>): Blo
       return block
     }
     const inner = replaceRegions(block.blocks, replacements)
-    // Nothing under this block moved, so hand back the block itself: React
+    // Nothing under this block moved. Hand back the block itself. React
     // sees the same object and renders none of it again.
     if (inner === block.blocks) return block
     changed = true

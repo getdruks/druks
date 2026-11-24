@@ -52,7 +52,7 @@ class Message(Base, Uuid7Pk):
     # Druks wrote it for the agent. It never reaches the source.
     is_internal: Mapped[bool] = mapped_column(default=False, server_default=text("false"))
     # The message's id at its source. Druks records a reply's id before it sends the
-    # reply, so the source's copy of it is known as Druks's own.
+    # reply. Then Druks can tell that the source's copy of the reply is its own.
     source_id: Mapped[str | None] = mapped_column(unique=True)
     file: Mapped[File | None] = FileField()
     # What the person said in the message's voice note.
@@ -73,12 +73,6 @@ class Message(Base, Uuid7Pk):
         shows."""
         text = ui.Markdown(self.answer).model_dump(mode="json", by_alias=True)
         return [text, *(self.blocks or [])]
-
-    @property
-    def text_form(self) -> str:
-        """The body, then the text form of the blocks that the reply shows."""
-        blocks = ui.Stack(self.blocks or []).to_markdown()
-        return "\n\n".join(part for part in (self.body, blocks) if part)
 
     @classmethod
     async def get_for_source_id(cls, session: AsyncSession, source_id: str) -> "Message | None":
@@ -135,15 +129,16 @@ class Conversation(Base, Uuid7Pk):
     source: Mapped[str] = mapped_column(default=ConversationSource.WEB)
     # The channel connection that the conversation arrives on.
     connection_id: Mapped[str | None] = mapped_column(ForeignKey("vault.id", ondelete="RESTRICT"))
-    # Loaded in its own query: a join would hand the vault's encrypted column a NULL.
+    # SQLAlchemy loads it in its own query. A join would give the vault's encrypted
+    # column a NULL.
     connection: Mapped[VaultSecret | None] = relationship(lazy="selectin")
     # The person who writes, as the source names them.
     user_id: Mapped[str | None]
     user_name: Mapped[str] = mapped_column(default="", server_default=text("''"))
     user_phone: Mapped[str] = mapped_column(default="", server_default=text("''"))
-    # The place on the connection where the conversation lives, as its channel names
-    # it: a Slack thread, a Telegram topic. Empty for a direct chat. Only the channel
-    # that wrote it reads inside it.
+    # The conversation's thread on the connection, as its channel names it: a Slack
+    # thread or a Telegram topic. Empty for a direct chat. Only the channel that wrote
+    # the value reads what is inside it.
     thread_id: Mapped[str] = mapped_column(default="", server_default=text("''"))
     title: Mapped[str | None]
     is_pinned: Mapped[bool] = mapped_column(default=False, server_default=text("false"))
@@ -209,9 +204,9 @@ class Conversation(Base, Uuid7Pk):
         is_tag_required: bool = False,
         agent_id: str | None = None,
     ) -> "Conversation":
-        """The one conversation of a person with an agent, or with the Bot, in a thread,
-        or in a direct chat, on a channel's connection, under the account the person
-        routes to. It keeps the name the person shows now."""
+        """The one conversation of a person with an agent or with the Bot, in a thread or
+        a direct chat on a channel's connection. It belongs to the account that the person
+        routes to. It keeps the name that the person shows now."""
         await session.execute(
             insert(cls)
             .values(
@@ -254,10 +249,10 @@ class Conversation(Base, Uuid7Pk):
         user_id: str,
         thread_id: str,
     ) -> "Conversation | None":
-        """The conversation of a person in a thread on a channel's connection that they
-        last wrote in. An agent's late reply does not make its conversation the latest,
-        and a bare tag's empty conversation comes last."""
-        # A run's report arrives in the person's role, so only what they wrote counts.
+        """The conversation that a person last wrote in, in a thread on a channel's
+        connection. A late reply of an agent does not make its conversation the latest.
+        The empty conversation of a bare tag comes last."""
+        # A run's report arrives in the person's role. Only what they wrote counts.
         last_written_at = (
             select(func.max(Message.created_at))
             .where(
@@ -390,8 +385,8 @@ class Conversation(Base, Uuid7Pk):
         )
 
     async def get_unanswered_message(self, session: AsyncSession) -> Message | None:
-        """The message whose turn comes first: the newest delivered message, which
-        names the turn the agent answers now, or else the oldest pending message."""
+        """The message whose turn comes first. That is the newest delivered message, which
+        names the turn that the agent answers now. Else it is the oldest pending message."""
         delivered_message = await session.scalar(
             select(Message)
             .where(Message.conversation_id == self.id, Message.state == MessageState.DELIVERED)
@@ -472,8 +467,8 @@ class Conversation(Base, Uuid7Pk):
         )
 
     async def is_held(self, session: AsyncSession) -> bool:
-        """Whether the chat's turns wait: a person answers it from the connection's
-        phone, or its connection was removed."""
+        """Whether the chat's turns wait. They wait while a person answers the chat from
+        the connection's phone, or after someone removed its connection."""
         if self.connection and not self.connection.is_live:
             return True
         return bool(await self.get_pause_id(session))
@@ -488,7 +483,7 @@ class Conversation(Base, Uuid7Pk):
         )
 
     async def set_session_file(self, session: AsyncSession, file: File) -> None:
-        """Keep the agent's latest session files; the file reaper removes the previous ones."""
+        """Keep the agent's latest session files. The file reaper removes the previous ones."""
         if self.session_file:
             previous = await session.get(FileRecord, self.session_file.id)
             previous.deleted_at = Base.utc_now()
@@ -578,8 +573,8 @@ class Reminder(Base, Uuid7Pk):
 
     @classmethod
     async def list_due(cls, session: AsyncSession) -> list["Reminder"]:
-        """The reminders due now. Their rows stay locked until the caller commits, so a
-        slow tick and the next one cannot send a reminder twice."""
+        """The reminders due now. Their rows stay locked until the caller commits. A slow
+        tick and the next one cannot send a reminder twice."""
         return list(
             await session.scalars(
                 select(cls)
@@ -620,7 +615,7 @@ class Reminder(Base, Uuid7Pk):
 
     async def create_message(self, session: AsyncSession) -> Message:
         """Save the reminder as the Bot's message in its conversation. A reminder on a
-        cron moves to its next time, and one that sends once is deleted."""
+        cron moves to its next time. Druks deletes one that sends once."""
         message = await self.conversation.create_message(
             session, self.body, role=MessageRole.ASSISTANT
         )

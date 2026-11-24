@@ -8,7 +8,14 @@ import { Chart, Controls, Facts, ImageGallery, List, Metrics, Table } from './Da
 import { ActionButton, Form, useAction } from './Form'
 import { LinkControl } from './LinkControl'
 import { Files, Image, Progress, Timeline } from './RunBlocks'
-import { hrefForLink, isOutbound, isServerHref, PagesContext, RegionContext } from './pages'
+import {
+  HasTextFormContext,
+  hrefForLink,
+  isOutbound,
+  isServerHref,
+  PagesContext,
+  RegionContext,
+} from './pages'
 
 const CardsZoneContext = createContext('')
 
@@ -84,6 +91,7 @@ export function Blocks({ blocks }: { blocks: Block[] }) {
 function BlockContent({ block }: { block: Block }) {
   const enclosingRegion = useContext(RegionContext)
   const { target, clearTarget } = useContext(PagesContext)
+  const hasTextForm = useContext(HasTextFormContext)
 
   switch (block.block) {
     case 'text':
@@ -233,14 +241,17 @@ function BlockContent({ block }: { block: Block }) {
         </section>
       )
     }
-    default:
+    default: {
+      const kind = (block as { block: string }).block
+      if (hasTextForm) throw new Error(`this dashboard cannot render a ${kind} block`)
       // An app on a newer Druks than this shell. Name the block and keep the
       // rest of the page.
       return (
         <div className="dui-unknown mono" role="alert">
-          this dashboard cannot render a {(block as { block: string }).block} block
+          this dashboard cannot render a {kind} block
         </div>
       )
+    }
   }
 }
 
@@ -322,8 +333,8 @@ function CardsStatic({
 function CardItem({ card }: { card: CardBlock }) {
   const zone = useContext(CardsZoneContext)
   const drag = useCardsDrag()
-  // Set by a drag, so a click the browser fires after it does not navigate. A
-  // real click clears it with its own pointerdown.
+  // A drag sets it. Then the click that the browser fires after the drag does not
+  // navigate. A real click clears it with its own pointerdown.
   const skipClick = useRef(false)
   const payload = card.drag ?? {}
   const movable = Boolean(zone && Object.keys(payload).length)
