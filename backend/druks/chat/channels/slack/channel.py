@@ -175,7 +175,9 @@ class SlackChannel(Channel):
         """Save the message in the account's conversation with the agent, or with the
         Bot, for its place, and start its turn. Each file the message carries is a Druks
         file: the first on the message, each further one on a message of its own. A
-        message with no text and no file gives the agent nothing to read."""
+        message with no text and no file gives the agent nothing to read. Before the
+        person's first message to an agent in a thread is saved, a note in the thread
+        tells them where their replies go."""
         conversation = await Conversation.get_or_create_for_user(
             session,
             row,

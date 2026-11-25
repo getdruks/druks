@@ -20,9 +20,8 @@ UNACCEPTED_AUTOMATION_REPLY = (
     "I do not answer this automation yet. A Druks admin can accept it here: {url}"
 )
 AGENT_NOTE = (
-    "<@{user}>, {agent} is answering. Your replies in this thread go to {agent} for "
-    "{hours} hours after the last message, until you tag another agent. "
-    "After that, tag me again."
+    "<@{user}>, {agent} is answering. Your replies in this thread go to {agent} "
+    "until you tag another agent. After {hours} hours with no message, tag me again."
 )
 TAG_REQUIRED_AGENT_NOTE = "<@{user}>, {agent} is answering. Tag me in each reply."
 WELCOME_TEMPLATE = "chat/channels/slack/welcome.md"
