@@ -1,6 +1,8 @@
+import asyncio
 import logging
 import time
 from collections.abc import Sequence
+from contextlib import suppress
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -16,15 +18,17 @@ from druks.contrib.software_factory.contracts import (
 from druks.contrib.software_factory.enums import HumanFeedbackAction, Resolution, ReviewDecision
 from druks.contrib.software_factory.models import ProjectRepo, WorkItem
 from druks.contrib.software_factory.ticketing.enums import TicketStatus
+from druks.core.apis.exceptions import GitHubRerunRefusedError
 from druks.core.services import Github
 from druks.db import db_session
 from druks.mcp.inbound import get_druks_mcp_server
+from druks.prompts import render_prompt
 from druks.sandbox import SandboxMcpServer, SandboxSecret
 from druks.sandbox.layout import get_related_root, get_work_root
 from druks.services.exceptions import ServiceNotConnectedError
 from druks.settings import get_settings
 from druks.skills.models import Skill
-from druks.workflows import FatalError, Workflow, step
+from druks.workflows import FatalError, WaitTimeout, Workflow, step
 from druks.workspaces import RepoWorkspace
 
 from .app import SoftwareFactory
@@ -35,6 +39,11 @@ from .constants import (
     CI_TTL_SECONDS,
     GITHUB_MCP_NAME,
     GITHUB_MCP_URL,
+    IMPLEMENT_EFFORT_BY_SIZE,
+    RERUN_CONCLUSIONS,
+    RERUN_POLL_SECONDS,
+    RERUN_START_POLLS,
+    RUN_ACTIVE_STATUSES,
     TICKET_TOOLS,
 )
 from .datastructures import PullRequest
@@ -468,6 +477,10 @@ class Build(Workflow):
                     "Draft pull request", message="Druks waits for CI on the pull request."
                 )
                 ci_report = await self._wait_for_ci(delivery.head_sha)
+                if ci_report.conclusion == "red" and await self._rerun_failed_jobs(
+                    delivery.head_sha
+                ):
+                    ci_report = await self._wait_for_ci(delivery.head_sha)
                 if ci_report.conclusion == "red" and can_revise:
                     continue
             await self._report_step("Review", message="Druks reviews the pull request.")
@@ -480,12 +493,63 @@ class Build(Workflow):
                 return
 
     async def _wait_for_ci(self, head_sha: str) -> CiReport:
-        """Wait until CI has finished on ``head_sha``, and return its verdict."""
+        """Wait until CI has finished on ``head_sha``, and return its verdict. The wait keeps
+        the implementer's box, because a red CI resumes the implementer's session, a file on
+        that box."""
         started_at = await self._now()
         while not (ci_report := await self._read_ci(head_sha, started_at)):
-            await self.sleep(CI_POLL_SECONDS, label="Waiting for CI", until="check.completed")
+            with suppress(WaitTimeout):
+                await self.wait(
+                    "check.completed",
+                    label="Waiting for CI",
+                    ttl_seconds=CI_POLL_SECONDS,
+                    hold_box=True,
+                )
         self.journal.add(ci_report)
         return ci_report
+
+    @step(retries=3)
+    async def _rerun_failed_jobs(self, head_sha: str) -> bool:
+        """Rerun every failed or timed-out Actions run on ``head_sha`` once, and wait for
+        the rerun to start, so the next CI read sees it and not the old red. Return whether
+        a rerun is running. A red with no Actions run to rerun, such as
+        ``druks-house-rules``, returns False. A run that already has a second attempt is not
+        rerun again, so a retry of this step reruns no run twice."""
+        repo = (await self.subject).repo
+        github = await Github.get_client(repo)
+        runs = await github.list_workflow_runs(repo, head_sha)
+        # CI had finished when the build read it red, so a run that is active now is a rerun,
+        # also when GitHub has not raised its attempt number yet.
+        has_rerun = any(
+            run["run_attempt"] > 1 or run["status"] in RUN_ACTIVE_STATUSES for run in runs
+        )
+        attempts = {}
+        for run in runs:
+            if run["conclusion"] not in RERUN_CONCLUSIONS or run["run_attempt"] > 1:
+                continue
+            try:
+                await github.rerun_failed_jobs(repo, run["id"])
+            except GitHubRerunRefusedError as error:
+                logger.warning("Druks could not rerun %s", error)
+                continue
+            attempts[run["id"]] = run["run_attempt"]
+        if not attempts and not has_rerun:
+            return False
+        for _ in range(RERUN_START_POLLS):
+            runs = {run["id"]: run for run in await github.list_workflow_runs(repo, head_sha)}
+            if all(
+                run_id in runs
+                and (
+                    runs[run_id]["run_attempt"] > attempt
+                    or runs[run_id]["status"] in RUN_ACTIVE_STATUSES
+                )
+                for run_id, attempt in attempts.items()
+            ):
+                break
+            await asyncio.sleep(RERUN_POLL_SECONDS)
+        else:
+            logger.warning("The rerun on %s did not start in time", head_sha)
+        return True
 
     @step
     async def _now(self) -> float:
@@ -579,12 +643,23 @@ class Build(Workflow):
     # Body code, never @step. The agent calls inside memoize themselves and write the
     # journal. On replay a @step would skip them, and the journal would stay empty.
     async def implement(self) -> ImplementationOutput:
-        delivery = await SoftwareFactory.implement()
+        effort = IMPLEMENT_EFFORT_BY_SIZE.get(self.journal.plan_size)
+        # A red CI continues the implementer's session with the red checks, and the call
+        # starts over with its full prompt when it cannot.
+        resume = self._report_red_ci if self.journal.red_ci_report else None
+        delivery = await SoftwareFactory.implement(effort=effort, resume=resume)
         # The implementer found a contradiction in the binding requirements and stopped.
         # The run fails with that reason, so the dashboard shows it.
         if delivery.status == "needs_clarification":
             raise FatalError(f"implementation needs clarification: {delivery.summary}")
         return delivery
+
+    async def _report_red_ci(self, *, workspace: BuildWorkspace) -> str:
+        """The message that continues the implementer's session when CI on its head is red:
+        the red-CI rules of the implement prompt."""
+        return await render_prompt(
+            "software_factory/build/_red_ci.md", repo=(await self.subject).repo, build=self
+        )
 
     @step
     async def _create_branch(self) -> None:

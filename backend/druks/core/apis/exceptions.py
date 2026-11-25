@@ -15,6 +15,10 @@ class GitHubAppNotInstalledError(DruksError):
         self.repo = repo
 
 
+class GitHubRerunRefusedError(DruksError):
+    """GitHub would not rerun an Actions run: the App may not, or the run is gone."""
+
+
 class GitHubAppNotActiveError(DruksError):
     """The GitHub App has no installation that is not suspended."""
 

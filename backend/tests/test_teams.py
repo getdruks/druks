@@ -1,3 +1,4 @@
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -6,6 +7,7 @@ from druks.accounts.enums import AccountKind
 from druks.accounts.models import Account
 from druks.registry import get_app
 from druks.teams.models import Team
+from sqlalchemy import update
 
 
 async def test_an_account_can_use_an_app_that_its_team_lists_or_that_no_team_lists(druks_db):
@@ -169,3 +171,22 @@ async def test_deleting_a_team_keeps_its_accounts(tmp_path: Path, druks_db):
         admin.username,
         member.username,
     }
+
+
+async def test_a_team_lists_its_members_in_the_order_they_joined_druks(druks_db):
+    first = await Account.get_or_create(druks_db, "first@example.com")
+    second = await Account.get_or_create(druks_db, "second@example.com")
+    # The first id sorts before the second, so a query with no ORDER BY returns it first,
+    # though that account joined later.
+    await druks_db.execute(
+        update(Account)
+        .where(Account.id == first.id)
+        .values(created_at=second.created_at + timedelta(hours=1))
+    )
+    await druks_db.flush()
+
+    team = await Team.create(
+        druks_db, name="Engineering", member_ids=[first.id, second.id], apps=[]
+    )
+
+    assert [member.id for member in team.members] == [second.id, first.id]
