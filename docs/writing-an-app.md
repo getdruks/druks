@@ -1266,9 +1266,10 @@ reply = await self.review(
 ```
 
 The dashboard draws the blocks as a page draws them. Slack draws the facts,
-metrics, dividers, links, tables, charts, images, image galleries, cards,
-sections, columns, and stacks of an approval with its own blocks. It shows the
-other blocks as their [text forms](druks-ui.md#text-forms). See
+metrics, dividers, links, tables, charts, progress steps, timelines, images,
+image galleries, cards, sections, columns, and stacks of an approval with its
+own blocks. It shows the other blocks as their
+[text forms](druks-ui.md#text-forms). See
 [Approvals in Slack](druks-ui.md#approvals-in-slack).
 
 An `Action` or a `Form` in the blocks names the app's own writes. At the top of

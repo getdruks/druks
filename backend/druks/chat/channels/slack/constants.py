@@ -75,6 +75,11 @@ CHART_SEGMENTS_LIMIT = 12
 CHART_LABEL_LIMIT = 20
 CHART_TITLE_LIMIT = 50
 CHART_AXIS_TITLE_LIMIT = 50
+# Slack's limits for a plan. Slack refuses a message with a second plan.
+MESSAGE_PLANS_LIMIT = 1
+PLAN_TASKS_LIMIT = 50
+# A plan shows its title. A timeline with no title gets this one.
+TIMELINE_TITLE = "Timeline"
 # Slack's limits for the dialog that confirms a click. Its title is the label of the button.
 CONFIRM_TEXT_LIMIT = 300
 CONFIRM_BUTTON_LIMIT = 30

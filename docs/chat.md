@@ -299,10 +299,11 @@ When the turn ends, Druks sends the blocks after the agent's text:
   the blocks of an approval: see [Approvals in Slack](druks-ui.md#approvals-in-slack).
   Facts and metrics show as Slack's own fields. A table shows as a data table. A
   divider shows as a divider. A link shows as a button. A chart shows as a Slack
-  chart. An image with a public address shows as an image. So does each such image
-  of a gallery. A card shows as a card, and a list of cards as a row of cards. A
-  section with a title shows as a group under its title. Columns show side by
-  side. Any other block, and a block past a limit of Slack, shows as its
+  chart. Progress steps and a timeline show as a plan of tasks. An image with a
+  public address shows as an image. So does each such image of a gallery. A card
+  shows as a card, and a list of cards as a row of cards. A section with a title
+  shows as a group under its title. Columns show side by side. Any other block,
+  and a block past a limit of Slack, shows as its
   [text form](druks-ui.md#text-forms). Druks cuts the end of a reply that is too long
   for one message. When Slack refuses the blocks, Druks sends their text form in
   their place.

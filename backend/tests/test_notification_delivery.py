@@ -1,6 +1,7 @@
 import itertools
 import json
 import re
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import aiohttp
@@ -16,10 +17,12 @@ from druks.chat.channels.slack.constants import (
     MARKDOWN_TEXT_LIMIT,
     MESSAGE_BLOCKS_LIMIT,
     SECTION_TEXT_LIMIT,
+    TIMELINE_TITLE,
 )
 from druks.chat.channels.slack.delivery import (
     OMISSION_LINK,
     OMISSION_MESSAGE,
+    PLAN_OMISSION_MESSAGE,
     TABLE_OMISSION_MESSAGE,
     cut_markdown,
     deliver,
@@ -758,6 +761,28 @@ def _image_block(url: str, alternative_text: str) -> dict:
 
 def _slack_file_block(file_id: str, alternative_text: str) -> dict:
     return {"type": "image", "slack_file": {"id": file_id}, "alt_text": alternative_text}
+
+
+def _step(label: str, words: str = "to do", tone: str = "neutral") -> ui.ProgressStep:
+    """A step of a progress whose status says ``words`` in ``tone``. By default, the step waits
+    to start."""
+    return ui.ProgressStep(label=label, status=ui.StatusValue(words, tone=tone))
+
+
+def _task(number: int, title: str, status: str, details: str = "") -> dict:
+    """The task of a plan at position ``number``, with ``details`` as rich text when it has
+    some."""
+    task = {"task_id": str(number), "title": title, "status": status}
+    if details:
+        task["details"] = _rich_text({"type": "text", "text": details})
+    return task
+
+
+def _item(title: str, minutes: int = 0, **data) -> ui.TimelineItem:
+    """An item of a timeline that happened ``minutes`` after 09:00 UTC on 29 August 2026."""
+    return ui.TimelineItem(
+        when=datetime(2026, 8, 29, 9, tzinfo=UTC) + timedelta(minutes=minutes), title=title, **data
+    )
 
 
 def _list_uploads(slack) -> list[str]:
@@ -3526,3 +3551,128 @@ async def test_a_message_uploads_no_druks_image_of_a_block_that_shows_its_text_f
     )
 
     assert _list_uploads(slack) == ["shown.png"]
+
+
+def test_a_progress_goes_out_as_a_plan_with_a_task_for_each_step_in_the_state_of_its_tone():
+    # Two steps share a label. Slack refuses a plan with two tasks of one id.
+    assert get_blocks(
+        "text",
+        blocks=[
+            ui.Progress(
+                "Checks",
+                steps=[
+                    _step("Lint", "passed", "success"),
+                    _step("Test", "failed", "danger"),
+                    _step("Test", "running", "active"),
+                    _step("Deploy", "waiting", "warning"),
+                    _step("Announce"),
+                ],
+            )
+        ],
+    ) == [
+        {
+            "type": "plan",
+            "title": "Checks",
+            "tasks": [
+                _task(0, "Lint", "complete"),
+                _task(1, "Test", "error"),
+                _task(2, "Test", "in_progress"),
+                _task(3, "Deploy", "pending"),
+                _task(4, "Announce", "pending"),
+            ],
+        }
+    ]
+
+
+def test_a_timeline_goes_out_as_a_plan_with_a_task_for_each_item_oldest_first():
+    # The app gives the items out of order. An item is complete unless its status says
+    # otherwise. A timeline with no title gets one.
+    assert get_blocks(
+        "text",
+        blocks=[
+            ui.Timeline(
+                [
+                    _item("Review", 45, status=ui.StatusValue("running", tone="active")),
+                    _item("Draft PR opened", 20, description="Opened #12 against main."),
+                    _item("Run started", status=ui.StatusValue("started")),
+                    _item("Deploy", 50, status=ui.StatusValue("failed", tone="danger")),
+                ]
+            )
+        ],
+    ) == [
+        {
+            "type": "plan",
+            "title": TIMELINE_TITLE,
+            "tasks": [
+                _task(0, "Run started", "complete", "2026-08-29 09:00 UTC"),
+                _task(
+                    1,
+                    "Draft PR opened",
+                    "complete",
+                    "Opened #12 against main.\n2026-08-29 09:20 UTC",
+                ),
+                _task(2, "Review", "in_progress", "2026-08-29 09:45 UTC"),
+                _task(3, "Deploy", "error", "2026-08-29 09:50 UTC"),
+            ],
+        }
+    ]
+
+
+def test_a_plan_keeps_its_last_50_tasks_under_a_line_that_says_how_many_it_left_out():
+    page = "https://druks.example/runs/run-1"
+    steps = [_step(f"Step {number}") for number in range(53)]
+
+    assert get_blocks("text", blocks=[ui.Progress("Build", steps=steps[:50])], deep_link=page) == [
+        {
+            "type": "plan",
+            "title": "Build",
+            "tasks": [_task(number, f"Step {number}", "pending") for number in range(50)],
+        },
+        {"type": "markdown", "text": page},
+    ]
+    assert get_blocks("text", blocks=[ui.Progress("Build", steps=steps)], deep_link=page) == [
+        {
+            "type": "markdown",
+            "text": PLAN_OMISSION_MESSAGE.format(left=3, total=53)
+            + OMISSION_LINK.format(link=page),
+        },
+        {
+            "type": "plan",
+            "title": "Build",
+            "tasks": [_task(number, f"Step {number}", "pending") for number in range(3, 53)],
+        },
+        {"type": "markdown", "text": page},
+    ]
+
+
+def test_a_message_draws_its_first_plan_and_the_text_form_of_each_other_one():
+    progress = ui.Progress("Build", steps=[_step("Plan", "planning", "active")])
+    timeline = ui.Timeline([_item("Run started")], title="Events")
+    checks = ui.Progress("Checks", steps=[_step("Lint")])
+
+    # Slack refuses a message with a second plan.
+    assert get_blocks("text", blocks=[progress, timeline, checks]) == [
+        {"type": "plan", "title": "Build", "tasks": [_task(0, "Plan", "in_progress")]},
+        {"type": "markdown", "text": f"{timeline.to_markdown()}\n\n{checks.to_markdown()}"},
+    ]
+
+
+def test_a_progress_with_no_steps_and_a_timeline_with_no_items_are_no_plan():
+    share = ui.Progress("Sweeping peers", completed=3, total=8)
+
+    # A timeline with no items shows nothing, as its text form does.
+    assert get_blocks("text", blocks=[share, ui.Timeline(title="Events")]) == [
+        {"type": "markdown", "text": share.to_markdown()}
+    ]
+
+
+def test_only_the_message_holds_a_plan_and_a_group_with_one_shows_its_text_form():
+    progress = ui.Progress("Build", steps=[_step("Plan", "planning", "active")])
+    section = ui.Section(title="Rack 3", blocks=[ui.Divider(), progress])
+    columns = ui.Columns([_FAN, ui.Timeline([_item("Run started")], title="Events")])
+
+    # A stack adds no level. Its plan is in the message.
+    assert get_blocks("text", blocks=[section, columns, ui.Stack([progress])]) == [
+        {"type": "markdown", "text": f"{section.to_markdown()}\n\n{columns.to_markdown()}"},
+        {"type": "plan", "title": "Build", "tasks": [_task(0, "Plan", "in_progress")]},
+    ]

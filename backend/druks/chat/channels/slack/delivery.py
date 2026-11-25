@@ -72,12 +72,23 @@ FIELD_ELEMENTS = {
     "checkbox": "checkboxes",
 }
 
+# The state of a task of Slack for the tone of a status. A step of another tone is pending.
+TASK_STATES = {
+    "active": "in_progress",
+    "success": "complete",
+    "danger": "error",
+}
+
 # The last line of a message that Druks cut to fit Slack. It says what Druks cut. When the
 # installation has an address, a link to all of it follows.
 OMISSION_MESSAGE = "Druks cut the end of this message because Slack limits its length."
 OMISSION_LINK = " Read all of it in Druks: {link}"
 TABLE_OMISSION_MESSAGE = (
     "Druks did not send {left:,} of the {total:,} rows of this table because Slack limits its size."
+)
+PLAN_OMISSION_MESSAGE = (
+    "Druks did not send the first {left:,} of the {total:,} tasks of this plan because Slack "
+    "limits its size."
 )
 
 
@@ -398,6 +409,20 @@ def get_container(title: str, subtitle: str, child_blocks: list[dict]) -> dict:
     return {}
 
 
+def get_plan(title: str, tasks: list[dict], deep_link: str | None) -> list[dict]:
+    """The plan of the last 50 of ``tasks`` under ``title``. When there are more tasks, a line
+    above the plan says how many Druks did not send, with ``deep_link``."""
+    parts = [{"type": "plan", "title": title, "tasks": tasks[-slack.PLAN_TASKS_LIMIT :]}]
+    if len(tasks) > slack.PLAN_TASKS_LIMIT:
+        notice = PLAN_OMISSION_MESSAGE.format(
+            left=len(tasks) - slack.PLAN_TASKS_LIMIT, total=len(tasks)
+        )
+        if deep_link:
+            notice += OMISSION_LINK.format(link=deep_link)
+        parts.insert(0, {"type": "markdown", "text": notice})
+    return parts
+
+
 def list_blocks(parts: list[dict]) -> list[dict]:
     """Each of ``parts`` and each block inside them, at any depth: the children of a
     container, the cards of a carousel, and the block of each item of a layout."""
@@ -442,6 +467,14 @@ def get_parts(
     area chart. A pie has a segment for each category. Druks cuts no label of a pie. A
     message draws the first two charts that Slack can draw.
 
+    A progress with steps becomes a plan under its label, with a task for each step. The tone
+    of the status of a step gives the state of its task. A timeline becomes a plan under its
+    title, with a task for each item, oldest first. A timeline with no title gets one. The
+    description and the time of an item are the details of its task. The task is complete
+    unless the tone of the status of the item gives another state. A plan holds the last 50
+    tasks. When there are more, a line above it says how many Druks did not send, with the
+    link. Only the message holds a plan. A message draws its first plan.
+
     Only a block at the top of the message has ``token``, and only until its approval has an
     outcome. Such an action becomes an input for each of its fields and a button that
     carries ``token`` and ``index``, the position of the block. An action with no fields,
@@ -468,8 +501,8 @@ def get_parts(
     container or a layout that holds a text form thus shows its own text form.
 
     ``room`` holds what the message has left for the text of the cells of its data tables,
-    under ``cells``, and for its charts, under ``charts``. A block that shows its text form
-    takes nothing from it."""
+    under ``cells``, for its charts, under ``charts``, and for its plans, under ``plans``. A
+    block that shows its text form takes nothing from it."""
     draw = partial(get_parts, room=room, slack_file_ids=slack_file_ids, deep_link=deep_link)
     room_before = dict(room)
     parts: list[dict] = []
@@ -644,6 +677,50 @@ def get_parts(
                     ],
                 }
                 parts = [{"type": "data_visualization", "title": heading, "chart": chart}]
+        case ui.Progress(label=label, steps=steps) if (
+            parent == "message" and room["plans"] and steps
+        ):
+            room["plans"] -= 1
+            parts = get_plan(
+                label,
+                [
+                    {
+                        "task_id": str(number),
+                        "title": step.label,
+                        "status": TASK_STATES.get(step.status.tone, "pending"),
+                    }
+                    for number, step in enumerate(steps)
+                ],
+                deep_link,
+            )
+        case ui.Timeline(title=title, items=items) if (
+            parent == "message" and room["plans"] and items
+        ):
+            room["plans"] -= 1
+            tasks = []
+            for number, item in enumerate(items):
+                details = ui.TimeValue(item.when).to_markdown()
+                if item.description:
+                    details = f"{item.description}\n{details}"
+                task = {
+                    "task_id": str(number),
+                    "title": item.title,
+                    # An item happened. Its task is complete unless its status says otherwise.
+                    "status": "complete",
+                    "details": {
+                        "type": "rich_text",
+                        "elements": [
+                            {
+                                "type": "rich_text_section",
+                                "elements": [{"type": "text", "text": details}],
+                            }
+                        ],
+                    },
+                }
+                if item.status and item.status.tone in TASK_STATES:
+                    task["status"] = TASK_STATES[item.status.tone]
+                tasks.append(task)
+            parts = get_plan(title or slack.TIMELINE_TITLE, tasks, deep_link)
         case ui.Action() if token:
             parts = get_form(index, block.fields, {encode_action(token, index): block})
         case ui.Form(submit="button") if token:
@@ -840,7 +917,11 @@ def get_blocks(
     content: list[dict] = []
     draw = partial(
         get_parts,
-        room={"cells": slack.MESSAGE_CELL_TEXT_LIMIT, "charts": slack.MESSAGE_CHARTS_LIMIT},
+        room={
+            "cells": slack.MESSAGE_CELL_TEXT_LIMIT,
+            "charts": slack.MESSAGE_CHARTS_LIMIT,
+            "plans": slack.MESSAGE_PLANS_LIMIT,
+        },
         slack_file_ids=slack_file_ids,
         deep_link=deep_link,
         token=None if outcome else token,

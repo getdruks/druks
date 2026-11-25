@@ -531,6 +531,8 @@ draws inside another block:
 | `Link` | A button that opens the address of the link. |
 | `Table` | A data table that the person can sort and read page by page. The title is its caption, or the first column label when the table has no title. A `NumberValue` is a number cell. Slack sorts a column of number cells as numbers. A value with a link is a link. A cell that holds only an `Action` with no fields is a button. See [Actions in Slack](#actions-in-slack). Any other value shows its text form. An empty value or column label shows a dash. The row detail stays on the dashboard. A table that selects rows shows its text form. |
 | `Chart` | A chart of the same kind: line, bar, area, or pie. A line, bar, or area chart has the categories along the axis, in their order. Each series has a point for each category. The category label and the value label are the titles of the axes. A pie has no axes. It has a segment for each category, in their order, with the label of the category and its value. A chart with no title takes its value label as its title. An empty category or series label shows a dash. |
+| `Progress` | With steps, a plan of tasks under its label, with a task for each step. The tone of the status of a step gives the state of its task. See [Plans in Slack](#plans-in-slack). |
+| `Timeline` | A plan of tasks under its title, with a task for each item, oldest first. The description and the time of an item are the details of its task. See [Plans in Slack](#plans-in-slack). |
 | `Image` | An image. Slack fetches an image at an outside address. Druks uploads the image of a Druks file to Slack. The alternative text is its alt text. The caption is its title. An image with no caption has no title. |
 | `ImageGallery` | An image for each image of the gallery, in their order. The title of the gallery is a heading above them, as in its text form. A gallery with no title has no heading. |
 | `Card` | A card with its title, its description, its image, and a button for each link. A card that holds other blocks is a container. |
@@ -543,7 +545,8 @@ draws inside another block:
 
 Every other block shows its text form. A value in a fact or a metric shows its
 text form. A value with a link stays a link. Slack has no colored label. A
-`StatusValue` shows its words without its tone.
+`StatusValue` shows its words without its tone. In a
+[plan](#plans-in-slack), the tone of a status gives the state of a task.
 
 A click on a link button opens the address. The click does not answer the
 approval.
@@ -745,6 +748,44 @@ for a message, however many times the message shows it. Druks uploads no image
 of a group that shows its text form. When Slack cannot show the image of a
 card, the card shows its text form, with the link to the image. A list of cards
 then shows each of its cards on its own.
+
+### Plans in Slack
+
+A `Progress` with steps is a plan of Slack, with a task for each step, in their
+order. The label of the progress is the title of the plan. A task of Slack is
+pending, in progress, complete, or in error. The tone of the status of a step
+gives the state of its task:
+
+| Tone of the step | Task |
+| --- | --- |
+| `active` | In progress |
+| `success` | Complete |
+| `danger` | In error |
+| `neutral`, `warning` | Pending |
+
+A task does not show the words or the link of its status. After a person
+cancels a workflow, the step of its [status](#status-in-slack) that was in
+progress has the tone `neutral`. Its task is then pending, above the callout
+that says "Cancelled.". A `Progress` with no steps shows its text form: its
+share, or that it still runs.
+
+A `Timeline` is a plan with a task for each item, oldest first. The title of the
+timeline is the title of the plan. A timeline with no title gets the title
+"Timeline". The description of an item and its time in UTC are the details of
+its task. An item happened, so its task is complete. When the status of the item
+has the tone `active` or `danger`, the task takes the state of that tone. A
+timeline with no items shows nothing, as its text form does.
+
+A plan holds 50 tasks. A longer plan keeps the last 50 tasks. A line above the
+plan then says how many tasks Druks did not send. It links to the run's page
+when the installation has an endpoint.
+
+Slack takes one plan in a message. The first `Progress` with steps or
+`Timeline` with items is the plan. Each later one shows its text form. Slack
+holds a plan only in the message, not in a container or a layout. A `Stack` and
+a `Section` with no title show a plan in their place. A group that holds a
+`Progress` or a `Timeline` shows its text form. A plan takes one of the 50
+blocks of a message, whatever the number of its tasks.
 
 ### Actions in Slack
 
