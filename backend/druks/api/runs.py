@@ -30,7 +30,11 @@ from druks.teams.dependencies import require_run_access
 router = APIRouter(prefix="/api/runs", tags=["runs"])
 
 
-@router.get("/{run}", response_model=RunDetailResponse)
+@router.get(
+    "/{run}",
+    response_model=RunDetailResponse,
+    dependencies=[Depends(require_run_access)],
+)
 async def get_run(
     session: SessionDep, run_id: Annotated[str, Path(alias="run")]
 ) -> RunDetailResponse:
