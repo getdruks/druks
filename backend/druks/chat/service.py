@@ -74,6 +74,7 @@ from .constants import (
     POST_CANCEL_WORKFLOW,
     QUOTA_RESUMED_MESSAGE,
     QUOTA_WAIT_MESSAGE,
+    REFUSED_RUN_MESSAGE,
     RESULT_MESSAGE,
     TIME_MESSAGE,
     TRANSCRIPTION_FAILED_MESSAGE,
@@ -951,14 +952,17 @@ async def report_result(session: AsyncSession, run: Run, *, result) -> str | Non
         body = NO_RESULT_MESSAGE.format(run=run.id)
     else:
         body = RESULT_MESSAGE.format(run=run.id, result=to_json(result, fallback=str).decode())
-    return await report_outcome(session, run.conversation_id, body)
+    return await report_run(session, run, body, outcome="finished")
 
 
 async def report_failure(session: AsyncSession, run: Run, *, failure: str) -> str | None:
     """Report a run's failure to the chat that started it, whether or not the run waited
     for an answer. Returns the conversation to deliver."""
-    return await report_outcome(
-        session, run.conversation_id, FAILURE_MESSAGE.format(run=run.id, failure=failure)
+    return await report_run(
+        session,
+        run,
+        FAILURE_MESSAGE.format(run=run.id, failure=failure),
+        outcome=f"failed: {failure}",
     )
 
 
@@ -980,8 +984,13 @@ async def report_cancel(run_id: str) -> str | None:
     conversation to deliver."""
     async with step_session() as session:
         run = await session.get(Run, run_id)
-        body = CANCELLED_MESSAGE.format(run=run.id, reason=run.failure or "none given")
-        return await report_outcome(session, run.conversation_id, body)
+        reason = run.failure or "none given"
+        return await report_run(
+            session,
+            run,
+            CANCELLED_MESSAGE.format(run=run.id, reason=reason),
+            outcome=f"was cancelled. The reason: {reason}",
+        )
 
 
 async def report_quota_wait(session: AsyncSession, run: Run, *, resumes_at: datetime) -> None:
@@ -1001,9 +1010,32 @@ async def report_quota_wait(session: AsyncSession, run: Run, *, resumes_at: date
 async def report_quota_resume(session: AsyncSession, run: Run) -> str | None:
     """Tell the chat that started a run that it continues after its usage-limit wait.
     Returns the conversation to deliver."""
-    return await report_outcome(
-        session, run.conversation_id, QUOTA_RESUMED_MESSAGE.format(run=run.id)
+    return await report_run(
+        session,
+        run,
+        QUOTA_RESUMED_MESSAGE.format(run=run.id),
+        outcome="continues after its usage-limit wait",
     )
+
+
+async def report_run(session: AsyncSession, run: Run, body: str, *, outcome: str) -> str | None:
+    """Report what happened to a run to the chat that started it. Returns the conversation
+    to deliver. When the agent no longer answers the person, Druks says ``outcome`` itself
+    and no turn runs. The line names the run as a notification does, and links to it when
+    the installation has an endpoint."""
+    conversation = await session.get(Conversation, run.conversation_id)
+    # The agent can change owner or turn private after the conversation began.
+    if conversation.agent and not conversation.account.can_talk_to(conversation.agent):
+        text = REFUSED_RUN_MESSAGE.format(
+            run=run.subject_key or run.kind, outcome=outcome, reason=PRIVATE_AGENT_MESSAGE
+        )
+        if link := run.get_link():
+            text += f" Open {link}"
+        message = await conversation.create_message(session, text, role=MessageRole.ASSISTANT)
+        await session.commit()
+        await send_assistant_message(session, conversation, message)
+        return
+    return await report_outcome(session, conversation.id, body)
 
 
 async def report_outcome(session: AsyncSession, conversation_id: str, body: str) -> str | None:

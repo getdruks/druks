@@ -395,6 +395,10 @@ When the run ends, Druks adds an internal message with its result, whether or
 not the run waited for an answer. When a run returns nothing, Druks adds a message
 that says the run ended. A review that posts itself is such a run. The agent then
 tells you in its own words.
+When the agent no longer answers you, Druks posts a line itself in place of an
+internal message that starts a turn, and no agent turn runs. The line says what
+happened to the run and why the agent does not tell you. It links to the run
+when `urls.endpoint` is set.
 In a Slack conversation, a workflow that reports its status keeps that status in
 one message of the thread or direct message. Druks edits it as the work goes
 on. See [Report status](writing-an-app.md#report-status). The Chat page shows the

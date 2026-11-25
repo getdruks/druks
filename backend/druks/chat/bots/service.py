@@ -14,7 +14,7 @@ from druks.chat.constants import (
 )
 from druks.chat.enums import BotAccess, MessageState, PauseSignal
 from druks.chat.models import Conversation
-from druks.chat.service import deliver, report_outcome
+from druks.chat.service import deliver, report_run
 from druks.durable.constants import PAUSE_QUEUE
 from druks.durable.engine import step_session
 from druks.durable.models import Run
@@ -266,17 +266,23 @@ async def ask_for_answer(session: AsyncSession, run: Run) -> str | None:
     request = to_json(await read_ask(session, run)).decode()
     if not run.is_answerable_by(conversation.account):
         if conversation.account.kind == AccountKind.OPERATOR:
+            approver = run.input_request["approver"]
             body = PARKED_FOR_APPROVER_MESSAGE.format(
-                run=run.id, approver=run.input_request["approver"], request=request
+                run=run.id, approver=approver, request=request
             )
+            outcome = f"waits for an answer from {approver}"
         else:
             # A Bot serves people outside Druks. They read neither the ask nor the
             # approver, whose username can be an email address.
             body = PARKED_FOR_REVIEW_MESSAGE.format(run=run.id)
-        return await report_outcome(session, run.conversation_id, body)
+            outcome = "waits for someone else's answer"
+        return await report_run(session, run, body, outcome=outcome)
     if not conversation.admin_account_id:
-        return await report_outcome(
-            session, run.conversation_id, PARKED_MESSAGE.format(run=run.id, request=request)
+        return await report_run(
+            session,
+            run,
+            PARKED_MESSAGE.format(run=run.id, request=request),
+            outcome="waits for your answer",
         )
     admin = await get_or_create_admin_conversation(session, conversation)
     body = QUESTION_MESSAGE.format(
