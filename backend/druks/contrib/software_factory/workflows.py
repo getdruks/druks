@@ -1,9 +1,11 @@
 import logging
 import time
+from collections.abc import Sequence
 from typing import Any
 
 from pydantic import BaseModel, Field
 
+from druks import ui
 from druks.accounts import Account
 from druks.contrib.software_factory.contracts import (
     CiReport,
@@ -27,6 +29,7 @@ from druks.workspaces import RepoWorkspace
 
 from .app import SoftwareFactory
 from .constants import (
+    BUILD_STEPS,
     CI_POLL_SECONDS,
     CI_TTL_SECONDS,
     GITHUB_MCP_NAME,
@@ -214,9 +217,54 @@ class Build(Workflow):
 
         if await self._plan_phase():
             if self.journal.plan.tickets:
-                await self._split()
+                keys = await self._split()
+                new_tickets = [
+                    f"{keys[ticket.repo]} {ticket.title}" for ticket in self.journal.plan.tickets
+                ]
+                await self._report_step("Plan", new_tickets=new_tickets)
             else:
                 await self._implement_phase()
+
+    async def _report_step(
+        self,
+        step: str,
+        *,
+        message: str = "",
+        requested_changes: Sequence[str] = (),
+        new_tickets: Sequence[str] = (),
+    ) -> None:
+        """Show the status of the build: the ticket, the steps with ``step`` in progress,
+        the changes that a person requested, the tickets that a split created, what Druks
+        does next, and the links to the pull request and the ticket."""
+        work_item = await self.subject
+        # A build that divided its ticket does no step after the plan.
+        steps = BUILD_STEPS[:1] if new_tickets else BUILD_STEPS
+        position = steps.index(step)
+        progress_steps = []
+        for index, label in enumerate(steps):
+            if index < position:
+                status = ui.StatusValue("done", tone="success")
+            elif index == position:
+                status = ui.StatusValue("in progress", tone="active")
+            else:
+                status = ui.StatusValue("to do")
+            progress_steps.append(ui.ProgressStep(label=label, status=status))
+        blocks: list[ui.Block] = [
+            ui.Text(f"{work_item.ticket_key} {work_item.title}"),
+            ui.Progress("Build", steps=progress_steps),
+        ]
+        if requested_changes:
+            blocks.append(ui.List(requested_changes, title="Requested changes"))
+        if new_tickets:
+            blocks.append(ui.List(new_tickets, title="New tickets"))
+        if message:
+            blocks.append(ui.Callout(message))
+        if self.pr_number:
+            pull_request = f"https://github.com/{work_item.repo}/pull/{self.pr_number}"
+            blocks.append(ui.Link(f"Pull request #{self.pr_number}", url=pull_request))
+        if work_item.ticket_url:
+            blocks.append(ui.Link("Ticket", url=work_item.ticket_url))
+        await self.report(blocks)
 
     async def get_prompt_context(self, **context: Any) -> dict[str, Any]:
         work_item = await self.subject
@@ -282,9 +330,12 @@ class Build(Workflow):
         plan_gate = self._policy.plan_approval_gate(self._settings.plan_gate)
         answered_questions: list[dict[str, str]] = []
         operator_note = ""
+        requested_changes: list[str] = []
+        message = "Druks writes the plan."
         critique = ""
         reviewed = False
         while True:
+            await self._report_step("Plan", message=message, requested_changes=requested_changes)
             plan = await SoftwareFactory.generate_plan(
                 answered_questions=answered_questions,
                 operator_note=operator_note,
@@ -321,16 +372,25 @@ class Build(Workflow):
                         return True
                 elif plan_gate == "machine":
                     return True
+            # Druks says what the build waits for, so this report has no message.
+            await self._report_step("Plan", requested_changes=requested_changes)
             operator_reply = await self.review(questions=plan.questions)
             if plan.is_confirmed_by(operator_reply):
                 return True
             answered_questions = plan.get_answered_questions(operator_reply.answers)
             operator_note = operator_reply.note
+            requested_changes = [
+                f"{answered['question']} {answered['answer']}" for answered in answered_questions
+            ]
+            if operator_note:
+                requested_changes.append(operator_note)
+            message = "Druks returns with the revised plan."
 
     @step
-    async def _split(self) -> None:
+    async def _split(self) -> dict[str, str]:
         """Create the approved tickets under the spike with their "blocked by" links, then
-        put the spike at rest: the tickets carry the work now."""
+        put the spike at rest: the tickets carry the work now. Return the key of each new
+        ticket by its repo."""
         spike = await self.subject
         tickets = self.journal.plan.tickets
         async with await SoftwareFactory.get_tracker() as tracker:
@@ -351,24 +411,39 @@ class Build(Workflow):
                     keys[ticket.repo], [keys[blocker] for blocker in ticket.blocked_by]
                 )
         await spike.release_ticket()
+        return keys
 
     async def _implement_phase(self) -> None:
         await self._create_branch()
+        message = "Druks implements the plan and opens a draft pull request."
         while True:
             previous_delivery = self.journal.last_implementation
+            requested_changes = []
+            if self.journal.revision_request:
+                requested_changes.append(self.journal.revision_request)
+            await self._report_step(
+                "Implement", message=message, requested_changes=requested_changes
+            )
             delivery = await self.implement()
+            message = "Druks changes the pull request."
             can_revise = (
                 self.journal.implementation_revision < self._settings.max_implementation_revisions
             )
             # The implementer pushes nothing when no red check is its diff's, and CI on
             # that head has already been read.
             if not previous_delivery or delivery.head_sha != previous_delivery.head_sha:
+                await self._report_step(
+                    "Draft pull request", message="Druks waits for CI on the pull request."
+                )
                 ci_report = await self._wait_for_ci(delivery.head_sha)
                 if ci_report.conclusion == "red" and can_revise:
                     continue
+            await self._report_step("Review", message="Druks reviews the pull request.")
             review = await self._review_work()
             if review.decision == "request_changes" and can_revise:
                 continue
+            # Druks says what the build waits for, so this report has no message.
+            await self._report_step("Review")
             if await self._work_gate():
                 return
 

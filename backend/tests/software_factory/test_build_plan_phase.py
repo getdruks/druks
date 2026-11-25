@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import pytest
+from druks import ui
 from druks.contrib.software_factory.app import SoftwareFactory
 from druks.contrib.software_factory.contracts import (
     AcceptanceCriterionOutput,
@@ -25,11 +26,23 @@ from druks.workflows import FatalError, OperatorReply, Run
 from software_factory.factories import make_test_work_item
 
 
+def _record_reports(flow: Build) -> list[dict]:
+    """Record each status that ``flow`` reports, in place of the report."""
+    reports: list[dict] = []
+
+    async def report(step, **status):
+        reports.append({"step": step, **status})
+
+    flow._report_step = report
+    return reports
+
+
 def _flow(*, plan_gate: PlanGate = "human") -> Build:
     flow = Build()
     # plan_approval is undeclared, so the workflow setting resolves the gate.
     flow._policy = RepoPolicy()
     flow._settings = Build.Settings(plan_gate=plan_gate)
+    _record_reports(flow)
     return flow
 
 
@@ -635,11 +648,11 @@ async def test_a_split_outside_linear_fails_the_run_before_any_review(monkeypatc
         await flow._plan_phase()
 
 
-async def test_an_approved_split_creates_tickets_instead_of_implementing():
+async def test_an_approved_split_reports_its_new_tickets_instead_of_implementing():
     flow = Build()
     flow.journal = BuildJournal()
     flow.journal.add(_split_plan())
-    splits = []
+    reports = _record_reports(flow)
 
     async def load_policy_and_profile():
         return {"policy": RepoPolicy().model_dump(mode="json"), "profile": {}}
@@ -654,7 +667,7 @@ async def test_an_approved_split_creates_tickets_instead_of_implementing():
         return True
 
     async def split():
-        splits.append(True)
+        return {"acme/api": "ENG-2", "acme/web": "ENG-3"}
 
     async def implement_phase():
         raise AssertionError("a split opens no pull request")
@@ -668,7 +681,9 @@ async def test_an_approved_split_creates_tickets_instead_of_implementing():
 
     await flow.run_multistep()
 
-    assert splits == [True]
+    assert reports == [
+        {"step": "Plan", "new_tickets": ["ENG-2 Add the endpoint", "ENG-3 Call the endpoint"]}
+    ]
 
 
 async def test_a_split_creates_the_tickets_and_links_then_releases_the_spike(druks_db, monkeypatch):
@@ -708,8 +723,7 @@ async def test_a_split_creates_the_tickets_and_links_then_releases_the_spike(dru
     spike = await make_test_work_item(repo="acme/api", title="t", ticket_key="ENG-1")
     flow.subject = spike
 
-    await Build._split.__wrapped__(flow)
-
+    assert await Build._split.__wrapped__(flow) == keys
     assert calls == [
         (
             "create",
@@ -964,12 +978,15 @@ def _implementing_build(
     and whose review decides ``decisions``, each in turn. It returns the calls made."""
     flow = Build()
     flow._settings = Build.Settings(max_implementation_revisions=max_revisions)
-    flow.journal = SimpleNamespace(implementation_revision=0, last_implementation=None)
+    flow.journal = SimpleNamespace(
+        implementation_revision=0, last_implementation=None, revision_request=None
+    )
+    _record_reports(flow)
     heads, conclusions, decisions = iter(heads), iter(conclusions), iter(decisions)
     calls: list[str] = []
 
     async def create_branch():
-        return None
+        return
 
     async def implement():
         delivery = SimpleNamespace(head_sha=next(heads))
@@ -1084,3 +1101,153 @@ async def test_the_work_park_takes_the_pr_out_of_draft_only_when_ready(
     await ReviewWork.on_wait(flow)
 
     assert drafts == ([False] if leaves_draft else [])
+
+
+async def test_the_plan_phase_reports_its_start_its_wait_and_the_requested_changes(monkeypatch):
+    flow = _flow()
+    reports = _record_reports(flow)
+    _fake_plans(
+        monkeypatch,
+        PlanData(
+            plan_markdown="v1",
+            questions=[
+                QuestionOutput(
+                    id="q1",
+                    prompt="Which cache?",
+                    options=[QuestionOptionOutput(id="a", label="Redis", recommended=False)],
+                )
+            ],
+        ),
+        PlanData(plan_markdown="v2", acceptance_criteria=_acceptance_criteria()),
+    )
+    replies = iter(
+        [
+            OperatorReply(
+                action="request_changes", answers={"q1": "a"}, note="Add a rollback section."
+            ),
+            OperatorReply(action="approve"),
+        ]
+    )
+
+    async def fake_review(*, questions=None, context=""):
+        return next(replies)
+
+    flow.review = fake_review
+
+    await flow._plan_phase()
+
+    requested_changes = ["Which cache? Redis", "Add a rollback section."]
+    assert reports == [
+        {"step": "Plan", "message": "Druks writes the plan.", "requested_changes": []},
+        {"step": "Plan", "requested_changes": []},
+        {
+            "step": "Plan",
+            "message": "Druks returns with the revised plan.",
+            "requested_changes": requested_changes,
+        },
+        {"step": "Plan", "requested_changes": requested_changes},
+    ]
+
+
+async def test_the_implement_phase_reports_each_step_and_the_requested_changes(monkeypatch):
+    flow, _ = _implementing_build(
+        monkeypatch,
+        max_revisions=5,
+        heads=["a", "b"],
+        conclusions=["green", "green"],
+        decisions=["approve", "approve"],
+    )
+    reports = _record_reports(flow)
+    approvals = iter([False, True])
+
+    async def work_gate():
+        flow.journal.revision_request = "Rename the flag."
+        return next(approvals)
+
+    monkeypatch.setattr(flow, "_work_gate", work_gate)
+
+    await flow._implement_phase()
+
+    after_the_push = [
+        {"step": "Draft pull request", "message": "Druks waits for CI on the pull request."},
+        {"step": "Review", "message": "Druks reviews the pull request."},
+        {"step": "Review"},
+    ]
+    assert reports == [
+        {
+            "step": "Implement",
+            "message": "Druks implements the plan and opens a draft pull request.",
+            "requested_changes": [],
+        },
+        *after_the_push,
+        {
+            "step": "Implement",
+            "message": "Druks changes the pull request.",
+            "requested_changes": ["Rename the flag."],
+        },
+        *after_the_push,
+    ]
+
+
+def _reporting_build(*, ticket_url) -> tuple[Build, list[ui.Block]]:
+    """A build of one ticket that keeps the blocks of each status it reports."""
+    flow = Build()
+    flow.subject = SimpleNamespace(
+        ticket_key="ENG-1", title="Add the endpoint", repo="acme/api", ticket_url=ticket_url
+    )
+    reported: list[ui.Block] = []
+
+    async def report(blocks):
+        reported.extend(blocks)
+
+    flow.report = report
+    return flow, reported
+
+
+async def test_a_build_status_shows_the_ticket_the_steps_the_changes_and_the_links(monkeypatch):
+    flow, reported = _reporting_build(ticket_url="https://linear.app/acme/issue/ENG-1")
+    monkeypatch.setattr(Build, "pr_number", property(lambda self: 42))
+
+    await flow._report_step(
+        "Draft pull request",
+        message="Druks waits for CI on the pull request.",
+        requested_changes=["Rename the flag."],
+    )
+
+    done = ui.StatusValue("done", tone="success")
+    assert reported == [
+        ui.Text("ENG-1 Add the endpoint"),
+        ui.Progress(
+            "Build",
+            steps=[
+                ui.ProgressStep(label="Plan", status=done),
+                ui.ProgressStep(label="Implement", status=done),
+                ui.ProgressStep(
+                    label="Draft pull request",
+                    status=ui.StatusValue("in progress", tone="active"),
+                ),
+                ui.ProgressStep(label="Review", status=ui.StatusValue("to do")),
+            ],
+        ),
+        ui.List(["Rename the flag."], title="Requested changes"),
+        ui.Callout("Druks waits for CI on the pull request."),
+        ui.Link("Pull request #42", url="https://github.com/acme/api/pull/42"),
+        ui.Link("Ticket", url="https://linear.app/acme/issue/ENG-1"),
+    ]
+
+
+async def test_the_status_of_a_split_shows_only_the_plan_step_and_the_new_tickets():
+    flow, reported = _reporting_build(ticket_url=None)
+
+    await flow._report_step("Plan", new_tickets=["ENG-2 Add the route"])
+
+    assert reported == [
+        ui.Text("ENG-1 Add the endpoint"),
+        ui.Progress(
+            "Build",
+            steps=[
+                ui.ProgressStep(label="Plan", status=ui.StatusValue("in progress", tone="active"))
+            ],
+        ),
+        ui.List(["ENG-2 Add the route"], title="New tickets"),
+    ]
