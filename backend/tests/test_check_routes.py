@@ -132,6 +132,33 @@ async def test_a_declared_check_runs_on_a_box_with_the_agents_work(client, accou
     )
 
 
+async def test_a_check_runs_on_the_box_that_the_workspace_describes(
+    client, account, druks_db, box, monkeypatch
+):
+    async def get_check_box(cls, subject):
+        return {"template": "template-1", "env": {"DATABASE_URL": "postgres://localhost/test"}}
+
+    monkeypatch.setattr(_Repo, "get_check_box", classmethod(get_check_box))
+    run = await _run(druks_db, account)
+
+    assert _ask(client, run).status_code == 200
+
+    kwargs = box.run_command.await_args.kwargs
+    assert kwargs["template"] == "template-1"
+    assert kwargs["env"] == {"DATABASE_URL": "postgres://localhost/test"}
+
+
+async def test_a_workspace_that_describes_no_box_checks_on_the_default_image(
+    client, account, druks_db, box
+):
+    run = await _run(druks_db, account)
+
+    assert _ask(client, run).status_code == 200
+
+    assert "template" not in box.run_command.await_args.kwargs
+    assert "env" not in box.run_command.await_args.kwargs
+
+
 async def test_a_failing_check_answers_with_its_exit_code(client, account, druks_db, box):
     box.run_command.return_value = SandboxRun(
         exit_code=None, timed_out=True, output="start\n", duration_seconds=900.0

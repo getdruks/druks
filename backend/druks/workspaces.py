@@ -75,6 +75,13 @@ class Workspace:
         # written as the agent passes it. Read from the subject alone. Base: none.
         return ()
 
+    @classmethod
+    async def get_check_box(cls, subject: Any) -> dict[str, Any]:
+        # The fields of the box that a check runs on, as ``run_check`` hands them to the
+        # sandbox: ``template`` to fork from, ``env`` to set. Read from the subject alone.
+        # Base: none, which is the sandbox's default image.
+        return {}
+
     async def prepare(self) -> None:
         """Put on the box what the agent needs: an upload, a clone, a wrapper.
         Reads and calls work here, each a unit of work of its own."""
@@ -390,11 +397,13 @@ class RepoWorkspace(Workspace):
         timeout_seconds: int,
     ) -> SandboxRun:
         """Run ``command`` on a separate box that holds the repo at the commit this checkout
-        started from, with its uncommitted and untracked changes on top. The box is deleted
-        when the command ends. The SDK's errors reach the caller."""
+        started from, with its uncommitted and untracked changes on top. The box is made from
+        the workspace's ``get_check_box`` fields, and is deleted when the command ends. The
+        SDK's errors reach the caller."""
         patch = await self.get_diff(binary=True)
         commit = await self.get_base_commit()
         refs = await type(self).get_secret_refs(self.subject)
+        box = await type(self).get_check_box(self.subject)
         digest = hashlib.sha256(json.dumps([ref.secret_id for ref in refs]).encode()).hexdigest()
         # The box that runs the check fetches the repo's GitHub token like an agent box does.
         # It never binds to a box id, so nothing sweeps it: it ends here.
@@ -414,6 +423,7 @@ class RepoWorkspace(Workspace):
                 patch=patch,
                 timeout_seconds=timeout_seconds,
                 secrets=entries,
+                **box,
             )
         finally:
             # A caller that is cancelled still revokes, on a session of its own.

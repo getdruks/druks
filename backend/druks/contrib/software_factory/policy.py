@@ -1,3 +1,4 @@
+import re
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
@@ -19,6 +20,7 @@ class Gates(BaseModel):
 
 
 SETUP_FOLDER = ".druks/software_factory/"
+_ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
 class VerificationSandbox(BaseModel):
@@ -27,16 +29,29 @@ class VerificationSandbox(BaseModel):
     model_config = {"frozen": True, "extra": "forbid"}
 
     # The script that builds the repo's template, a path in the repo's default branch. It
-    # sits in the config folder, so a push to it re-profiles the repo.
-    setup: str
+    # sits in the config folder, so a push to it re-profiles the repo. Without one, the
+    # checks run on the sandbox's default image.
+    setup: str | None = None
+    # Set on the box at creation, never in the template. The values are read from the repo,
+    # so they are not secrets: a secret reaches a box through the vault.
+    env: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("setup")
     @classmethod
-    def setup_is_in_the_config_folder(cls, setup: str) -> str:
+    def setup_is_in_the_config_folder(cls, setup: str | None) -> str | None:
+        if setup is None:  # ast-grep-ignore: rule-2
+            return setup
         in_folder = setup.startswith(SETUP_FOLDER) and not setup.endswith("/")
         if not in_folder or ".." in setup.split("/"):
             raise ValueError(f"setup must be a path in {SETUP_FOLDER}, not {setup!r}")
         return setup
+
+    @field_validator("env")
+    @classmethod
+    def env_names_are_variable_names(cls, env: dict[str, str]) -> dict[str, str]:
+        if bad := sorted(name for name in env if not _ENV_NAME.fullmatch(name)):
+            raise ValueError(f"env names must be valid variable names: {', '.join(bad)}")
+        return env
 
 
 class VerificationProfile(BaseModel):

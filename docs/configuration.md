@@ -700,13 +700,14 @@ an empty one. A list that it leaves out stays as detected. A command that the
 block writes keeps the CI check that the profiler found for it. A key that
 `config.yml` does not know fails the build with an error that names it.
 
-A repository can also name the script that builds the computer that its checks
-run on:
+A repository can also describe the computer that its checks run on:
 
 ```yaml
 verification:
   sandbox:
     setup: .druks/software_factory/setup.sh
+    env:
+      DATABASE_URL: postgres://localhost/test
 ```
 
 The script is a path in `.druks/software_factory/`, and Druks reads it from the
@@ -719,9 +720,16 @@ while drukbox builds it. Drukbox builds a given script once. When a build fails,
 Druks keeps the last good template and logs the reason. A push to
 `.druks/software_factory/` on the default branch runs the profiler again. A push
 that changes only a lockfile does not, so a new lockfile reaches the template at
-the next profile. Nothing reads the template yet. The size, the start script,
-and the env of the sandbox are not read either, and a `verification.sandbox` key
-other than `setup` fails the build with an error that names it.
+the next profile.
+
+The box that runs a check with `core_run_check` is made from that template, with
+the `env` set on it when the box is created. Without a template, it starts from the
+default image, and `env` still applies. `setup` is optional, so a repository can
+set only `env`. A name in `env` must be a valid variable name. The values come from
+`config.yml`, a file of the repository, so they are not secrets: a secret reaches a
+box through the vault. Druks reads `env` from the default branch, like `setup`. The
+size and the start script of the sandbox are not read, and a `verification.sandbox`
+key other than `setup` and `env` fails the build with an error that names it.
 
 When Druks receives a push to the default branch that changes `config.yml`, the
 next build uses the new file. When a team lists Software Factory, this happens

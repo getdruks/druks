@@ -333,6 +333,24 @@ class TestSandboxTemplate:
         assert repo.effective_profile["sandbox_template"] == "template-1"
         assert "sandbox_template" not in repo.profile["baseline"]
 
+    async def test_a_sandbox_with_only_env_builds_no_template(self, druks_db, monkeypatch):
+        repo = await _seed_repo()
+
+        async def policy(repo):
+            return RepoPolicy(
+                verification=VerificationProfile(sandbox=VerificationSandbox(env={"A": "1"}))
+            )
+
+        monkeypatch.setattr(RepoPolicy, "resolve", staticmethod(policy))
+        _repo_files(monkeypatch)
+        calls = _templates(monkeypatch)
+
+        await Profile().run(repo_id=repo.id)
+        await db_session().refresh(repo)
+
+        assert calls == []
+        assert "sandbox_template" not in repo.effective_profile
+
     async def test_a_repo_without_a_sandbox_builds_no_template(self, druks_db, monkeypatch):
         repo = await _seed_repo()
         _repo_files(monkeypatch)

@@ -942,7 +942,7 @@ those. A request then cannot select another repo or identity.
 
 A workspace defines the box from the subject alone, before the box
 exists. It does so through `get_secrets(subject)`, `get_mcp_servers(subject)`,
-`get_skills(subject)`, and `get_checks(subject)`. `get_skills(subject)` names
+`get_skills(subject)`, `get_checks(subject)`, and `get_check_box(subject)`. `get_skills(subject)` names
 the skills that the box gets beside the enabled catalog.
 
 `get_checks(subject)` names the commands that an agent may run on another box.
@@ -954,6 +954,11 @@ checkout left the default branch, and the agent's uncommitted and untracked
 changes from the agent's box. Drukbox then clones the repo at that commit,
 applies the changes, runs the command, and deletes its box. The agent's own box
 is not touched.
+
+`get_check_box(subject)` describes the box that the check runs on. It returns a
+dict, empty by default, with the fields that Druks gives the sandbox when it makes
+the box: `template`, the template that the box forks from, and `env`, the
+variables set on it. An empty dict is the sandbox's default image.
 
 An instruction that declares `resumable=True`, on a harness that can resume
 (Claude), does not wait for the check inside its turn. The tool answers
@@ -975,6 +980,10 @@ class BuildWorkspace(RepoWorkspace):
     @classmethod
     async def get_checks(cls, subject) -> tuple[str, ...]:
         return ("make test", "make lint")
+
+    @classmethod
+    async def get_check_box(cls, subject) -> dict:
+        return {"env": {"DATABASE_URL": "postgres://localhost/test"}}
 ```
 
 Druks raises the wait for the tool call to 90 minutes in the harnesses that take

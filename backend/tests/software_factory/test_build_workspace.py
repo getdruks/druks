@@ -16,7 +16,11 @@ from druks.contrib.software_factory.constants import (
     TICKET_TOOLS,
 )
 from druks.contrib.software_factory.models import Project, ProjectRepo
-from druks.contrib.software_factory.policy import RepoPolicy
+from druks.contrib.software_factory.policy import (
+    RepoPolicy,
+    VerificationProfile,
+    VerificationSandbox,
+)
 from druks.contrib.software_factory.services import GithubReviewer
 from druks.contrib.software_factory.workflows import Build, BuildWorkspace, ReviewWorkspace
 from druks.core.services import Github, GithubApp
@@ -189,6 +193,46 @@ async def _repo_with_commands(commands: list[str]) -> SimpleNamespace:
         },
     )
     return SimpleNamespace(repo="o/main")
+
+
+def _sandbox_config(monkeypatch, **fields):
+    async def resolve(repo):
+        return RepoPolicy(verification=VerificationProfile(sandbox=VerificationSandbox(**fields)))
+
+    monkeypatch.setattr(RepoPolicy, "resolve", staticmethod(resolve))
+
+
+async def test_a_build_checks_on_the_template_and_env_of_its_repo(druks_db, monkeypatch):
+    project = await Project.create(name="Box")
+    repo = await ProjectRepo.create(project_id=project.id, full_name="o/main")
+    await repo.set_profile(baseline={}, effective={"sandbox_template": "template-1"})
+    _sandbox_config(monkeypatch, setup=".druks/software_factory/setup.sh", env={"A": "1"})
+
+    box = await BuildWorkspace.get_check_box(SimpleNamespace(repo="o/main"))
+
+    assert box == {"template": "template-1", "env": {"A": "1"}}
+
+
+async def test_a_build_of_a_repo_with_no_template_and_no_env_checks_on_the_default_image(
+    druks_db, monkeypatch
+):
+    project = await Project.create(name="Plain")
+    await ProjectRepo.create(project_id=project.id, full_name="o/main")
+
+    async def resolve(repo):
+        return RepoPolicy()
+
+    monkeypatch.setattr(RepoPolicy, "resolve", staticmethod(resolve))
+
+    assert await BuildWorkspace.get_check_box(SimpleNamespace(repo="o/main")) == {}
+
+
+async def test_a_build_with_only_env_sets_it_and_names_no_template(druks_db, monkeypatch):
+    project = await Project.create(name="Env")
+    await ProjectRepo.create(project_id=project.id, full_name="o/main")
+    _sandbox_config(monkeypatch, env={"A": "1"})
+
+    assert await BuildWorkspace.get_check_box(SimpleNamespace(repo="o/main")) == {"env": {"A": "1"}}
 
 
 async def test_a_build_declares_the_test_commands_of_its_repo_and_no_others(druks_db, monkeypatch):
