@@ -290,4 +290,40 @@ async def test_the_profiler_drafts_a_setup_script_that_starts_no_service_and_cre
     assert "`setup_script_draft`" in prompt
     # The build keeps the disk and nothing in the script runs when a check starts.
     assert "never starts a service or a daemon and never creates" in prompt
-    assert "starting it is for a start script that a person adds later" in prompt
+    assert "starting it is for the start script that you draft next" in prompt
+
+
+async def test_the_profiler_drafts_a_start_script_that_is_safe_to_run_twice_without_sudo():
+    prompt = await render_prompt(
+        "software_factory/profile/repo_profiler.md",
+        repo="acme/api",
+        workspace=_workspace(),
+        skills_catalog=[],
+    )
+
+    prompt = " ".join(prompt.split())
+    assert "`start_script_draft`" in prompt
+    # It runs before every check, as the unprivileged user that runs the check.
+    assert "safe to run twice" in prompt
+    assert "can have no `sudo`" in prompt
+    assert "does not hold the check" in prompt
+    # The check starts when the script ends, so a service must be ready by then.
+    assert "waits until each service accepts" in prompt
+    # A cold database can take 10 to 15 seconds, so a few seconds would fail a healthy box.
+    assert "gives up after about 30 seconds" in prompt
+    assert "initialise a data directory only when it does not" in prompt
+    # `set -e` must not turn "already there" into a failed check on every run after the first.
+    assert "never a bare `createdb` or `initdb`" in prompt
+    assert "a `mkdir` without `-p`, an `ln -s` without `-f`" in prompt
+    assert "or a start of a service that is already running" in prompt
+    # A wait loop that only breaks ends the script with status 0, so the script must say so.
+    assert "When the loop gives up, the script must exit non-zero" in prompt
+    assert "`exit 1` if it is still down" in prompt
+    # A start script runs only on a box that a setup script built.
+    assert "a repo that needs one also needs a setup script" in prompt
+    # A script that only exits 0 does nothing, and the repo's own committed script wins.
+    assert "never a script that only runs `exit 0` or `true`" in prompt
+    assert "already commits `.druks/software_factory/start.sh`" in prompt
+    # A pinned `python3.12` package may not exist on the box's package index.
+    assert "Never install Python or Node: the box has both" in prompt
+    assert "already commits `.druks/software_factory/setup.sh`" in prompt
