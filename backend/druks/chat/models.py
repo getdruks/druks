@@ -444,13 +444,16 @@ class Conversation(Base, Uuid7Pk):
             )
         )
 
-    async def end_turn(self, session: AsyncSession, state: MessageState) -> None:
-        """Give every message of the running turn its final state."""
-        await session.execute(
-            update(Message)
-            .where(Message.conversation_id == self.id, Message.state == MessageState.DELIVERED)
-            .values(state=state)
-            .execution_options(synchronize_session="fetch")
+    async def end_turn(self, session: AsyncSession, state: MessageState) -> list[Message]:
+        """Give every message of the running turn its final state, and return those messages."""
+        return list(
+            await session.scalars(
+                update(Message)
+                .where(Message.conversation_id == self.id, Message.state == MessageState.DELIVERED)
+                .values(state=state)
+                .returning(Message)
+                .execution_options(synchronize_session="fetch")
+            )
         )
 
     async def end_pending_messages(

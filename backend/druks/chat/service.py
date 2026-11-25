@@ -26,8 +26,8 @@ from druks.files.constants import MAX_UPLOAD_BYTES
 from druks.files.datastructures import File
 from druks.files.storage import get_file_storage
 from druks.harnesses.config import AgentConfig, get_config
-from druks.harnesses.exceptions import AgentConfigError, HarnessNotConnectedError
-from druks.harnesses.registry import get_harnesses
+from druks.harnesses.exceptions import AgentConfigError, HarnessNotConnectedError, Retry
+from druks.harnesses.registry import get_harness, get_harnesses
 from druks.locks import lock
 from druks.mcp import models as mcp_models
 from druks.mcp.enums import AllowedTools, Credential, Toolkit
@@ -66,6 +66,7 @@ from .constants import (
     DELIVERY_FAILED_MESSAGE,
     FAILURE_MESSAGE,
     INTERNAL_MESSAGES_PROMPT,
+    INTERRUPTED_MESSAGE,
     NAMING_PROMPT,
     NO_ANSWER_MESSAGE,
     NO_RESULT_MESSAGE,
@@ -76,6 +77,7 @@ from .constants import (
     RESULT_MESSAGE,
     TIME_MESSAGE,
     TRANSCRIPTION_FAILED_MESSAGE,
+    USAGE_LIMIT_INTERRUPTED_MESSAGE,
     VOICE_NOTE_MARKER,
 )
 from .enums import MessageRole, MessageState
@@ -508,9 +510,7 @@ async def deliver_pending(session: AsyncSession, conversation: Conversation) -> 
                 session, conversation.account_id, scoped_to=conversation.sandbox_scope
             )
         except ChatSandboxGone:
-            await conversation.end_turn(session, MessageState.INTERRUPTED)
-            await session.commit()
-            await reset_live_stream(conversation.id)
+            await _interrupt_turn(session, conversation)
             continue
         try:
             await follow_turn(session, conversation, message, Bridge(host))
@@ -734,6 +734,40 @@ async def get_turn_content(
     return content
 
 
+async def _interrupt_turn(
+    session: AsyncSession, conversation: Conversation, *, error: str = "", harness: str = ""
+) -> None:
+    """End the turn as interrupted and, on a live channel that runs turns, tell the person it
+    stopped before it finished — otherwise they wait for a reply that never comes. A usage or
+    rate limit names itself and points an operator at Providers, like the disconnected-provider
+    reply; everyone else gets the plain line. The web chat shows its own Interrupted state."""
+    messages = await conversation.end_turn(session, MessageState.INTERRUPTED)
+    person_messages = [message for message in messages if not message.is_internal]
+    reply = None
+    if person_messages and conversation.connection and not await conversation.is_held(session):
+        newest = max(person_messages, key=lambda message: (message.created_at, message.id))
+        # Only an operator can change a credential, so only they get the limit and its link.
+        is_operator = conversation.account.kind == AccountKind.OPERATOR
+        # A missing bridge state names no harness.
+        harness_class = get_harness(harness)
+        failure = harness_class and harness_class.classify_failure(error)
+        # A usage limit and a rate limit are the two QUOTA failures.
+        if is_operator and failure and failure.retry == Retry.QUOTA:
+            body = USAGE_LIMIT_INTERRUPTED_MESSAGE
+            if endpoint := get_settings().urls.endpoint.rstrip("/"):
+                body += f" Open {endpoint}/settings/providers"
+        else:
+            body = INTERRUPTED_MESSAGE
+        reply = await conversation.create_message(
+            session, body=body, role=MessageRole.ASSISTANT, reply_to=newest
+        )
+    await session.commit()
+    # Before the send: a refused send must not leave a stale stream.
+    await reset_live_stream(conversation.id)
+    if reply:
+        await conversation.channel.send_reply(session, conversation, reply)
+
+
 async def follow_turn(
     session: AsyncSession,
     conversation: Conversation,
@@ -753,7 +787,14 @@ async def follow_turn(
             await conversation.end_turn(session, MessageState.PENDING)
             await session.commit()
             return
-        if status["messageId"] != message.id or status["status"] in ("missing", "interrupted"):
+        if status["status"] in ("missing", "interrupted"):
+            # The bridge keeps the error of its last turn until the next one begins, so the
+            # error counts only when it belongs to this turn's message.
+            error = status.get("error", "") if status["messageId"] == message.id else ""
+            await _interrupt_turn(session, conversation, error=error, harness=status["harness"])
+            return
+        if status["messageId"] != message.id:
+            # The bridge moved on to a newer message, which runs its own turn; end this one.
             await conversation.end_turn(session, MessageState.INTERRUPTED)
             await session.commit()
             await reset_live_stream(conversation.id)

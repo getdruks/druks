@@ -26,10 +26,12 @@ from druks.chat.constants import (
     CHAT_KEY_NAME,
     CONVERSATION_HEADER,
     DELIVERY_FAILED_MESSAGE,
+    INTERRUPTED_MESSAGE,
     NAMING_PROMPT,
     NO_ANSWER_MESSAGE,
     PARKED_BUTTONS_MESSAGE,
     TIME_MESSAGE,
+    USAGE_LIMIT_INTERRUPTED_MESSAGE,
 )
 from druks.chat.enums import ConversationSource, MessageRole, MessageState
 from druks.chat.exceptions import (
@@ -600,6 +602,171 @@ async def test_a_channel_turn_with_no_answer_is_asked_once(druks_db, conversatio
     failure = send_reply.await_args.args[2]
     assert (failure.body, failure.reply_to) == (DELIVERY_FAILED_MESSAGE, asked.id)
     assert not await conversation.get_unanswered_message(druks_db)
+
+
+async def _follow_interrupted(druks_db, conversation, monkeypatch, *, error, **status):
+    """Follow a turn that the bridge reports interrupted, carrying ``error``. ``status``
+    replaces fields of the bridge's status. Returns the patched channel send_reply and the
+    turn's message."""
+    send_reply = AsyncMock()
+    monkeypatch.setattr(channel_registry.get("slack"), "send_reply", send_reply)
+    message = await conversation.get_unanswered_message(druks_db)
+    message.state = MessageState.DELIVERED
+    await druks_db.commit()
+
+    async def request(self, method, **values):
+        return {
+            "status": "interrupted",
+            "messageId": message.id,
+            "harness": "claude",
+            "epoch": "sandbox-one",
+            "sequence": 0,
+            "archivePath": "",
+            "error": error,
+            **status,
+        }
+
+    monkeypatch.setattr(Bridge, "request", request)
+    await service.follow_turn(druks_db, conversation, message, Bridge(None))
+    await druks_db.refresh(message)
+    return send_reply, message
+
+
+async def test_an_interrupted_channel_turn_tells_the_person(
+    druks_db, slack_conversation, monkeypatch
+):
+    send_reply, message = await _follow_interrupted(
+        druks_db, slack_conversation, monkeypatch, error="the box went away"
+    )
+
+    assert message.state == MessageState.INTERRUPTED
+    reply = send_reply.await_args.args[2]
+    assert (reply.body, reply.reply_to, reply.role) == (
+        INTERRUPTED_MESSAGE,
+        message.id,
+        MessageRole.ASSISTANT,
+    )
+
+
+async def test_a_usage_limit_interrupt_names_the_limit_and_links_providers(
+    druks_db, slack_conversation, monkeypatch
+):
+    monkeypatch.setattr(
+        service,
+        "get_settings",
+        lambda: SimpleNamespace(urls=SimpleNamespace(endpoint="https://druks.example/")),
+    )
+    send_reply, _ = await _follow_interrupted(
+        druks_db, slack_conversation, monkeypatch, error="Claude hit its usage limit"
+    )
+
+    assert send_reply.await_args.args[2].body == (
+        f"{USAGE_LIMIT_INTERRUPTED_MESSAGE} Open https://druks.example/settings/providers"
+    )
+
+
+async def test_a_non_operator_usage_limit_interrupt_gets_the_plain_message(
+    druks_db, slack_conversation, monkeypatch
+):
+    # Only an operator can change a credential, so a non-operator is not pointed at Providers.
+    slack_conversation.account.kind = AccountKind.BOT
+    await druks_db.commit()
+    send_reply, _ = await _follow_interrupted(
+        druks_db, slack_conversation, monkeypatch, error="Claude hit its usage limit"
+    )
+
+    assert send_reply.await_args.args[2].body == INTERRUPTED_MESSAGE
+
+
+async def test_an_error_of_an_earlier_turn_does_not_name_the_limit(
+    druks_db, slack_conversation, monkeypatch
+):
+    send_reply, _ = await _follow_interrupted(
+        druks_db,
+        slack_conversation,
+        monkeypatch,
+        error="Claude hit its usage limit",
+        messageId="an-earlier-message",
+    )
+
+    assert send_reply.await_args.args[2].body == INTERRUPTED_MESSAGE
+
+
+async def test_a_channel_turn_with_no_bridge_state_tells_the_person(
+    druks_db, slack_conversation, monkeypatch
+):
+    send_reply, message = await _follow_interrupted(
+        druks_db,
+        slack_conversation,
+        monkeypatch,
+        error="",
+        status="missing",
+        messageId="",
+        harness="",
+    )
+
+    assert message.state == MessageState.INTERRUPTED
+    assert send_reply.await_args.args[2].body == INTERRUPTED_MESSAGE
+
+
+async def test_a_channel_turn_whose_sandbox_is_gone_tells_the_person(
+    druks_db, slack_conversation, monkeypatch
+):
+    send_reply = AsyncMock()
+    monkeypatch.setattr(channel_registry.get("slack"), "send_reply", send_reply)
+    message = await slack_conversation.get_unanswered_message(druks_db)
+    message.state = MessageState.DELIVERED
+    await druks_db.commit()
+    monkeypatch.setattr(
+        service, "get_running_sandbox", AsyncMock(side_effect=ChatSandboxGone("expired"))
+    )
+
+    await service.deliver_pending(druks_db, slack_conversation)
+
+    reply = send_reply.await_args.args[2]
+    assert (reply.body, reply.reply_to) == (INTERRUPTED_MESSAGE, message.id)
+
+
+async def test_an_interrupted_web_turn_posts_no_channel_reply(druks_db, conversation, monkeypatch):
+    # A web conversation has no connection, so it keeps its own Interrupted state and the
+    # backend posts nothing to a channel.
+    send_reply, message = await _follow_interrupted(
+        druks_db, conversation, monkeypatch, error="Claude hit its usage limit"
+    )
+
+    assert message.state == MessageState.INTERRUPTED
+    send_reply.assert_not_awaited()
+
+
+async def test_an_interrupted_turn_that_closed_on_an_internal_note_tells_the_person(
+    druks_db, slack_conversation, monkeypatch
+):
+    # A failed voice-note turn ends on an internal note. The reply still goes to the person's
+    # message, as the failure path does, so they do not wait on a reply that never comes.
+    send_reply = AsyncMock()
+    monkeypatch.setattr(channel_registry.get("slack"), "send_reply", send_reply)
+    person = await slack_conversation.get_unanswered_message(druks_db)
+    person.state = MessageState.DELIVERED
+    note = await slack_conversation.create_message(druks_db, "[Internal: note]", is_internal=True)
+    note.state = MessageState.DELIVERED
+    await druks_db.commit()
+
+    async def request(self, method, **values):
+        return {
+            "status": "interrupted",
+            "messageId": person.id,
+            "harness": "claude",
+            "epoch": "sandbox-one",
+            "sequence": 0,
+            "archivePath": "",
+            "error": "",
+        }
+
+    monkeypatch.setattr(Bridge, "request", request)
+    await service.follow_turn(druks_db, slack_conversation, person, Bridge(None))
+
+    reply = send_reply.await_args.args[2]
+    assert (reply.body, reply.reply_to) == (INTERRUPTED_MESSAGE, person.id)
 
 
 CHOICES_CALL = {"question": "Which database?", "choices": ["Postgres", "MySQL", "SQLite"]}

@@ -98,6 +98,14 @@ NO_ANSWER_MESSAGE = (
 VOICE_NOTE_MARKER = "[Voice note]"
 # The person reads this, so it holds no error details.
 DELIVERY_FAILED_MESSAGE = "The reply is unavailable. Send the message again to retry."
+# Druks sends this itself when a turn stops before it finishes: the backend posts no reply
+# otherwise, so the person would wait for one that never comes. It holds no error details.
+INTERRUPTED_MESSAGE = "This turn stopped before it finished. Send the message again to retry."
+# Shown to an operator when the stop was a usage or rate limit, with the Providers link
+# appended, as the disconnected-provider reply does. A non-operator gets INTERRUPTED_MESSAGE.
+USAGE_LIMIT_INTERRUPTED_MESSAGE = (
+    "This turn stopped: the agent's provider hit its usage or rate limit."
+)
 # Druks sends this line itself: the chat's agent shares the run's login, so its turn
 # would fail on the same limit.
 QUOTA_WAIT_MESSAGE = "The run hit the provider's usage limit. It continues at about {resumes_at}."
