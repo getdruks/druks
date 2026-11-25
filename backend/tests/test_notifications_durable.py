@@ -207,7 +207,6 @@ async def runtime():
 
         async def run_multistep(self) -> None:
             await ParkNote.wait(input_request={"presentation": "external", "label": "Round one"})
-            _FAILED_EXECUTIONS.append(self.workflow_id)
             raise RuntimeError("the disk is full")
 
     class StatusFlow(Workflow):

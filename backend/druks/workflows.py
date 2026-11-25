@@ -623,20 +623,21 @@ async def _create_failure_notification(
 ) -> str | None:
     async with step_session() as session:
         run = await session.get(Run, workflow_id)
-        # The conversation is read live, inside the step: a run that still has a chat
-        # reported its failure there, so the account is not told twice. A run whose
-        # chat was deleted, or that never had one, is told here.
-        if not run.conversation_id:
-            notification = await Notification.create(
-                session,
-                account_id=run.account_id,
-                reason="run.failed",
-                body=RUN_FAILED_MESSAGE.format(run=run.subject_key or run.kind, failure=failure),
-                subject=subject,
-                run_id=run.id,
-                deep_link=run.get_link(),
-            )
-            return notification.id
+        # The step reads the conversation when it runs. A run that still has its chat
+        # reported the failure there. Druks deletes the conversations of a deleted
+        # agent, and the run then has none.
+        if run.conversation_id:
+            return
+        notification = await Notification.create(
+            session,
+            account_id=run.account_id,
+            reason="run.failed",
+            body=RUN_FAILED_MESSAGE.format(run=run.subject_key or run.kind, failure=failure),
+            subject=subject,
+            run_id=run.id,
+            deep_link=run.get_link(),
+        )
+        return notification.id
 
 
 async def _replace_status(workflow_id: str, subject: dict | None, stack: Stack) -> None:
