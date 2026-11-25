@@ -33,6 +33,7 @@ from druks.files import File
 from druks.mcp.inbound import get_druks_mcp_server
 from druks.models import Base
 from druks.notifications.models import Notification
+from druks.notifications.services import respond_to_notification
 from druks.redis import close_client, get_client
 from druks.sandbox.exceptions import SandboxUploadError
 from druks.sandbox.layout import get_work_root
@@ -564,9 +565,7 @@ async def test_each_person_who_tags_the_bot_gets_their_own_conversation_for_the_
     assert (method, sent["channel"], sent["thread_ts"]) == ("chat.postMessage", "C1", "10.0")
 
 
-async def test_only_a_linked_persons_untagged_reply_in_a_fresh_thread_reaches_their_agent(
-    card, druks_db, slack, delivery
-):
+async def test_a_message_with_no_tag_in_a_room_reaches_no_agent(card, druks_db, slack, delivery):
     ana = await Account.get_or_create(druks_db, "ana@example.com")
     ben = await Account.get_or_create(druks_db, "ben@example.com")
     await link_person(druks_db, ana)
@@ -579,20 +578,9 @@ async def test_only_a_linked_persons_untagged_reply_in_a_fresh_thread_reaches_th
 
     [conversation] = await Conversation.list_for_connection(druks_db, card.id)
     await druks_db.refresh(conversation, ["messages"])
-    assert [message.body for message in conversation.messages] == ["read my runs", "more"]
-    assert delivery.await_count == 2
+    assert [message.body for message in conversation.messages] == ["read my runs"]
+    delivery.assert_awaited_once()
     assert not slack
-
-    a_day_ago = Base.utc_now() - timedelta(hours=25)
-    for message in conversation.messages:
-        message.created_at = a_day_ago
-    conversation.created_at = a_day_ago
-    await druks_db.commit()
-    await druks_db.refresh(conversation)
-    await receive(room_event(text="still there?", ts="15.0", thread_ts="10.0"))
-
-    await druks_db.refresh(conversation, ["messages"])
-    assert len(conversation.messages) == 2
 
 
 async def create_agent(session, owner, name, *, is_private=False):
@@ -671,40 +659,44 @@ async def test_a_direct_message_reaches_an_agent_only_when_it_tags_the_bot(
     assert sorted(chat.agent_id or "" for chat in conversations) == ["", engineer.id]
 
 
-async def test_a_reply_in_an_agents_thread_reaches_that_agent_until_a_tag_names_another(
+async def list_bodies(session, card):
+    """The bodies of each conversation on the connection, by its person and its agent."""
+    bodies = {}
+    for chat in await Conversation.list_for_connection(session, card.id):
+        await session.refresh(chat, ["messages"])
+        bodies[(chat.user_id, chat.agent_id)] = [message.body for message in chat.messages]
+    return bodies
+
+
+async def test_the_last_agent_named_in_a_thread_owns_it_for_everyone(
     card, druks_db, slack, delivery
 ):
     ana = await Account.get_or_create(druks_db, "ana@example.com")
     ben = await Account.get_or_create(druks_db, "ben@example.com")
     await link_person(druks_db, ana)
     await link_person(druks_db, ben, user_id="U200")
-    engineer = await create_agent(druks_db, ana, "Security engineer")
-    manager = await create_agent(druks_db, ana, "Release manager")
+    writer = await create_agent(druks_db, ana, "Writer")
+    designer = await create_agent(druks_db, ana, "Designer")
     await druks_db.commit()
 
-    await receive(room_event(text=f"<@{BOT}> Security engineer check this PR"))
-    await receive(room_event(text="and the tests?", ts="11.0", thread_ts="10.0"))
-    await receive(room_event(user="U200", text=f"<@{BOT}> me too", ts="12.0", thread_ts="10.0"))
+    await receive(room_event(text=f"<@{BOT}> Writer draft the notes"))
+    await receive(room_event(text=f"<@{BOT}> make it shorter", ts="11.0", thread_ts="10.0"))
+    await receive(room_event(text=f"<@{BOT}> Designer make a logo", ts="12.0", thread_ts="10.0"))
     await receive(
-        room_event(text=f"<@{BOT}> Release manager can it ship?", ts="13.0", thread_ts="10.0")
+        room_event(user="U200", text=f"<@{BOT}> make it blue", ts="13.0", thread_ts="10.0")
     )
-    await receive(room_event(text="today?", ts="14.0", thread_ts="10.0"))
+    await receive(room_event(text=f"<@{BOT}> Writer add the logo", ts="14.0", thread_ts="10.0"))
+    await receive(room_event(user="U200", text=f"<@{BOT}> and a date", ts="15.0", thread_ts="10.0"))
 
-    conversations = await Conversation.list_for_connection(druks_db, card.id)
-    bodies = {}
-    for chat in conversations:
-        await druks_db.refresh(chat, ["messages"])
-        bodies[(chat.user_id, chat.agent_id)] = [message.body for message in chat.messages]
-    assert bodies == {
-        (ANA, engineer.id): ["Security engineer check this PR", "and the tests?"],
-        ("U200", None): ["me too"],
-        (ANA, manager.id): ["Release manager can it ship?", "today?"],
+    assert await list_bodies(druks_db, card) == {
+        (ANA, writer.id): ["Writer draft the notes", "make it shorter", "Writer add the logo"],
+        (ANA, designer.id): ["Designer make a logo"],
+        ("U200", designer.id): ["make it blue"],
+        ("U200", writer.id): ["and a date"],
     }
 
 
-async def test_a_tag_naming_no_agent_reaches_the_agent_the_person_last_wrote_to(
-    card, druks_db, slack, delivery
-):
+async def test_an_agents_late_reply_does_not_take_the_thread_back(card, druks_db, slack, delivery):
     ana = await Account.get_or_create(druks_db, "ana@example.com")
     await link_person(druks_db, ana)
     engineer = await create_agent(druks_db, ana, "Security engineer")
@@ -719,7 +711,9 @@ async def test_a_tag_naming_no_agent_reaches_the_agent_the_person_last_wrote_to(
         for chat in await Conversation.list_for_connection(druks_db, card.id)
         if chat.agent_id == engineer.id
     ]
-    late_reply = await checking.create_message(druks_db, "Looks safe.", role=MessageRole.ASSISTANT)
+    late_reply = await checking.create_message(
+        druks_db, "Looks safe.", role=MessageRole.ASSISTANT, source_id="C1:99.0"
+    )
     late_reply.created_at = Base.utc_now() + timedelta(minutes=5)
     report = await checking.create_message(druks_db, "Run r1 finished.", is_internal=True)
     report.created_at = Base.utc_now() + timedelta(minutes=5)
@@ -727,35 +721,143 @@ async def test_a_tag_naming_no_agent_reaches_the_agent_the_person_last_wrote_to(
 
     await receive(room_event(text=f"<@{BOT}> and today?", ts="12.0", thread_ts="10.0"))
 
-    shipping = await Conversation.get_for_user(druks_db, card, user_id=ANA, thread_id="C1:10.0")
+    [shipping] = [
+        chat
+        for chat in await Conversation.list_for_connection(druks_db, card.id)
+        if chat.agent_id == manager.id
+    ]
     await druks_db.refresh(shipping, ["messages"])
-    assert shipping.agent_id == manager.id
     assert [message.body for message in shipping.messages] == [
         "Release manager can it ship?",
         "and today?",
     ]
 
 
-async def test_a_bare_tag_does_not_hold_the_persons_later_tags_in_normal_chat(
+async def test_a_click_on_an_agents_question_does_not_take_the_thread_back(
+    card, druks_db, slack, delivery, monkeypatch
+):
+    ana = await Account.get_or_create(druks_db, "ana@example.com")
+    ben = await Account.get_or_create(druks_db, "ben@example.com")
+    await link_person(druks_db, ana)
+    await link_person(druks_db, ben, user_id="U200")
+    writer = await create_agent(druks_db, ana, "Writer")
+    designer = await create_agent(druks_db, ana, "Designer")
+    await druks_db.commit()
+    await receive(room_event(text=f"<@{BOT}> Writer draft the notes"))
+    [drafting] = await Conversation.list_for_connection(druks_db, card.id)
+    question = await Notification.create(
+        druks_db,
+        conversation_id=drafting.id,
+        reason="question.asked",
+        body="Which tone?",
+        question_offset=0,
+        actions=[{"id": "1", "label": "Formal"}],
+    )
+    await receive(
+        room_event(user="U200", text=f"<@{BOT}> Designer make a logo", ts="11.0", thread_ts="10.0")
+    )
+    monkeypatch.setattr(
+        "druks.notifications.services.DBOS", SimpleNamespace(start_workflow_async=AsyncMock())
+    )
+
+    await respond_to_notification(
+        druks_db, question.correlation_token, {"control": "1"}, user_id=ANA, account_id=None
+    )
+    await receive(
+        room_event(user="U200", text=f"<@{BOT}> make it blue", ts="12.0", thread_ts="10.0")
+    )
+
+    assert await list_bodies(druks_db, card) == {
+        (ANA, writer.id): ["Writer draft the notes", "Formal"],
+        ("U200", designer.id): ["Designer make a logo", "make it blue"],
+    }
+
+
+async def test_a_person_who_turns_the_tag_off_reaches_the_threads_agent_with_no_tag(
+    card, druks_db, slack, delivery, tmp_path
+):
+    api = conversation_api(tmp_path, "/thread/tag", require_tag, methods=["PUT"], status_code=204)
+    ana = await Account.get_or_create(druks_db, "ana@example.com")
+    ben = await Account.get_or_create(druks_db, "ben@example.com")
+    await link_person(druks_db, ana)
+    await link_person(druks_db, ben, user_id="U200")
+    writer = await create_agent(druks_db, ana, "Writer")
+    designer = await create_agent(druks_db, ana, "Designer")
+    await receive(room_event(text=f"<@{BOT}> Writer draft the notes"))
+    [drafting] = await Conversation.list_for_connection(druks_db, card.id)
+    direct = await thread_conversation(druks_db, card, ana, thread_id="")
+    _, token = await PersonalAccessToken.create(druks_db, account_id=ana.id, name="chat")
+    await druks_db.commit()
+    headers = {"Authorization": f"Bearer {token}", CONVERSATION_HEADER: drafting.id}
+
+    async with asgi_client(api) as client:
+        await receive(room_event(text="too early", ts="11.0", thread_ts="10.0"))
+        optional = await client.put("/thread/tag", json={"is_required": False}, headers=headers)
+        await receive(room_event(text="make it shorter", ts="12.0", thread_ts="10.0"))
+        await receive(
+            room_event(
+                user="U200", text=f"<@{BOT}> Designer make a logo", ts="13.0", thread_ts="10.0"
+            )
+        )
+        # The thread moved to Designer. Ana's choice stays, and it is hers alone.
+        await receive(room_event(text="Writer make it blue", ts="14.0", thread_ts="10.0"))
+        await receive(room_event(user="U200", text="and bigger", ts="15.0", thread_ts="10.0"))
+        [drawing] = [
+            chat
+            for chat in await Conversation.list_for_account(druks_db, ana)
+            if chat.agent_id == designer.id
+        ]
+        required = await client.put(
+            "/thread/tag",
+            json={"is_required": True},
+            headers={**headers, CONVERSATION_HEADER: drawing.id},
+        )
+        await receive(room_event(text="and round", ts="16.0", thread_ts="10.0"))
+        no_thread = await client.put(
+            "/thread/tag",
+            json={"is_required": False},
+            headers={**headers, CONVERSATION_HEADER: direct.id},
+        )
+
+    assert (optional.status_code, required.status_code, no_thread.status_code) == (204, 204, 409)
+    assert await list_bodies(druks_db, card) == {
+        (ANA, writer.id): ["Writer draft the notes", "make it shorter"],
+        (ANA, designer.id): ["Writer make it blue"],
+        ("U200", designer.id): ["Designer make a logo"],
+        (ANA, None): [],
+    }
+
+
+async def test_an_automations_tag_does_not_take_the_thread_from_its_agent(
     card, druks_db, slack, delivery
 ):
     ana = await Account.get_or_create(druks_db, "ana@example.com")
     await link_person(druks_db, ana)
-    engineer = await create_agent(druks_db, ana, "Security engineer")
-    await druks_db.commit()
-    await receive(room_event(text=f"<@{BOT}>"))
-    await receive(
-        room_event(text=f"<@{BOT}> Security engineer check this PR", ts="11.0", thread_ts="10.0")
+    writer = await create_agent(druks_db, ana, "Writer")
+    druks_db.add(
+        Automation(
+            connection_id=card.id,
+            source_id="B500",
+            name="Support form",
+            is_accepted=True,
+            first_message=bot_event()["event"],
+        )
     )
+    await druks_db.commit()
+    await receive(room_event(text=f"<@{BOT}> Writer draft the notes"))
+    await receive(bot_event(ts="11.0", thread_ts="10.0"))
 
-    await receive(room_event(text=f"<@{BOT}> and the tests?", ts="12.0", thread_ts="10.0"))
+    await receive(room_event(text=f"<@{BOT}> make it shorter", ts="12.0", thread_ts="10.0"))
 
-    checking = await Conversation.get_for_user(druks_db, card, user_id=ANA, thread_id="C1:10.0")
-    await druks_db.refresh(checking, ["messages"])
-    assert checking.agent_id == engineer.id
-    assert [message.body for message in checking.messages] == [
-        "Security engineer check this PR",
-        "and the tests?",
+    [drafting] = [
+        chat
+        for chat in await Conversation.list_for_connection(druks_db, card.id)
+        if chat.agent_id == writer.id
+    ]
+    await druks_db.refresh(drafting, ["messages"])
+    assert [message.body for message in drafting.messages] == [
+        "Writer draft the notes",
+        "make it shorter",
     ]
 
 
@@ -810,6 +912,72 @@ async def test_a_tag_naming_someone_elses_private_agent_is_refused_in_the_thread
     [(method, sent)] = slack
     assert (method, sent["channel"], sent["thread_ts"]) == ("chat.postMessage", "C1", "10.0")
     assert PRIVATE_AGENT_MESSAGE in json.dumps(sent)
+
+
+async def test_a_tag_naming_no_agent_is_refused_when_the_threads_agent_is_private(
+    card, druks_db, slack, delivery
+):
+    ana = await Account.get_or_create(druks_db, "ana@example.com")
+    ben = await Account.get_or_create(druks_db, "ben@example.com")
+    await link_person(druks_db, ana)
+    await link_person(druks_db, ben, user_id="U200")
+    await create_agent(druks_db, ana, "Security engineer", is_private=True)
+    await druks_db.commit()
+    await receive(room_event(text=f"<@{BOT}> Security engineer check this PR"))
+
+    await receive(room_event(user="U200", text=f"<@{BOT}> me too", ts="11.0", thread_ts="10.0"))
+
+    assert not await Conversation.list_for_account(druks_db, ben)
+    delivery.assert_awaited_once()
+    [(method, sent)] = slack
+    assert (method, sent["channel"], sent["thread_ts"]) == ("chat.postMessage", "C1", "10.0")
+    assert PRIVATE_AGENT_MESSAGE in json.dumps(sent)
+
+
+async def test_a_held_message_reaches_the_threads_agent_once_the_person_connects(
+    card, druks_db, druks_client, slack, delivery, endpoint
+):
+    ben = await Account.get_or_create(druks_db, "ben@example.com")
+    await link_person(druks_db, ben, user_id="U200")
+    writer = await create_agent(druks_db, ben, "Writer")
+    await druks_db.commit()
+    await receive(room_event(user="U200", text=f"<@{BOT}> Writer draft the notes"))
+    await receive(room_event(text=f"<@{BOT}> make it shorter", ts="11.0", thread_ts="10.0"))
+    [_, (_, direct_message), _] = slack
+    link = direct_message["text"].partition("https://druks.example")[2]
+    operator = await Account.get_or_create(druks_db, "op@example.com")
+    await link_person(druks_db, operator)
+
+    linked = await druks_client.get(link, follow_redirects=False)
+
+    [conversation] = await Conversation.list_for_account(druks_db, operator)
+    assert linked.headers["location"] == f"/chat/{conversation.id}"
+    await druks_db.refresh(conversation, ["messages"])
+    assert conversation.agent_id == writer.id
+    assert [message.body for message in conversation.messages] == ["make it shorter"]
+
+
+async def test_a_held_message_for_a_private_agent_is_refused_once_the_person_connects(
+    card, druks_db, druks_client, slack, delivery, endpoint
+):
+    ben = await Account.get_or_create(druks_db, "ben@example.com")
+    await create_agent(druks_db, ben, "Writer", is_private=True)
+    await druks_db.commit()
+    await receive(room_event(text=f"<@{BOT}> Writer draft the notes"))
+    [_, (_, direct_message), _] = slack
+    link = direct_message["text"].partition("https://druks.example")[2]
+    operator = await Account.get_or_create(druks_db, "op@example.com")
+    await link_person(druks_db, operator)
+
+    linked = await druks_client.get(link, follow_redirects=False)
+
+    assert linked.headers["location"] == "/chat"
+    assert not await Conversation.list_for_connection(druks_db, card.id)
+    delivery.assert_not_awaited()
+    (method, refusal) = slack[-1]
+    assert (method, refusal["channel"], refusal["thread_ts"]) == ("chat.postMessage", "C1", "10.0")
+    assert PRIVATE_AGENT_MESSAGE in json.dumps(refusal)
+    assert (await druks_client.get(link, follow_redirects=False)).status_code == 410
 
 
 async def test_an_unlinked_person_who_tags_the_bot_gets_the_link_by_direct_message(
@@ -1170,56 +1338,6 @@ async def test_chat_read_file_answers_502_when_the_upload_to_the_sandbox_fails(
 
     assert response.status_code == 502
     assert response.json()["detail"] == str(error)
-
-
-async def test_a_person_who_requires_a_tag_is_answered_only_when_they_tag(
-    card, druks_db, slack, delivery, tmp_path
-):
-    api = conversation_api(tmp_path, "/thread/tag", require_tag, methods=["PUT"], status_code=204)
-    ana = await Account.get_or_create(druks_db, "ana@example.com")
-    await link_person(druks_db, ana)
-    await receive(room_event())
-    [conversation] = await Conversation.list_for_connection(druks_db, card.id)
-    direct = await thread_conversation(druks_db, card, ana, thread_id="")
-    _, token = await PersonalAccessToken.create(druks_db, account_id=ana.id, name="chat")
-    await druks_db.commit()
-    headers = {"Authorization": f"Bearer {token}", CONVERSATION_HEADER: conversation.id}
-
-    async def bodies():
-        await druks_db.refresh(conversation, ["messages"])
-        return [message.body for message in conversation.messages]
-
-    async with asgi_client(api) as client:
-        required = await client.put("/thread/tag", json={"is_required": True}, headers=headers)
-        await receive(room_event(text="more", ts="12.0", thread_ts="10.0"))
-        await receive(room_event(ts="13.0", thread_ts="10.0"))
-        assert await bodies() == ["read my runs", "read my runs"]
-        optional = await client.put("/thread/tag", json={"is_required": False}, headers=headers)
-        await receive(room_event(text="and more", ts="14.0", thread_ts="10.0"))
-        assert await bodies() == ["read my runs", "read my runs", "and more"]
-        no_thread = await client.put(
-            "/thread/tag",
-            json={"is_required": True},
-            headers={**headers, CONVERSATION_HEADER: direct.id},
-        )
-
-    assert (required.status_code, optional.status_code, no_thread.status_code) == (204, 204, 409)
-
-
-async def test_a_persons_new_thread_conversation_starts_with_their_tag_preference(
-    card, druks_db, slack, delivery
-):
-    ana = await Account.get_or_create(druks_db, "ana@example.com")
-    await ana.update_preferences(is_tag_required=True)
-    await link_person(druks_db, ana)
-    await receive(room_event())
-    await receive(room_event(text="more", ts="12.0", thread_ts="10.0"))
-    await receive(room_event(ts="13.0", thread_ts="10.0"))
-
-    [conversation] = await Conversation.list_for_connection(druks_db, card.id)
-    await druks_db.refresh(conversation, ["messages"])
-    assert conversation.is_tag_required
-    assert [message.body for message in conversation.messages] == ["read my runs", "read my runs"]
 
 
 def shared_file(file_id="F1", name="plan.pdf"):

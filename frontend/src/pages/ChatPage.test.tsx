@@ -42,7 +42,7 @@ function mount(path = `/chat/${conversation.id}`, timezone?: string, account = a
   const page = <Router>
     <Route path="/chat/:id?">{(params) => <ChatPage id={params.id} account={account} />}</Route>
   </Router>
-  if (timezone) vi.spyOn(api, 'getPersonalSettings').mockResolvedValue({ timezone, theme: 'system', notificationChannelId: null, isTagRequired: false })
+  if (timezone) vi.spyOn(api, 'getPersonalSettings').mockResolvedValue({ timezone, theme: 'system', notificationChannelId: null })
   render(<StrictMode><QueryClientProvider client={client}>
     {timezone ? <UserPreferencesProvider accountId="operator">{page}</UserPreferencesProvider> : page}
   </QueryClientProvider></StrictMode>)

@@ -833,7 +833,6 @@ export interface PersonalSettings {
   timezone: string
   theme: 'system' | 'light' | 'dark'
   notificationChannelId: string | null
-  isTagRequired: boolean
 }
 
 /** A Slack channel that the bot is a member of. A person can send their notifications to it. */
@@ -865,7 +864,6 @@ export interface UpdatePersonalSettingsRequest {
   timezone?: string
   theme?: PersonalSettings['theme']
   notificationChannelId?: string | null
-  isTagRequired?: boolean
 }
 
 export interface UpdateSettingsRequest {

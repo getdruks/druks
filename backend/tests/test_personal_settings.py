@@ -44,7 +44,6 @@ async def test_account_creation_copies_defaults_once(tmp_path, druks_db, monkeyp
             "timezone": "America/New_York",
             "theme": "system",
             "notificationChannelId": None,
-            "isTagRequired": False,
         }
 
 
@@ -178,7 +177,7 @@ async def test_personal_api_is_scoped_and_does_not_retime_schedules(
         alice = {IDENTITY_HEADER: "alice@example.com"}
         bob = {IDENTITY_HEADER: "bob@example.com"}
         inherited = client.get("/api/settings/personal", headers=alice).json()
-        assert set(inherited) == {"timezone", "theme", "notificationChannelId", "isTagRequired"}
+        assert set(inherited) == {"timezone", "theme", "notificationChannelId"}
         assert inherited["theme"] == "system"
         saved_theme = client.patch("/api/settings/personal", headers=alice, json={"theme": "dark"})
         assert saved_theme.status_code == 200

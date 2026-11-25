@@ -3,7 +3,6 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { api } from '../api/client'
 import { Button } from './Control'
-import { Switch } from './SettingsPanes'
 
 /** The Slack workspace the bot answers in, the signed-in person's Slack account, and the
  * automations that tagged the bot. */
@@ -11,7 +10,6 @@ export function SlackPane() {
   const queryClient = useQueryClient()
   const services = useQuery({ queryKey: ['services'], queryFn: api.services, staleTime: 60_000 })
   const connections = useQuery({ queryKey: ['connections'], queryFn: api.listConnections })
-  const personal = useQuery({ queryKey: ['personalSettings'], queryFn: api.getPersonalSettings })
   const automations = useQuery({ queryKey: ['slackAutomations'], queryFn: api.slackAutomations })
   const [isBusy, setIsBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -26,16 +24,6 @@ export function SlackPane() {
     void api
       .disconnectConnection(connectionId)
       .then(() => queryClient.invalidateQueries({ queryKey: ['connections'] }))
-      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
-      .finally(() => setIsBusy(false))
-  }
-
-  function setTagRequired(isTagRequired: boolean) {
-    setIsBusy(true)
-    setError(null)
-    void api
-      .updatePersonalSettings({ isTagRequired })
-      .then((saved) => queryClient.setQueryData(['personalSettings'], saved))
       .catch((e) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setIsBusy(false))
   }
@@ -96,27 +84,6 @@ export function SlackPane() {
                 </a>
               )}
             </span>
-          </div>
-        </div>
-      )}
-      {personal.isSuccess && (
-        <div className="set-group" data-setting="tag-required">
-          <div className="settings-fast-mode">
-            <div>
-              <label className="mcp-label" htmlFor="slack-tag-required">
-                Answer only when I tag the bot
-              </label>
-              <span className="set-field-help">
-                For the threads you tag the bot in from now on.
-              </span>
-            </div>
-            <Switch
-              id="slack-tag-required"
-              on={personal.data.isTagRequired}
-              onClick={() => setTagRequired(!personal.data.isTagRequired)}
-              disabled={isBusy}
-              label="Answer only when I tag the bot"
-            />
           </div>
         </div>
       )}

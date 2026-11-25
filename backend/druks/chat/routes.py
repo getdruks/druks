@@ -313,9 +313,10 @@ async def require_tag(
         bool, Body(embed=True, description="True to require a tag, false to stop requiring one.")
     ],
 ) -> None:
-    """Require a tag in the thread of the conversation this call comes from, or stop
-    requiring one. While you require a tag, the person's untagged replies in the thread
-    do not reach you. Their tagged messages always do."""
+    """Require a tag from the person in the thread of the conversation this call comes
+    from, or stop requiring one. A tag is required until the person asks otherwise.
+    While none is required, their untagged replies in the thread reach the agent that
+    owns the thread. Everyone else in the thread still tags the bot."""
     conversation_id = current_conversation_id.get()
     if not conversation_id:
         raise HTTPException(
@@ -324,7 +325,7 @@ async def require_tag(
     conversation = await session.get(Conversation, conversation_id)
     if not conversation.thread_id:
         raise HTTPException(409, "This conversation has no thread. Every message reaches you.")
-    conversation.is_tag_required = is_required
+    await conversation.set_tag_required(session, is_required)
     await session.commit()
 
 
