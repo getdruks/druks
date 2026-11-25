@@ -2321,6 +2321,10 @@ async def test_a_run_tells_the_person_itself_once_the_agent_no_longer_answers_th
     assert not any(message.is_internal for message in messages)
     send_reply.assert_awaited_once_with(druks_db, conversation, notice)
 
+    assert not await service.report_failure(druks_db, run, failure="The build broke")
+    *_, notice = await list_messages(druks_db, conversation)
+    assert notice.body.startswith("Your run test failed: The build broke. The agent does not")
+
 
 async def test_a_failed_run_reports_to_its_conversation_whether_or_not_it_parked(
     druks_db, conversation

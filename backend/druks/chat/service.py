@@ -924,7 +924,7 @@ async def report_failure(session: AsyncSession, run: Run, *, failure: str) -> st
         session,
         run.conversation_id,
         FAILURE_MESSAGE.format(run=run.id, failure=failure),
-        get_notice=partial(get_refused_notice, run, "failed"),
+        get_notice=partial(get_refused_notice, run, f"failed: {failure}"),
     )
 
 
@@ -946,12 +946,12 @@ async def report_cancel(run_id: str) -> str | None:
     conversation to deliver."""
     async with step_session() as session:
         run = await session.get(Run, run_id)
-        body = CANCELLED_MESSAGE.format(run=run.id, reason=run.failure or "none given")
+        reason = run.failure or "none given"
         return await report_outcome(
             session,
             run.conversation_id,
-            body,
-            get_notice=partial(get_refused_notice, run, "was cancelled"),
+            CANCELLED_MESSAGE.format(run=run.id, reason=reason),
+            get_notice=partial(get_refused_notice, run, f"was cancelled. The reason: {reason}"),
         )
 
 
