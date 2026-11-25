@@ -1028,6 +1028,46 @@ async def test_a_quota_wait_woken_without_a_switch_waits_out_its_reset(
     assert sandbox.run_agent.await_count == 2
 
 
+@pytest.mark.parametrize(
+    ("week_percent_left", "wait_seconds"),
+    [(0, 3 * 60 * 60 + 90.0), (20, 30 * 60 + 90.0)],
+    ids=["exhausted_week", "no_exhausted_window"],
+)
+async def test_a_quota_wait_ignores_the_reset_of_a_window_with_capacity(
+    druks_db,
+    tmp_path,
+    monkeypatch,
+    current_run,
+    _inline_agent_steps,
+    week_percent_left,
+    wait_seconds,
+):
+    now = datetime(2026, 8, 1, 10, tzinfo=UTC)
+    _patch_quota(
+        monkeypatch,
+        tmp_path,
+        current_run,
+        [HarnessRateLimitError("quota"), None],
+        now=now,
+        scrape=UsageScrape(
+            five_hour_percent_left=84,
+            five_hour_resets_at=now + timedelta(hours=1),
+            weeks=[
+                {
+                    "percent_left": week_percent_left,
+                    "resets_at": (now + timedelta(hours=3)).isoformat(),
+                    "model": None,
+                }
+            ],
+        ),
+    )
+    current_run.sleep = AsyncMock(return_value=False)
+
+    await DUMMY_INSTRUCTION()
+
+    assert current_run.sleep.await_args.args == (wait_seconds,)
+
+
 async def test_a_switched_account_retries_now_and_waits_out_its_own_limit_once(
     druks_db, tmp_path, monkeypatch, current_run, _inline_agent_steps
 ):
@@ -1080,7 +1120,8 @@ async def test_body_level_quota_reset_over_six_hours_reraises_without_sleeping(
         [failure],
         now=now,
         scrape=UsageScrape(
-            five_hour_resets_at=now + timedelta(hours=7),
+            five_hour_percent_left=84,
+            five_hour_resets_at=now + timedelta(hours=1),
             weeks=[
                 {
                     "percent_left": 0,
@@ -1090,7 +1131,7 @@ async def test_body_level_quota_reset_over_six_hours_reraises_without_sleeping(
             ],
         ),
     )
-    current_run.sleep = AsyncMock()
+    current_run.sleep = AsyncMock(return_value=False)
 
     with pytest.raises(HarnessUsageLimitError) as excinfo:
         await DUMMY_INSTRUCTION()

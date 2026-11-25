@@ -2107,8 +2107,8 @@ class Instruction:
                 elif error.retry is Retry.QUOTA:
                     if has_retried_quota:
                         raise
-                    # Wait until the window of the provider resets. The latest usage scrape
-                    # gives the time.
+                    # Wait until the exhausted window of the provider resets. The latest usage
+                    # scrape gives the time.
                     quota = await DBOS.run_step_async(
                         StepOptions(name=f"{workflow.kind}.agent.{self.id}.retry_wait"),
                         _quota_retry_wait,
@@ -2534,10 +2534,11 @@ async def _quota_retry_wait(
             session, provider_id=provider_id, account_id=config.charged_account_id
         )
     now = datetime.now(UTC)
-    # With no scrape yet, or no reset after the current time, the wait is a fixed half hour.
+    # With no scrape yet, or no exhausted window that resets after the current time, the wait
+    # is a fixed half hour.
     wait_seconds = _QUOTA_FALLBACK_WAIT_SECONDS
     if scrape:
-        reset = scrape.soonest_reset_after(now)
+        reset = scrape.soonest_reset_after(now, exhausted_only=True)
         if reset:
             wait_seconds = (reset - now).total_seconds()
     # Druks adds jitter, so that the reset of one window does not wake every run at the same time.

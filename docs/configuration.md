@@ -1099,8 +1099,10 @@ while values stay unchanged. An exhausted window waits for its reset unless an
 agent call finishes on the subscription. Manual refresh keeps a 60-second
 minimum between polls.
 
-An agent call that hits a usage limit waits for the window's reset, up to six
-hours, and then retries once. If you sign in to another account for the agent's
+An agent call that hits a usage limit waits for the exhausted window's reset, up
+to six hours, and then retries once. A reset more than six hours away fails the
+call with no wait. If the latest usage reading shows no exhausted window, the
+wait is half an hour. If you sign in to another account for the agent's
 provider during the wait, the call retries at once. A change to the agent's
 model or billing during the wait does the same. If the new account is also
 limited, the call waits once more, for that account's reset.
