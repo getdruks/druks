@@ -1,5 +1,4 @@
 from datetime import datetime
-from functools import partial
 from typing import Any
 
 from dbos import DBOS, StepOptions
@@ -9,6 +8,7 @@ from fastmcp.client.transports import StreamableHttpTransport
 from druks.agents.constants import PRIVATE_AGENT_MESSAGE
 from druks.chat import service as chat_service
 from druks.chat.constants import CONVERSATION_HEADER, REFUSED_MESSAGE, SKIPPED_MESSAGE
+from druks.chat.enums import MessageRole
 from druks.chat.models import Conversation
 from druks.durable.engine import step_session
 from druks.mcp.constants import BEARER_PREFIX
@@ -103,10 +103,20 @@ async def report_skip(schedule_id: str, reason: str) -> str | None:
     the agent no longer answers the owner, Druks says why itself and no turn runs."""
     async with step_session() as session:
         schedule = await session.get(Schedule, schedule_id)
-        if schedule:
-            return await chat_service.report_outcome(
+        if not schedule:
+            return
+        conversation = await session.get(Conversation, schedule.conversation_id)
+        if conversation.agent and not conversation.account.can_talk_to(conversation.agent):
+            notice = await conversation.create_message(
                 session,
-                schedule.conversation_id,
-                SKIPPED_MESSAGE.format(tool=schedule.tool, reason=reason),
-                get_notice=partial(REFUSED_MESSAGE.format, tool=schedule.tool, reason=reason),
+                REFUSED_MESSAGE.format(tool=schedule.tool, reason=reason),
+                role=MessageRole.ASSISTANT,
             )
+            await session.commit()
+            await chat_service.send_assistant_message(session, conversation, notice)
+            return
+        return await chat_service.report_outcome(
+            session,
+            schedule.conversation_id,
+            SKIPPED_MESSAGE.format(tool=schedule.tool, reason=reason),
+        )

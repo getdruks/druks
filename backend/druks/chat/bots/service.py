@@ -1,6 +1,5 @@
 import secrets
 import string
-from functools import partial
 
 from dbos import DBOS, SetEnqueueOptions, SetWorkflowAttributes, SetWorkflowID, StepOptions
 from pydantic_core import to_json
@@ -15,7 +14,7 @@ from druks.chat.constants import (
 )
 from druks.chat.enums import BotAccess, MessageState, PauseSignal
 from druks.chat.models import Conversation
-from druks.chat.service import deliver, get_refused_notice, report_outcome
+from druks.chat.service import deliver, report_run
 from druks.durable.constants import PAUSE_QUEUE
 from druks.durable.engine import step_session
 from druks.durable.models import Run
@@ -277,18 +276,13 @@ async def ask_for_answer(session: AsyncSession, run: Run) -> str | None:
             # approver, whose username can be an email address.
             body = PARKED_FOR_REVIEW_MESSAGE.format(run=run.id)
             outcome = "waits for someone else's answer"
-        return await report_outcome(
-            session,
-            run.conversation_id,
-            body,
-            get_notice=partial(get_refused_notice, run, outcome),
-        )
+        return await report_run(session, run, body, outcome=outcome)
     if not conversation.admin_account_id:
-        return await report_outcome(
+        return await report_run(
             session,
-            run.conversation_id,
+            run,
             PARKED_MESSAGE.format(run=run.id, request=request),
-            get_notice=partial(get_refused_notice, run, "waits for your answer"),
+            outcome="waits for your answer",
         )
     admin = await get_or_create_admin_conversation(session, conversation)
     body = QUESTION_MESSAGE.format(
