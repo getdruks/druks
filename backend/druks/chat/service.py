@@ -510,7 +510,6 @@ async def deliver_pending(session: AsyncSession, conversation: Conversation) -> 
                 session, conversation.account_id, scoped_to=conversation.sandbox_scope
             )
         except ChatSandboxGone:
-            # The box is gone before the reattach, so the turn stops before it finishes.
             await _interrupt_turn(session, conversation)
             continue
         try:
@@ -735,15 +734,6 @@ async def get_turn_content(
     return content
 
 
-def _stopped_on_usage_limit(error: str, harness: str) -> bool:
-    """Whether the CLI's error names a usage or rate limit — the two QUOTA failures — judged
-    by the harness's own markers, the same vocabulary a batch run's check_returncode reads."""
-    if not error or not harness:
-        return False
-    failure = get_harness(harness).classify_failure(error)
-    return failure is not None and failure.retry == Retry.QUOTA
-
-
 async def _interrupt_turn(
     session: AsyncSession, conversation: Conversation, *, error: str = "", harness: str = ""
 ) -> None:
@@ -758,7 +748,11 @@ async def _interrupt_turn(
         newest = max(person_messages, key=lambda message: (message.created_at, message.id))
         # Only an operator can change a credential, so only they get the limit and its link.
         is_operator = conversation.account.kind == AccountKind.OPERATOR
-        if is_operator and _stopped_on_usage_limit(error, harness):
+        # A missing bridge state names no harness.
+        harness_class = get_harness(harness)
+        failure = harness_class and harness_class.classify_failure(error)
+        # A usage limit and a rate limit are the two QUOTA failures.
+        if is_operator and failure and failure.retry == Retry.QUOTA:
             body = USAGE_LIMIT_INTERRUPTED_MESSAGE
             if endpoint := get_settings().urls.endpoint.rstrip("/"):
                 body += f" Open {endpoint}/settings/providers"
@@ -768,7 +762,7 @@ async def _interrupt_turn(
             session, body=body, role=MessageRole.ASSISTANT, reply_to=newest
         )
     await session.commit()
-    # Reset before the send, as finish_turn does: a refused send must not leave a stale stream.
+    # Before the send: a refused send must not leave a stale stream.
     await reset_live_stream(conversation.id)
     if reply:
         await conversation.channel.send_reply(session, conversation, reply)
@@ -794,14 +788,10 @@ async def follow_turn(
             await session.commit()
             return
         if status["status"] in ("missing", "interrupted"):
-            # The turn stopped before it finished; the harness and error come from the status,
-            # so the reattach caller needs no help to name a usage limit.
-            await _interrupt_turn(
-                session,
-                conversation,
-                error=status.get("error", ""),
-                harness=status.get("harness", ""),
-            )
+            # The bridge keeps the error of its last turn until the next one begins, so the
+            # error counts only when it belongs to this turn's message.
+            error = status.get("error", "") if status["messageId"] == message.id else ""
+            await _interrupt_turn(session, conversation, error=error, harness=status["harness"])
             return
         if status["messageId"] != message.id:
             # The bridge moved on to a newer message, which runs its own turn; end this one.

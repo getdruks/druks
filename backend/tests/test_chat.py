@@ -392,7 +392,7 @@ async def test_each_operator_turn_prepares_the_box_for_its_sign_ins(
     async def request(self, method, **values):
         return {"status": "idle", "sessionId": "one"}
 
-    async def follow_turn(session, conversation, message, bridge, naming=None):
+    async def follow_turn(session, conversation, message, bridge, naming):
         message.state = MessageState.REPLIED
         await session.commit()
 
@@ -604,9 +604,10 @@ async def test_a_channel_turn_with_no_answer_is_asked_once(druks_db, conversatio
     assert not await conversation.get_unanswered_message(druks_db)
 
 
-async def _follow_interrupted(druks_db, conversation, monkeypatch, *, error):
-    """Follow a turn that the bridge reports interrupted, carrying ``error``. Returns the
-    patched channel send_reply and the turn's message."""
+async def _follow_interrupted(druks_db, conversation, monkeypatch, *, error, **status):
+    """Follow a turn that the bridge reports interrupted, carrying ``error``. ``status``
+    replaces fields of the bridge's status. Returns the patched channel send_reply and the
+    turn's message."""
     send_reply = AsyncMock()
     monkeypatch.setattr(channel_registry.get("slack"), "send_reply", send_reply)
     message = await conversation.get_unanswered_message(druks_db)
@@ -622,6 +623,7 @@ async def _follow_interrupted(druks_db, conversation, monkeypatch, *, error):
             "sequence": 0,
             "archivePath": "",
             "error": error,
+            **status,
         }
 
     monkeypatch.setattr(Bridge, "request", request)
@@ -674,6 +676,55 @@ async def test_a_non_operator_usage_limit_interrupt_gets_the_plain_message(
     )
 
     assert send_reply.await_args.args[2].body == INTERRUPTED_MESSAGE
+
+
+async def test_an_error_of_an_earlier_turn_does_not_name_the_limit(
+    druks_db, slack_conversation, monkeypatch
+):
+    send_reply, _ = await _follow_interrupted(
+        druks_db,
+        slack_conversation,
+        monkeypatch,
+        error="Claude hit its usage limit",
+        messageId="an-earlier-message",
+    )
+
+    assert send_reply.await_args.args[2].body == INTERRUPTED_MESSAGE
+
+
+async def test_a_channel_turn_with_no_bridge_state_tells_the_person(
+    druks_db, slack_conversation, monkeypatch
+):
+    send_reply, message = await _follow_interrupted(
+        druks_db,
+        slack_conversation,
+        monkeypatch,
+        error="",
+        status="missing",
+        messageId="",
+        harness="",
+    )
+
+    assert message.state == MessageState.INTERRUPTED
+    assert send_reply.await_args.args[2].body == INTERRUPTED_MESSAGE
+
+
+async def test_a_channel_turn_whose_sandbox_is_gone_tells_the_person(
+    druks_db, slack_conversation, monkeypatch
+):
+    send_reply = AsyncMock()
+    monkeypatch.setattr(channel_registry.get("slack"), "send_reply", send_reply)
+    message = await slack_conversation.get_unanswered_message(druks_db)
+    message.state = MessageState.DELIVERED
+    await druks_db.commit()
+    monkeypatch.setattr(
+        service, "get_running_sandbox", AsyncMock(side_effect=ChatSandboxGone("expired"))
+    )
+
+    await service.deliver_pending(druks_db, slack_conversation)
+
+    reply = send_reply.await_args.args[2]
+    assert (reply.body, reply.reply_to) == (INTERRUPTED_MESSAGE, message.id)
 
 
 async def test_an_interrupted_web_turn_posts_no_channel_reply(druks_db, conversation, monkeypatch):
@@ -1155,7 +1206,7 @@ async def test_a_person_s_message_closes_the_open_questions_of_its_conversation(
     async def request(self, method, **values):
         return {"status": "idle", "sessionId": "one"}
 
-    async def follow_turn(session, conversation, message, bridge, naming=None):
+    async def follow_turn(session, conversation, message, bridge, naming):
         message.state = MessageState.REPLIED
         await session.commit()
 
@@ -1556,7 +1607,7 @@ async def test_only_the_operator_reaches_the_connected_mcp_servers_and_holds_the
             starts.append(values)
         return {"status": "idle", "sessionId": "one"}
 
-    async def follow_turn(session, conversation, message, bridge, naming=None):
+    async def follow_turn(session, conversation, message, bridge, naming):
         message.state = MessageState.REPLIED
         await session.commit()
 
@@ -2116,7 +2167,7 @@ async def test_stop_during_startup_keeps_the_sandbox_and_sends_only_the_next_mes
             prompts.append(values["messageId"])
         return {"status": "idle", "sessionId": "one"}
 
-    async def follow_turn(session, conversation, message, bridge, naming=None):
+    async def follow_turn(session, conversation, message, bridge, naming):
         message.state = MessageState.REPLIED
         await session.commit()
 
