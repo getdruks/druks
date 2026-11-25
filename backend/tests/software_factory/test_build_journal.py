@@ -134,3 +134,15 @@ def test_the_plan_size_survives_a_revision_that_sizes_nothing():
 
     assert journal.plan_size == "small"
     assert _journal(PlanData()).plan_size is None
+
+
+def test_requested_changes_are_reported_until_a_delivery_follows_them():
+    asking = _review("request_changes")
+    assert _journal(_implementation(), asking).requested_changes == asking
+    assert _journal(_implementation(), asking, _implementation()).requested_changes is None
+
+
+def test_a_review_that_requests_no_changes_reports_none():
+    assert _journal(_implementation(), _review("approve")).requested_changes is None
+    assert _journal(_implementation(), _review("comment")).requested_changes is None
+    assert _journal(_implementation()).requested_changes is None

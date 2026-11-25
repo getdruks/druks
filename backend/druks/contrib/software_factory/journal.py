@@ -90,6 +90,18 @@ class BuildJournal(Journal):
         return
 
     @property
+    def requested_changes(self) -> ReviewReport | None:
+        """The latest review when it requests changes and no delivery follows it."""
+        review = self.latest(ReviewReport)
+        if (
+            review
+            and review.decision == "request_changes"
+            and not self.filter(ImplementationOutput, after=review)
+        ):
+            return review
+        return
+
+    @property
     def revision_request(self) -> str | None:
         # The newest triage's instructions drive exactly one implement round.
         # A review recorded after that triage means the round already ran —
