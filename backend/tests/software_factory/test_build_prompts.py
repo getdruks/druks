@@ -6,7 +6,9 @@ import pytest
 from druks.contrib import software_factory
 from druks.contrib.software_factory.contracts import (
     CiReport,
+    CommandCheckOutput,
     FindingOutput,
+    ImplementationOutput,
     ReviewReport,
     TriageOutput,
 )
@@ -172,6 +174,119 @@ async def test_implement_prompt_renders_the_prior_review():
     assert "### Round 1 — decision: request_changes" in prompt
     assert "Rename the flag." in prompt
     assert "- **high** The flag keeps its old name. (`app/flags.py:12`)" in prompt
+
+
+def _delivery(**overrides) -> ImplementationOutput:
+    fields = dict(
+        type="result",
+        status="success",
+        base_sha="aaaaaaaa",
+        head_sha="bbbbbbbb",
+        commit_sha="bbbbbbbb",
+        pr_number=7,
+        files_changed=["app/flags.py", "tests/test_flags.py"],
+        acceptance_results=[],
+        checks=[
+            CommandCheckOutput(
+                command="uv run pytest tests/test_flags.py", status="pass", exit_code=0, reason=""
+            ),
+            CommandCheckOutput(
+                command="uv run pytest backend/",
+                status="not_run",
+                exit_code=None,
+                reason="CI runs it",
+            ),
+        ],
+        known_risks=["The cache key changed."],
+        summary="Renamed the flag and its test.",
+        workspace_path="/home/agent/work/repo",
+        workspace_retention=None,
+    )
+    return ImplementationOutput(**{**fields, **overrides})
+
+
+async def test_implement_prompt_of_the_first_round_has_no_previous_round_section():
+    prompt = await render_prompt(
+        "software_factory/build/implement.md",
+        build=_build(),
+        verification="VERIFICATION-BLOCK",
+        workspace=_workspace(),
+    )
+
+    assert "## Your previous round" not in prompt
+
+
+async def test_implement_prompt_shows_what_the_previous_round_did():
+    build = _build()
+    build.journal.add(_delivery())
+
+    prompt = await render_prompt(
+        "software_factory/build/implement.md",
+        build=build,
+        verification="VERIFICATION-BLOCK",
+        workspace=_workspace(),
+    )
+
+    assert "## Your previous round" in prompt
+    assert "Head `bbbbbbbb`. Renamed the flag and its test." in prompt
+    assert "Files: app/flags.py, tests/test_flags.py" in prompt
+    assert "- `uv run pytest tests/test_flags.py`: pass\n" in prompt
+    assert "- `uv run pytest backend/`: not_run (CI runs it)\n" in prompt
+    assert "- Risk: The cache key changed.\n" in prompt
+    assert (
+        "The branch may have moved since, so run `git log -1` before you rely on this head."
+        in prompt
+    )
+    assert "Start from this. Read only the files the new request touches." in prompt
+
+
+async def test_the_previous_round_section_says_none_for_a_delivery_with_no_files():
+    build = _build()
+    build.journal.add(_delivery(files_changed=[]))
+
+    prompt = await render_prompt(
+        "software_factory/build/implement.md",
+        build=build,
+        verification="VERIFICATION-BLOCK",
+        workspace=_workspace(),
+    )
+
+    assert "Files: none\n" in prompt
+
+
+async def test_the_previous_round_section_shows_the_latest_delivery_only():
+    build = _build()
+    build.journal.add(_delivery(head_sha="11111111", summary="First attempt."))
+    build.journal.add(_delivery(head_sha="22222222", summary="Second attempt."))
+
+    prompt = await render_prompt(
+        "software_factory/build/implement.md",
+        build=build,
+        verification="VERIFICATION-BLOCK",
+        workspace=_workspace(),
+    )
+
+    assert "Head `22222222`. Second attempt." in prompt
+    assert "First attempt." not in prompt
+
+
+@pytest.mark.parametrize(
+    "template",
+    ["generate_plan.md", "review_plan.md", "revise_contract.md", "triage_human_feedback.md"],
+)
+async def test_only_the_implement_prompt_shows_the_previous_round(template):
+    build = _build()
+    build.journal.add(_delivery())
+
+    prompt = await render_prompt(
+        f"software_factory/build/{template}",
+        build=build,
+        verification="VERIFICATION-BLOCK",
+        workspace=_workspace(),
+        **_CALL_KWARGS.get(template, {}),
+    )
+
+    assert "## Your previous round" not in prompt
 
 
 async def test_implement_prompt_puts_red_ci_ahead_of_older_instructions():

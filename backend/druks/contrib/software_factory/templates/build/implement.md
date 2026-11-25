@@ -36,6 +36,24 @@ acceptance criterion — nothing more, nothing less.
 
 {% include "software_factory/build/_header.md" %}
 {% include "software_factory/build/_contract.md" %}
+{% if build.journal.last_implementation %}
+## Your previous round
+
+Head `{{ build.journal.last_implementation.head_sha }}`. {{ build.journal.last_implementation.summary }}
+
+Files: {{ build.journal.last_implementation.files_changed | join(", ") or "none" }}
+
+{% for check in build.journal.last_implementation.checks %}
+- `{{ check.command }}`: {{ check.status }}{% if check.reason %} ({{ check.reason }}){% endif %}
+
+{% endfor %}
+{% for risk in build.journal.last_implementation.known_risks %}
+- Risk: {{ risk }}
+
+{% endfor %}
+The branch may have moved since, so run `git log -1` before you rely on this head. Start from this. Read only the files the new request touches.
+
+{% endif %}
 {% include "software_factory/build/_related_repos.md" %}
 {% include "software_factory/build/_blockers.md" %}
 {% include "software_factory/build/_skills.md" %}
