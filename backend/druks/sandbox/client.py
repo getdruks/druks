@@ -178,9 +178,12 @@ class Client:
         patch: str,
         timeout_seconds: int | None = None,
         secrets: dict[str, Issuer] | None = None,
+        template: str | None = None,
+        env: dict[str, str] | None = None,
     ) -> SandboxRun:
         """Run one command on a box that exists only for it: the repo at the commit with
-        the patch on top. Drukbox deletes the box before it answers."""
+        the patch on top. ``template`` is the template that the box forks from, and ``env``
+        is set on it at creation. Drukbox deletes the box before it answers."""
         api = self._api()
         try:
             return await api.run_command(
@@ -190,6 +193,8 @@ class Client:
                 patch=patch,
                 timeout_seconds=timeout_seconds,
                 secrets=secrets,
+                template=template,
+                env=env,
             )
         finally:
             await api.aclose()

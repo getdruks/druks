@@ -1,4 +1,5 @@
 import asyncio
+import subprocess
 from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -24,10 +25,16 @@ from druks.redis import (
     set_resumable,
     take_check_request,
 )
-from druks.sandbox.exceptions import HostGone
+from druks.sandbox.exceptions import ExecFailed, HostGone
+from druks.sandbox.layout import get_repo_root
 from druks.sandbox.models import SandboxIdentity
 from druks.testing import configure_app_for_test, make_settings, seed_call, seed_run
-from druks.workspaces import RepoWorkspace
+from druks.workspaces import (
+    CHECK_KILL_GRACE_SECONDS,
+    CHECK_OUTPUT_CHARS,
+    COMMAND_NOT_FOUND_HINT,
+    RepoWorkspace,
+)
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
@@ -54,6 +61,10 @@ class _Repo(RepoWorkspace):
         return (CHECK, "make lint") if subject else ()
 
     @classmethod
+    async def get_check_box(cls, subject):
+        return {"template": "template-1"}
+
+    @classmethod
     async def get_secret_refs(cls, subject):
         return []
 
@@ -71,11 +82,12 @@ def _workflow(workspace_class):
 def box(monkeypatch):
     """The agent's box, the sandbox client and the repo workspace, each a recorder."""
     attached = []
+    host_exec = AsyncMock(return_value=subprocess.CompletedProcess([], 0, stdout="", stderr=""))
 
     @asynccontextmanager
     async def attach(*, host_id):
         attached.append(host_id)
-        yield SimpleNamespace(id=host_id)
+        yield SimpleNamespace(id=host_id, exec=host_exec, ssh_username="exedev")
 
     run_command = AsyncMock(
         return_value=SandboxRun(exit_code=0, timed_out=False, output="ok\n", duration_seconds=2.5)
@@ -86,7 +98,9 @@ def box(monkeypatch):
     monkeypatch.setattr(RepoWorkspace, "get_diff", get_diff)
     monkeypatch.setattr(RepoWorkspace, "get_base_commit", AsyncMock(return_value="abc123"))
     monkeypatch.setattr("druks.core.routes.get_workflow", lambda kind: _workflow(_Repo))
-    return SimpleNamespace(attached=attached, run_command=run_command, get_diff=get_diff)
+    return SimpleNamespace(
+        attached=attached, run_command=run_command, get_diff=get_diff, host_exec=host_exec
+    )
 
 
 async def _run(session, account, *, call_status="running", subject=True):
@@ -129,7 +143,161 @@ async def test_a_declared_check_runs_on_a_box_with_the_agents_work(client, accou
         patch="the patch",
         timeout_seconds=900,
         secrets={},
+        template="template-1",
     )
+
+
+async def test_a_check_runs_on_the_box_that_the_workspace_describes(
+    client, account, druks_db, box, monkeypatch
+):
+    async def get_check_box(cls, subject):
+        return {"template": "template-1", "env": {"DATABASE_URL": "postgres://localhost/test"}}
+
+    monkeypatch.setattr(_Repo, "get_check_box", classmethod(get_check_box))
+    run = await _run(druks_db, account)
+
+    assert _ask(client, run).status_code == 200
+
+    kwargs = box.run_command.await_args.kwargs
+    assert kwargs["template"] == "template-1"
+    assert kwargs["env"] == {"DATABASE_URL": "postgres://localhost/test"}
+
+
+async def _no_template(monkeypatch, *, env=None):
+    async def get_check_box(cls, subject):
+        return {"env": env} if env else {}
+
+    monkeypatch.setattr(_Repo, "get_check_box", classmethod(get_check_box))
+
+
+def _done(returncode, stdout=""):
+    return subprocess.CompletedProcess([], returncode, stdout=stdout, stderr="")
+
+
+async def test_a_workspace_with_no_template_runs_the_check_in_the_agents_own_checkout(
+    client, account, druks_db, box, monkeypatch
+):
+    await _no_template(monkeypatch)
+    box.host_exec.return_value = _done(3, "start\nFAILED test_x\n")
+    run = await _run(druks_db, account)
+
+    body = _ask(client, run, timeout_seconds=900).json()
+
+    box.run_command.assert_not_awaited()
+    box.get_diff.assert_not_awaited()
+    box.host_exec.assert_awaited_once_with(
+        ["timeout", "-k", "30", "900", "sh", "-c", f"exec 2>&1; {CHECK}"],
+        cwd=get_repo_root("exedev"),
+        timeout=900 + 2 * CHECK_KILL_GRACE_SECONDS,
+    )
+    assert (body["exit_code"], body["timed_out"], body["output"]) == (
+        3,
+        False,
+        "start\nFAILED test_x\n",
+    )
+
+
+async def test_a_check_that_the_remote_timeout_stopped_reports_it(
+    client, account, druks_db, box, monkeypatch
+):
+    await _no_template(monkeypatch)
+    box.host_exec.return_value = _done(124, "partial\n")
+    run = await _run(druks_db, account)
+
+    body = _ask(client, run, timeout_seconds=900).json()
+
+    assert (body["exit_code"], body["timed_out"], body["output"]) == (None, True, "partial\n")
+
+
+async def test_a_check_that_the_remote_timeout_had_to_kill_reports_it(
+    client, account, druks_db, box, monkeypatch
+):
+    await _no_template(monkeypatch)
+
+    async def killed_after_the_full_time(*args, **kwargs):
+        await asyncio.sleep(1.1)
+        return _done(137, "partial\n")
+
+    box.host_exec.side_effect = killed_after_the_full_time
+    run = await _run(druks_db, account)
+
+    body = _ask(client, run, timeout_seconds=1).json()
+
+    assert (body["exit_code"], body["timed_out"]) == (None, True)
+
+
+async def test_a_command_killed_early_is_not_a_timeout(client, account, druks_db, box, monkeypatch):
+    await _no_template(monkeypatch)
+    box.host_exec.return_value = _done(137, "Killed\n")
+    run = await _run(druks_db, account)
+
+    body = _ask(client, run, timeout_seconds=900).json()
+
+    assert (body["exit_code"], body["timed_out"]) == (137, False)
+
+
+async def test_a_check_that_outlives_the_ssh_backstop_reports_a_timeout(
+    client, account, druks_db, box, monkeypatch
+):
+    await _no_template(monkeypatch)
+    box.host_exec.side_effect = TimeoutError
+    run = await _run(druks_db, account)
+
+    body = _ask(client, run, timeout_seconds=60).json()
+
+    assert (body["exit_code"], body["timed_out"]) == (None, True)
+
+
+@pytest.mark.parametrize(
+    "error", [OSError("connection reset"), ExecFailed("no shell", exit_code=1)]
+)
+async def test_an_agent_box_that_cannot_run_the_check_is_unavailable_and_not_a_crash(
+    client, account, druks_db, box, monkeypatch, error
+):
+    await _no_template(monkeypatch)
+    box.host_exec.side_effect = error
+    run = await _run(druks_db, account)
+
+    response = _ask(client, run)
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "CHECK_BOX_UNAVAILABLE"
+
+
+async def test_a_check_in_the_agents_own_checkout_keeps_only_the_end_of_its_output(
+    client, account, druks_db, box, monkeypatch
+):
+    await _no_template(monkeypatch)
+    box.host_exec.return_value = _done(0, "x" * CHECK_OUTPUT_CHARS + "tail")
+    run = await _run(druks_db, account)
+
+    body = _ask(client, run).json()
+
+    assert body["output"] == "x" * (CHECK_OUTPUT_CHARS - 4) + "tail"
+
+
+async def test_the_hint_for_a_missing_tool_is_for_the_check_box_only(
+    client, account, druks_db, box, monkeypatch
+):
+    await _no_template(monkeypatch)
+    box.host_exec.return_value = _done(127, "x: not found\n")
+    run = await _run(druks_db, account)
+
+    own_checkout = _ask(client, run).json()["output"]
+
+    assert COMMAND_NOT_FOUND_HINT not in own_checkout
+
+
+async def test_an_env_that_has_no_template_to_ride_on_is_said_not_to_be_set(
+    client, account, druks_db, box, monkeypatch, caplog
+):
+    await _no_template(monkeypatch, env={"DATABASE_URL": "postgres://x/y"})
+    run = await _run(druks_db, account)
+
+    with caplog.at_level("WARNING", logger="druks.workspaces"):
+        assert _ask(client, run).status_code == 200
+
+    assert "env of the check box of acme/app is not set" in caplog.text
 
 
 async def test_a_failing_check_answers_with_its_exit_code(client, account, druks_db, box):
@@ -141,6 +309,20 @@ async def test_a_failing_check_answers_with_its_exit_code(client, account, druks
     body = _ask(client, run).json()
 
     assert (body["exit_code"], body["timed_out"], body["output"]) == (None, True, "start\n")
+
+
+async def test_a_command_the_box_does_not_have_says_the_box_is_the_cause(
+    client, account, druks_db, box
+):
+    box.run_command.return_value = SandboxRun(
+        exit_code=127, timed_out=False, output="sh: uv: not found\n", duration_seconds=0.4
+    )
+    run = await _run(druks_db, account)
+
+    body = _ask(client, run).json()
+
+    assert body["exit_code"] == 127
+    assert body["output"] == f"sh: uv: not found\n\n\n{COMMAND_NOT_FOUND_HINT}"
 
 
 async def test_a_command_that_is_not_declared_is_refused_with_the_declared_ones(
@@ -339,6 +521,10 @@ async def test_the_check_box_gets_the_github_secret_of_the_repo_through_its_own_
         @classmethod
         async def get_checks(cls, subject):
             return (CHECK,)
+
+        @classmethod
+        async def get_check_box(cls, subject):
+            return {"template": "template-1"}
 
     monkeypatch.setattr("druks.core.routes.get_workflow", lambda kind: _workflow(_Github))
     run = await _run(druks_db, account)

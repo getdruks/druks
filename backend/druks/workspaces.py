@@ -4,10 +4,14 @@ import hashlib
 import json
 import logging
 import subprocess
+import time
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any, ClassVar
 from urllib.parse import urlsplit
 
+import asyncssh
 from drukbox_sdk import SandboxRun
+from drukbox_sdk.exceptions import SandboxUnavailableError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from druks.accounts.context import current_account_id
@@ -74,6 +78,13 @@ class Workspace:
         # The commands an agent may run on another box through the run tool, each
         # written as the agent passes it. Read from the subject alone. Base: none.
         return ()
+
+    @classmethod
+    async def get_check_box(cls, subject: Any) -> dict[str, Any]:
+        # The fields of the box that a check runs on, as ``run_check`` hands them to the
+        # sandbox: ``template`` to fork from, ``env`` to set. Read from the subject alone.
+        # Base: none. Without a template, the check runs on the agent's own box.
+        return {}
 
     async def prepare(self) -> None:
         """Put on the box what the agent needs: an upload, a clone, a wrapper.
@@ -267,6 +278,19 @@ class Workspace:
         return tuple(servers), refs
 
 
+# What the service keeps of a check's output: the end of it.
+CHECK_OUTPUT_CHARS = 20_000
+# How long a check that outlived its timeout has to stop on a TERM before it is killed.
+CHECK_KILL_GRACE_SECONDS = 30
+
+# Exit code 127 is the shell's "command not found". On a check box the cause is the box.
+COMMAND_NOT_FOUND_HINT = (
+    "Exit code 127 means the shell found no such command. The check box holds only what "
+    "the repo's sandbox setup installs. If your change did not touch that tool, the box is "
+    "the likely cause: run the command on your own box to confirm."
+)
+
+
 class RepoWorkspace(Workspace):
     """A VM with the subject's ``repo`` cloned at its ``ref``, the default branch
     when None, re-cloned before every agent call. The box holds a placeholder in
@@ -390,8 +414,20 @@ class RepoWorkspace(Workspace):
         timeout_seconds: int,
     ) -> SandboxRun:
         """Run ``command`` on a separate box that holds the repo at the commit this checkout
-        started from, with its uncommitted and untracked changes on top. The box is deleted
-        when the command ends. The SDK's errors reach the caller."""
+        started from, with its uncommitted and untracked changes on top. The box is made from
+        the workspace's ``get_check_box`` fields, and is deleted when the command ends. The
+        SDK's errors reach the caller. Without a template in those fields, the box would be
+        the default image, which holds none of the repo's tools, so the command runs in this
+        checkout, on the agent's own box."""
+        box = await type(self).get_check_box(self.subject)
+        if "template" not in box:
+            if box.get("env"):
+                logger.warning(
+                    "the env of the check box of %s is not set: it has no template yet, so the "
+                    "check runs on the agent's box",
+                    self.subject.repo,
+                )
+            return await self._run_check_here(command, timeout_seconds)
         patch = await self.get_diff(binary=True)
         commit = await self.get_base_commit()
         refs = await type(self).get_secret_refs(self.subject)
@@ -407,17 +443,68 @@ class RepoWorkspace(Workspace):
             secrets_hash=digest,
         )
         try:
-            return await sandbox_client.run_command(
+            result = await sandbox_client.run_command(
                 repo_url=self.repo_url,
                 commit=commit,
                 command=command,
                 patch=patch,
                 timeout_seconds=timeout_seconds,
                 secrets=entries,
+                **box,
             )
         finally:
             # A caller that is cancelled still revokes, on a session of its own.
             await asyncio.shield(_revoke(identity.id))
+        if result.exit_code == 127:
+            result = replace(result, output=f"{result.output}\n\n{COMMAND_NOT_FOUND_HINT}")
+        return result
+
+    async def _run_check_here(self, command: str, timeout_seconds: int) -> SandboxRun:
+        """Run ``command`` in the checkout as it stands. It does not call ``exec`` of this
+        class: that clones first, and a clone of a checkout that exists resets its branch to
+        the remote and drops the agent's uncommitted and unpushed work."""
+        started = time.monotonic()
+        # The remote command must stop by itself: the SSH timeout closes the channel and
+        # signals nothing, so a timed-out check would leave its processes on the agent's box.
+        # stderr joins stdout in the order it came, as on the check box.
+        guarded = [
+            "timeout",
+            "-k",
+            str(CHECK_KILL_GRACE_SECONDS),
+            str(timeout_seconds),
+            "sh",
+            "-c",
+            f"exec 2>&1; {command}",
+        ]
+        try:
+            done = await self.host.exec(
+                guarded,
+                cwd=self.repo_path,
+                timeout=timeout_seconds + 2 * CHECK_KILL_GRACE_SECONDS,
+            )
+        except TimeoutError:
+            return SandboxRun(
+                exit_code=None,
+                timed_out=True,
+                output="",
+                duration_seconds=time.monotonic() - started,
+            )
+        except (asyncssh.Error, OSError, ExecFailed) as error:
+            # The callers map the SDK's errors for a box that did not run the check.
+            raise SandboxUnavailableError(
+                f"the agent's box could not run the check: {error}"
+            ) from error
+        duration = time.monotonic() - started
+        # ``timeout`` exits 124 when it stopped the command, and 137 when it had to kill it.
+        timed_out = done.returncode == 124 or (
+            done.returncode == 137 and duration >= timeout_seconds
+        )
+        return SandboxRun(
+            exit_code=None if timed_out else done.returncode,
+            timed_out=timed_out,
+            output=done.stdout[-CHECK_OUTPUT_CHARS:],
+            duration_seconds=duration,
+        )
 
     async def set_git_identity(self) -> None:
         """Commits in the repo are authored as the operator's bot user, with a

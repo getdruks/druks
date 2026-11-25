@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import ANY
+from unittest.mock import ANY, AsyncMock
 
 import pytest
 from conftest import connect_service
@@ -374,3 +374,51 @@ async def test_repo_workspace_base_commit_fails_loudly_outside_a_checkout(tmp_pa
 
     with pytest.raises(ExecFailed, match="failed to read the workspace base commit"):
         await workspace.get_base_commit()
+
+
+async def test_a_check_in_the_agents_checkout_keeps_its_uncommitted_and_unpushed_work(
+    tmp_path: Path, monkeypatch
+):
+    def git(*args: str, cwd: Path = tmp_path) -> str:
+        identity = ("-c", "user.name=dev", "-c", "user.email=dev@example.com")
+        return subprocess.run(
+            ["git", *identity, *args], cwd=cwd, check=True, capture_output=True, text=True
+        ).stdout
+
+    git("init", "-q", "-b", "main", "origin")
+    (tmp_path / "origin" / "kept.txt").write_text("kept\n")
+    git("add", "kept.txt", cwd=tmp_path / "origin")
+    git("commit", "-q", "-m", "start", cwd=tmp_path / "origin")
+    git("clone", "-q", "origin", "checkout")
+    checkout = tmp_path / "checkout"
+    git("checkout", "-q", "-b", "feature", cwd=checkout)
+    (checkout / "committed.txt").write_text("committed\n")
+    git("add", "committed.txt", cwd=checkout)
+    git("commit", "-q", "-m", "unpushed change", cwd=checkout)
+    (checkout / "kept.txt").write_text("edited\n")
+    (checkout / "untracked.txt").write_text("untracked\n")
+
+    class _CheckoutHost:
+        ssh_username = "exedev"
+
+        async def exec(
+            self, command: list[str], *, cwd: str = "", timeout: float = 30.0
+        ) -> subprocess.CompletedProcess[str]:
+            assert cwd == get_repo_root(self.ssh_username)
+            return subprocess.run(command, cwd=checkout, capture_output=True, text=True)
+
+    # A clone of a checkout that exists resets its branch to the remote's, which would drop
+    # the work above: the check must not clone.
+    monkeypatch.setattr(
+        RepoWorkspace, "clone", AsyncMock(side_effect=AssertionError("a check must not clone"))
+    )
+    workspace = RepoWorkspace(SimpleNamespace(repo="acme/app", ref="feature"))
+    workspace.host = _CheckoutHost()  # type: ignore[assignment]
+
+    result = await workspace._run_check_here("git status --short; git log -1 --format=%s", 60)
+
+    assert result.exit_code == 0
+    assert "?? untracked.txt" in result.output
+    assert " M kept.txt" in result.output
+    assert "unpushed change" in result.output
+    assert (checkout / "untracked.txt").read_text() == "untracked\n"

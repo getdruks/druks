@@ -996,8 +996,30 @@ async def test_run_command_passes_the_run_to_drukbox_and_closes_the_api(
         patch="the patch",
         timeout_seconds=900,
         secrets={},
+        template=None,
+        env=None,
     )
     api.aclose.assert_awaited_once()
+
+
+async def test_run_command_forwards_the_template_and_env_of_the_box(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    api = SimpleNamespace(run_command=AsyncMock(return_value="the result"), aclose=AsyncMock())
+    monkeypatch.setattr("druks.sandbox.client.Client._api", lambda self: api)
+
+    await sandbox_client.run_command(
+        repo_url="https://github.com/acme/app",
+        commit="abc123",
+        command="make test",
+        patch="",
+        template="template-1",
+        env={"DATABASE_URL": "postgres://localhost/test"},
+    )
+
+    kwargs = api.run_command.await_args.kwargs
+    assert kwargs["template"] == "template-1"
+    assert kwargs["env"] == {"DATABASE_URL": "postgres://localhost/test"}
 
 
 async def test_run_command_closes_the_api_when_drukbox_refuses(monkeypatch: pytest.MonkeyPatch):

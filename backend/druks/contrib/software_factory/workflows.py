@@ -95,6 +95,20 @@ class BuildWorkspace(RepoWorkspace):
         return tuple(entry["command"] for entry in verification.get("test_commands", []))
 
     @classmethod
+    async def get_check_box(cls, subject: Any) -> dict[str, Any]:
+        # The repo's template, when its setup script has built one, and the env that its
+        # config sets. A repo with no template checks on the agent's own box.
+        project_repo = await ProjectRepo.get_for_repo(subject.repo, raise_on_missing=True)
+        policy = await RepoPolicy.resolve(subject.repo)
+        sandbox = policy.verification and policy.verification.sandbox
+        box = {}
+        if template := project_repo.effective_profile.get("sandbox_template"):
+            box["template"] = template
+        if sandbox and sandbox.env:
+            box["env"] = dict(sandbox.env)
+        return box
+
+    @classmethod
     async def _get_druks_server(cls) -> SandboxMcpServer | None:
         tracker = (await SoftwareFactory.settings()).tracker
         tools = (*TICKET_TOOLS, *CHECK_TOOLS) if tracker == "druks" else CHECK_TOOLS
@@ -689,7 +703,8 @@ class Profile(Workflow):
             effective["verification"] = policy.verification.get_commands(
                 detected=baseline.get("verification") or {}
             )
-        if sandbox := policy.verification and policy.verification.sandbox:
+        sandbox = policy.verification and policy.verification.sandbox
+        if sandbox and sandbox.setup:
             repo = project_repo.full_name
             setup_script = await fetch_file(repo=repo, path=sandbox.setup)
             if not setup_script:
