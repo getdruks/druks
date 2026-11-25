@@ -9,19 +9,22 @@ from druks.contrib.software_factory.contracts import (
     FindingOutput,
     ImplementationOutput,
     ReviewReport,
+    TriageOutput,
 )
+from druks.contrib.software_factory.enums import HumanFeedbackAction
 from druks.contrib.software_factory.journal import BuildJournal
 from druks.contrib.software_factory.workflows import Build
 from druks.harnesses.exceptions import HarnessSandboxProvisioningError
 from druks.workflows import WaitTimeout
 
 
-def _flow(*, red: bool, asked: bool = False) -> Build:
+def _flow(*, red: bool, asked: bool = False, feedback: str | None = None) -> Build:
     flow = Build()
     flow.journal = SimpleNamespace(
         plan_size=None,
         red_ci_report=CiReport(head_sha="5e6f7a8b", conclusion="red") if red else None,
         requested_changes=object() if asked else None,
+        revision_request=feedback,
     )
     return flow
 
@@ -271,3 +274,49 @@ async def test_the_resume_message_carries_the_findings_of_the_review():
     # The rules of a revision that the first prompt gave stay in force.
     assert "Dismiss only the reviews" in message
     assert "republish the plan block" in message
+
+
+async def _resume_chosen(monkeypatch, flow):
+    seen = []
+
+    async def implement(*, effort=None, resume=None):
+        seen.append(resume)
+        return SimpleNamespace(status="success", check_command=None)
+
+    monkeypatch.setattr(SoftwareFactory, "implement", implement)
+    await flow.implement()
+    return seen
+
+
+async def test_a_round_that_a_person_asked_for_resumes_the_implementers_session(monkeypatch):
+    flow = _flow(red=False, feedback="rename X to Y")
+
+    assert await _resume_chosen(monkeypatch, flow) == [flow._report_revision_request]
+
+
+async def test_red_ci_and_then_a_review_come_before_a_persons_request(monkeypatch):
+    red = _flow(red=True, feedback="rename X to Y")
+    asked = _flow(red=False, asked=True, feedback="rename X to Y")
+
+    assert await _resume_chosen(monkeypatch, red) == [red._report_red_ci]
+    assert await _resume_chosen(monkeypatch, asked) == [asked._report_requested_changes]
+
+
+async def test_the_resume_message_carries_the_triaged_instructions_of_the_person():
+    flow = Build()
+    flow.subject = SimpleNamespace(repo="acme/widget")
+    flow.journal = BuildJournal()
+    flow.journal.add(
+        TriageOutput(
+            action=HumanFeedbackAction.CHANGE_REQUIRED,
+            body="rename the flag",
+            question="",
+            implementation_instructions="rename X to Y",
+        )
+    )
+
+    message = await flow._report_revision_request(workspace=None)
+
+    assert "rename X to Y" in message
+    assert "dismiss only the reviews" in message
+    assert "Republish the plan block" in message

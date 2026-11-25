@@ -644,13 +644,16 @@ class Build(Workflow):
     # journal. On replay a @step would skip them, and the journal would stay empty.
     async def implement(self) -> ImplementationOutput:
         effort = IMPLEMENT_EFFORT_BY_SIZE.get(self.journal.plan_size)
-        # A red CI or a review that requests changes continues the implementer's session, and
-        # the call starts over with its full prompt when it cannot.
+        # A red CI, a review that requests changes, or a person's triaged request continues
+        # the implementer's session, and the call starts over with its full prompt when it
+        # cannot. The order is the prompt's: CI first, then the review, then the person.
         resume = None
         if self.journal.red_ci_report:
             resume = self._report_red_ci
         elif self.journal.requested_changes:
             resume = self._report_requested_changes
+        elif self.journal.revision_request:
+            resume = self._report_revision_request
         delivery = await SoftwareFactory.implement(effort=effort, resume=resume)
         # The implementer found a contradiction in the binding requirements and stopped.
         # The run fails with that reason, so the dashboard shows it.
@@ -670,6 +673,15 @@ class Build(Workflow):
         requests changes: the review's findings."""
         return await render_prompt(
             "software_factory/build/_review_changes.md", repo=(await self.subject).repo, build=self
+        )
+
+    async def _report_revision_request(self, *, workspace: BuildWorkspace) -> str:
+        """The message that continues the implementer's session when a person asked for
+        changes: the instructions that the triage wrote from their feedback."""
+        return await render_prompt(
+            "software_factory/build/_revision_request.md",
+            repo=(await self.subject).repo,
+            build=self,
         )
 
     @step
