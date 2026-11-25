@@ -33,6 +33,9 @@ CI_GREEN_CONCLUSIONS = frozenset({"success", "neutral", "skipped"})
 RERUN_CONCLUSIONS = frozenset({"failure", "timed_out"})
 # An Actions run that has not finished, as a rerun is until it ends.
 RUN_ACTIVE_STATUSES = frozenset({"queued", "in_progress"})
+# How many failure lines of a failed job's log tell two red rounds apart. A linter prints one
+# line for each finding, so a head that fixes a few of hundreds must not read as the head before.
+FINGERPRINT_LOG_LINES = 200
 # A rerun re-queues its run within seconds. Poll this often for the new attempt before
 # the build reads CI again, so it does not read the old red.
 RERUN_POLL_SECONDS = 5

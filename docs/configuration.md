@@ -673,8 +673,13 @@ to rerun, such as `druks-house-rules`. When the implementer runs on Claude, the 
 round resumes its session with the red-CI rules, in the checkout as the agent left
 it. The build keeps the implementer's box while it waits for CI, so a build holds that
 box for the length of the wait. On another harness, or when the box is gone, the round
-starts a new call with the full prompt. The pull request leaves draft when the review
-of a head with green CI requests no changes, or when a person approves it.
+starts a new call with the full prompt. When a new head is red with the same failure
+as the head before it, the build sends no more red rounds back to the implementer and
+no review revision either: the pull request goes to a person. The failure is the
+failed Actions jobs and the lines of their logs that report a failed test or an error,
+without their times. The fingerprint reads the failure lines that a test runner, a linter, a compiler or a script writes (a line that begins with `FAILED`, `FAIL:`, `ERROR`, `Error:` or `error`, pytest's assertion lines, and a diagnostic with a file, a line and a column), so a failed job whose log has none, such as a failed install step that prints only a generic exit code, is left out of it. The hash covers the last 200 of those lines and how many there were, so a head that fixes some of a long list of findings is not a repeat. A red with no failure line to read never counts as a repeat, and the pull request parks with a note that says that a repeat stopped the rounds. The
+pull request leaves draft when the review of a head with green CI requests no changes,
+or when a person approves it.
 
 A build's agent can run one of the repository's test commands in full on a separate
 box, with the `core_run_check` tool. The commands come from the repository's

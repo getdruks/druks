@@ -170,7 +170,7 @@ async def test_the_rerun_waits_for_the_new_attempt_before_it_returns(monkeypatch
     assert slept == [RERUN_POLL_SECONDS]
 
 
-def _phase_flow(monkeypatch, *, ci, rerun):
+def _phase_flow(monkeypatch, *, ci, rerun, fingerprints=(), decisions=()):
     flow = Build()
     flow.subject = SimpleNamespace(repo="org/repo")
     flow.journal = BuildJournal()
@@ -178,6 +178,8 @@ def _phase_flow(monkeypatch, *, ci, rerun):
     counts = SimpleNamespace(implement=0, rerun=0, wait=0)
     heads = iter(["aaa", "bbb", "ccc", "ddd"])
     verdicts = iter(ci)
+    seen_fingerprints = iter(fingerprints)
+    review_decisions = iter(decisions)
 
     async def create_branch():
         pass
@@ -194,10 +196,13 @@ def _phase_flow(monkeypatch, *, ci, rerun):
         counts.rerun += 1
         return rerun
 
-    async def review_work():
-        return SimpleNamespace(decision="approve")
+    async def get_failure_fingerprint(head_sha):
+        return next(seen_fingerprints, "")
 
-    async def work_gate():
+    async def review_work():
+        return SimpleNamespace(decision=next(review_decisions, "approve"))
+
+    async def work_gate(**_):
         return True
 
     async def report_step(step, **status):
@@ -208,6 +213,7 @@ def _phase_flow(monkeypatch, *, ci, rerun):
     monkeypatch.setattr(flow, "_report_step", report_step)
     monkeypatch.setattr(flow, "_wait_for_ci", wait_for_ci)
     monkeypatch.setattr(flow, "_rerun_failed_jobs", rerun_failed_jobs)
+    monkeypatch.setattr(flow, "_get_failure_fingerprint", get_failure_fingerprint)
     monkeypatch.setattr(flow, "_review_work", review_work)
     monkeypatch.setattr(flow, "_work_gate", work_gate)
     return flow, counts
@@ -231,3 +237,124 @@ async def test_a_red_that_survives_the_rerun_goes_back_to_implement(monkeypatch)
 
     assert counts.implement == 2
     assert counts.rerun == 1
+
+
+async def test_a_new_head_that_fails_as_the_last_did_stops_the_rounds(monkeypatch):
+    # Two red heads with one fingerprint: the third implement call never runs.
+    flow, counts = _phase_flow(
+        monkeypatch, ci=["red", "red", "green"], rerun=False, fingerprints=["same", "same"]
+    )
+
+    await flow._implement_phase()
+
+    assert counts.implement == 2
+
+
+async def test_a_new_head_that_fails_differently_gets_another_round(monkeypatch):
+    flow, counts = _phase_flow(
+        monkeypatch, ci=["red", "red", "green"], rerun=False, fingerprints=["one", "two"]
+    )
+
+    await flow._implement_phase()
+
+    assert counts.implement == 3
+
+
+async def test_an_empty_fingerprint_never_counts_as_a_repeat(monkeypatch):
+    flow, counts = _phase_flow(
+        monkeypatch, ci=["red", "red", "green"], rerun=False, fingerprints=["", ""]
+    )
+
+    await flow._implement_phase()
+
+    assert counts.implement == 3
+
+
+async def test_a_repeat_also_ends_the_revisions_that_the_review_asks_for(monkeypatch):
+    flow, counts = _phase_flow(
+        monkeypatch,
+        ci=["red", "red", "green"],
+        rerun=False,
+        fingerprints=["same", "same"],
+        decisions=["request_changes"],
+    )
+
+    await flow._implement_phase()
+
+    assert counts.implement == 2
+
+
+class _LogGithub:
+    def __init__(self, logs):
+        self.logs = logs
+        self.asked_for = None
+
+    async def get_failed_job_logs(self, repo, head_sha, *, lines):
+        self.asked_for = lines
+        return self.logs
+
+
+async def _fingerprint(flow, head_sha="aaa"):
+    return await Build._get_failure_fingerprint.__wrapped__(flow, head_sha)
+
+
+async def test_the_fingerprint_ignores_timestamps_and_durations_and_not_the_failure(monkeypatch):
+    first = {
+        "backend": "2026-11-25T12:51:45.5Z FAILED test_a\n2026-11-25T12:51:46.0Z 1 failed in 3.2s"
+    }
+    again = {
+        "backend": "2026-11-25T13:20:01.9Z FAILED test_a\n2026-11-25T13:20:03.1Z 1 failed in 7.9s"
+    }
+    other = {
+        "backend": "2026-11-25T13:20:01.9Z FAILED test_b\n2026-11-25T13:20:03.1Z 1 failed in 7.9s"
+    }
+
+    prints = []
+    for logs in (first, again, other):
+        flow = _rerun_flow(monkeypatch, _LogGithub(logs))
+        prints.append(await _fingerprint(flow))
+
+    assert prints[0] == prints[1]
+    assert prints[0] != prints[2]
+
+
+async def test_the_fingerprint_ignores_the_duration_in_parentheses_of_a_test_line(monkeypatch):
+    def log(name, took):
+        return {"go": f"2026-11-25T12:51:45.5Z --- FAIL: {name} ({took})\nfailure lines: 1"}
+
+    prints = []
+    for logs in (
+        log("TestA", "0.00s"),
+        log("TestA", "0.04s"),
+        log("TestA", "12 ms"),
+        log("TestB", "0.00s"),
+    ):
+        prints.append(await _fingerprint(_rerun_flow(monkeypatch, _LogGithub(logs))))
+
+    assert prints[0] == prints[1] == prints[2]
+    assert prints[0] != prints[3]
+
+
+async def test_the_fingerprint_changes_when_the_list_of_failures_gets_shorter(monkeypatch):
+    tail = "2026-11-25T12:51:45.5Z backend/app.py:300:1: F401 unused import 300"
+    longer = {"lint": f"failure lines: 300\n{tail}"}
+    shorter = {"lint": f"failure lines: 250\n{tail}"}
+
+    first = await _fingerprint(_rerun_flow(monkeypatch, _LogGithub(longer)))
+    second = await _fingerprint(_rerun_flow(monkeypatch, _LogGithub(shorter)))
+
+    assert first != second
+
+
+async def test_the_fingerprint_reads_the_last_200_failure_lines_of_a_job(monkeypatch):
+    github = _LogGithub({"lint": "failure lines: 1\n2026-11-25T12:51:45.5Z error TS2322"})
+
+    await _fingerprint(_rerun_flow(monkeypatch, github))
+
+    assert github.asked_for == 200
+
+
+async def test_no_failed_job_log_gives_an_empty_fingerprint(monkeypatch):
+    flow = _rerun_flow(monkeypatch, _LogGithub({}))
+
+    assert await _fingerprint(flow) == ""

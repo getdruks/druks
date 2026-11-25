@@ -851,6 +851,28 @@ async def test_review_work_ask_renders_a_notification_body(druks_db, monkeypatch
     assert input_requests[0]["label"] == "Review implementation on GitHub: PR #42"
 
 
+async def test_a_repeated_failure_parks_saying_so(monkeypatch):
+    workflow = _flow()
+    workflow.subject = SimpleNamespace(repo="org/repo")
+    workflow.journal = BuildJournal()
+    workflow.journal.add(CiReport(head_sha="0f3a2c1d", conclusion="red"))
+    monkeypatch.setattr(Build, "pr_number", property(lambda self: 42))
+    input_requests: list[dict] = []
+
+    async def fake_wait(*, input_request):
+        input_requests.append(input_request)
+        return ReviewWork(action="merged")
+
+    monkeypatch.setattr(ReviewWork, "wait", fake_wait)
+
+    await workflow._work_gate(is_repeat=True)
+
+    assert input_requests[0]["label"] == (
+        "Review implementation on GitHub: PR #42. "
+        "CI on 0f3a2c1 is red, as it was on the round before"
+    )
+
+
 @pytest.mark.parametrize(
     ("conclusion", "note"),
     [
@@ -955,7 +977,7 @@ async def test_a_rejected_merge_intent_reparks_the_work_gate(monkeypatch):
     async def declined():
         return False
 
-    async def fake_work_gate():
+    async def fake_work_gate(**_):
         reparked.append(True)
         return True
 
@@ -1042,14 +1064,18 @@ def _implementing_build(
         calls.append("review")
         return ReviewReport(decision=next(decisions), summary="", findings=[], context_repos=[])
 
-    async def work_gate():
+    async def work_gate(**_):
         calls.append("work_gate")
         return True
+
+    async def get_failure_fingerprint(head_sha):
+        return ""
 
     monkeypatch.setattr(flow, "_create_branch", create_branch)
     monkeypatch.setattr(flow, "implement", implement)
     monkeypatch.setattr(flow, "_wait_for_ci", wait_for_ci)
     monkeypatch.setattr(flow, "_rerun_failed_jobs", rerun_failed_jobs)
+    monkeypatch.setattr(flow, "_get_failure_fingerprint", get_failure_fingerprint)
     monkeypatch.setattr(flow, "_review_work", review_work)
     monkeypatch.setattr(flow, "_work_gate", work_gate)
     return flow, calls
@@ -1199,7 +1225,7 @@ async def test_the_implement_phase_reports_each_step_and_the_requested_changes(m
     reports = _record_reports(flow)
     approvals = iter([False, True])
 
-    async def work_gate():
+    async def work_gate(**_):
         flow.journal.revision_request = "Rename the flag."
         return next(approvals)
 
