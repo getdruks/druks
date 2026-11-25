@@ -14,6 +14,7 @@ export interface RepoProfile {
   }
   recommended_skills?: string[]
   setup_script_draft?: string | null
+  start_script_draft?: string | null
   sandbox_template?: string
 }
 

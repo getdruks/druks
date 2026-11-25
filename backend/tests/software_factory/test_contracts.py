@@ -58,6 +58,7 @@ def test_repo_profiler_output_maps_verification_commands_to_plain_dicts():
             "typecheck_commands": [],
             "recommended_skills": ["django-patterns"],
             "setup_script_draft": "#!/bin/sh\nset -eu\n",
+            "start_script_draft": "#!/bin/sh\nset -eu\nredis-server --daemonize yes\n",
         }
     )
 
@@ -75,6 +76,7 @@ def test_repo_profiler_output_maps_verification_commands_to_plain_dicts():
             },
             "recommended_skills": ["django-patterns"],
             "setup_script_draft": "#!/bin/sh\nset -eu\n",
+            "start_script_draft": "#!/bin/sh\nset -eu\nredis-server --daemonize yes\n",
         },
     }
 

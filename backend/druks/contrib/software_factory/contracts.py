@@ -53,6 +53,9 @@ class RepoProfilerOutput(workflows.InstructionOutput):
     # A setup script for the repo's check box that a person may commit. Null when the
     # default box already has what the verification commands need.
     setup_script_draft: str | None
+    # A start script for the repo's check box that a person may commit: the services and the
+    # sync that each check needs. Null when nothing has to run first.
+    start_script_draft: str | None
 
     def to_result(self) -> dict[str, Any]:
         # ProjectRepo.profile holds the baseline as plain JSON, so it stays a dict end to end.
@@ -79,6 +82,7 @@ class RepoProfilerOutput(workflows.InstructionOutput):
                 },
                 "recommended_skills": self.recommended_skills,
                 "setup_script_draft": self.setup_script_draft,
+                "start_script_draft": self.start_script_draft,
             },
         }
 

@@ -61,8 +61,33 @@ Skills catalog (name — description):
    running when a check starts. It never starts a service or a daemon and never creates
    data, such as a database, a role, or a schema. When a verification command needs a
    service, install its packages and write one comment at the top that names the service,
-   because starting it is for a start script that a person adds later.
-   Return null when the box already has everything. A person reads the draft before
-   anyone commits it.
+   because starting it is for the start script that you draft next.
+   Return null when the box already has everything and you draft no start script in the
+   next step: a start script runs only on a box that a setup script built, so a repo that
+   needs one also needs a setup script, which may install nothing. A person reads the
+   draft before anyone commits it.
 
-7. Return the structured result. No prose, no preamble.
+7. **Draft the start script of the check box** as `start_script_draft`. Druks runs it on the
+   check box before each check, in the checkout of the change, as the user that runs the
+   check. That user can have no `sudo`, so the script starts a service as itself, with its
+   data in its own home directory, and sends the output of the service to a file, so that
+   the service does not hold the check. It starts what the verification commands need to
+   find running, such as a database or a cache, and does the dependency sync that they need.
+   The check starts when the script ends, so the script waits until each service accepts
+   connections, in a loop that gives up after about 30 seconds, because a cold database can
+   take 10 to 15 (for example with `pg_isready` or `redis-cli ping`). When the loop gives
+   up, the script must exit non-zero: test the service once more after the loop and
+   `exit 1` if it is still down. A loop that only breaks lets the script end with status 0,
+   and the check then runs against a service that never came up. The script runs before
+   every check, so it must be safe to run twice:
+   create a database only when it is missing, initialise a data directory only when it does
+   not exist, and start a service only when it is not running. `set -e` ends the script on
+   any command that fails, so guard each of those with a form that does not fail when the
+   thing is already there, such as `if ! pg_isready -q; then ...; fi` or `check || create`,
+   and never a bare `createdb` or `initdb`, a `mkdir` without `-p`, an `ln -s` without `-f`,
+   or a start of a service that is already running. It reads no secret.
+   Write POSIX `sh` that starts with `#!/bin/sh` and `set -eu`. Return null when no
+   verification command needs anything running first, or when the repo already commits
+   `.druks/software_factory/start.sh`. A person reads the draft before anyone commits it.
+
+8. Return the structured result. No prose, no preamble.
