@@ -36,14 +36,16 @@ USER_NAME_TTL_SECONDS = 24 * 60 * 60
 class NewFileRetryHandler(AsyncRetryHandler):
     """Sends a message again when Slack refuses a file that the message names. Slack scans a
     file after its upload ends. Until the scan ends, Slack answers invalid_blocks with
-    "invalid slack file" for a block that names the file. The handler keeps the defaults of
-    the SDK: one more post, 0.5 to 1.5 seconds after the refusal."""
+    "invalid slack file" for an image block that names the file, and with "invalid file type"
+    for the image of a card. The handler keeps the defaults of the SDK: one more post, 0.5 to
+    1.5 seconds after the refusal."""
 
     async def _can_retry_async(self, *, response: HttpResponse | None = None, **_: object) -> bool:
         # The SDK gives no response for a failed connection, and no body for one that is not JSON.
         body = (response and response.body) or {}
         return body.get("error") == "invalid_blocks" and any(
-            refusal.startswith("invalid slack file") for refusal in body.get("errors", [])
+            refusal.startswith(("invalid slack file", "invalid file type"))
+            for refusal in body.get("errors", [])
         )
 
 

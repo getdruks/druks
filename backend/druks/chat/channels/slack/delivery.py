@@ -1,9 +1,11 @@
 import asyncio
 import contextlib
+import itertools
 import logging
 import re
 from collections.abc import Sequence
 from functools import partial
+from typing import Literal
 
 import aiohttp
 from slack_sdk.errors import SlackApiError, SlackRequestError
@@ -25,7 +27,7 @@ from druks.notifications.exceptions import (
 )
 from druks.registry import app_registry
 from druks.settings import get_settings
-from druks.ui.blocks import get_absolute_url
+from druks.ui.blocks import get_absolute_url, iter_parts
 
 logger = logging.getLogger(__name__)
 
@@ -284,6 +286,473 @@ def get_form(
     return []
 
 
+def escape_mrkdwn(text: str) -> str:
+    """``text`` as Slack's mrkdwn shows it. Slack reads &, < and > as markup."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def get_link_buttons(links: Sequence[ui.Link]) -> list[dict]:
+    """A button that opens each of ``links``, in order. A button is empty when Slack cannot
+    draw it: its link has no address, or its label is empty, or its label or its address is too
+    long for Slack. Each button after the first adds its number to its id. A block then holds no
+    two buttons of one id."""
+    buttons = []
+    for number, link in enumerate(links):
+        address = get_absolute_url(link.url)
+        action_id = slack.LINK_BUTTON_ACTION_ID
+        if number:
+            action_id = f"{action_id}:{number}"
+        button = {}
+        if (
+            address
+            and link.label
+            and len(link.label) <= slack.BUTTON_TEXT_LIMIT
+            and len(address) <= slack.BUTTON_URL_LIMIT
+        ):
+            button = {
+                "type": "button",
+                "text": {"type": "plain_text", "text": link.label},
+                "url": address,
+                "action_id": action_id,
+            }
+        buttons.append(button)
+    return buttons
+
+
+def get_link_actions(links: Sequence[ui.Link]) -> list[dict]:
+    """The actions block of a button for each of ``links``. When Slack cannot draw one of the
+    buttons, a markdown block holds the text forms of the links in its place. With no links,
+    there is no block."""
+    buttons = get_link_buttons(links)
+    if buttons and all(buttons):
+        return [{"type": "actions", "elements": buttons}]
+    if text := " · ".join(link.to_markdown() for link in links):
+        return [{"type": "markdown", "text": text}]
+    return []
+
+
+def is_simple_card(card: ui.Card) -> bool:
+    """Whether ``card`` holds only links and one image at most. A card block of Slack shows no
+    other block."""
+    kinds = [child.block for child in card.blocks]
+    return set(kinds) <= {"link", "image"} and kinds.count("image") <= 1
+
+
+def get_card_block(card: ui.Card, slack_file_ids: dict[str, str] | None) -> dict:
+    """The card block that draws ``card``: its title, its description as the body, its image as
+    the hero image, and a button for each of its links. The buttons open the link of the card,
+    each link among its blocks, then each link among its controls. The link of the card takes
+    the title as its label, as in its text form. Slack runs no action of the controls. Empty
+    when the card is not simple, when it shows nothing, or when Slack cannot draw it."""
+    images = [child for child in card.blocks if child.block == "image"]
+    links = [card.link.model_copy(update={"label": card.title})] if card.link and card.title else []
+    links += [child for child in card.blocks if child.block == "link"]
+    links += [control for control in card.controls if control.block == "link"]
+    buttons = get_link_buttons(links)
+    # Slack's image element has no title. A hero image thus shows no caption.
+    hero_images = [
+        get_image_block(image.model_copy(update={"caption": ""}), slack_file_ids)
+        for image in images
+    ]
+    if (
+        is_simple_card(card)
+        and (card.title or card.description or images or links)
+        and len(card.title) <= slack.CARD_TITLE_LIMIT
+        and len(card.description) <= slack.CARD_BODY_LIMIT
+        and all(hero_images)
+        and all(buttons)
+        and len(buttons) <= slack.CARD_BUTTONS_LIMIT
+    ):
+        card_block = {"type": "card"}
+        if card.title:
+            card_block["title"] = {"type": "plain_text", "text": card.title}
+        if card.description:
+            card_block["body"] = {"type": "plain_text", "text": card.description}
+        if hero_images:
+            card_block["hero_image"] = hero_images[0]
+        if buttons:
+            card_block["actions"] = buttons
+        return card_block
+    return {}
+
+
+def get_container(title: str, subtitle: str, child_blocks: list[dict]) -> dict:
+    """The container that holds ``child_blocks`` under ``title`` and ``subtitle``. Empty when
+    Slack cannot draw it: with no title, with a title or a subtitle that is too long, with no
+    child or more children than Slack takes, or with a child in a markdown block. Only the
+    message holds markdown."""
+    if (
+        0 < len(title) <= slack.CONTAINER_TITLE_LIMIT
+        and len(subtitle) <= slack.CONTAINER_TITLE_LIMIT
+        and 0 < len(child_blocks) <= slack.CONTAINER_BLOCKS_LIMIT
+        and all(child["type"] != "markdown" for child in child_blocks)
+    ):
+        container = {
+            "type": "container",
+            "title": {"type": "plain_text", "text": title},
+            "child_blocks": child_blocks,
+        }
+        if subtitle:
+            container["subtitle"] = {"type": "plain_text", "text": subtitle}
+        return container
+    return {}
+
+
+def list_blocks(parts: list[dict]) -> list[dict]:
+    """Each of ``parts`` and each block inside them, at any depth: the children of a
+    container, the cards of a carousel, and the block of each item of a layout."""
+    blocks = []
+    for part in parts:
+        blocks.append(part)
+        match part:
+            case {"type": "container", "child_blocks": children}:
+                blocks += list_blocks(children)
+            case {"type": "carousel", "elements": cards}:
+                blocks += list_blocks(cards)
+            case {"type": "layout", "rows": rows}:
+                blocks += list_blocks([item["block"] for row in rows for item in row["items"]])
+    return blocks
+
+
+def get_parts(
+    block: ui.Block,
+    *,
+    room: dict[str, int],
+    slack_file_ids: dict[str, str] | None,
+    deep_link: str | None,
+    token: str | None = None,
+    index: int = 0,
+    parent: Literal["message", "container", "layout"] = "message",
+    depth: int = 0,
+) -> list[dict]:
+    """The blocks of Slack that show ``block`` in ``parent``: the message, a container, or an
+    item of a layout. ``depth`` is how many containers and layouts hold ``block``.
+
+    Each kind of Druks block has a branch of its own. Facts and metrics become a section of
+    fields for each ten, with the title on the first. A divider becomes a divider. A link
+    becomes a button that opens it. In a container or a layout, text becomes a section.
+
+    A table becomes a data table of its first rows that fit. When rows do not fit, a line
+    above it says how many rows Druks did not send, with the link. In a layout, a table becomes
+    a data table only when all of its rows fit. A table that selects rows becomes its text
+    form, which holds its actions.
+
+    A chart becomes a chart of its kind under its title, or under its value label when it has
+    no title. Druks cuts each long title of a chart, and each long label of a line, bar, or
+    area chart. A pie has a segment for each category. Druks cuts no label of a pie. A
+    message draws the first two charts that Slack can draw.
+
+    Only a block at the top of the message has ``token``, and only until its approval has an
+    outcome. Such an action becomes an input for each of its fields and a button that
+    carries ``token`` and ``index``, the position of the block. An action with no fields,
+    alone in a cell of a table, also becomes such a button. A form that sends on a button
+    becomes an input for each of its fields and a button for each of its actions. A button
+    asks with Slack's dialog when its action asks to confirm.
+
+    An image at an outside address of a png, a jpg, or a gif becomes an image block. So does
+    an image whose address has a Slack file in ``slack_file_ids``. A gallery becomes one image
+    block for each such image, under its title. Each other image of a gallery keeps its line
+    of the text form, in its place.
+
+    A card that holds only links and one image at most becomes a card block. Any other card
+    becomes a container of its blocks, under its title and its description. So does a section
+    with a title, under its title. The links of the controls of a card or a section become
+    buttons. Slack runs no action of the controls. A list of cards becomes a carousel when
+    each of its cards becomes a card block. Otherwise, in the message, each of its cards shows
+    on its own. Columns become a layout with each column side by side. A carousel, a data
+    table, and a chart each take a row of the layout. A stack, a section with no title, and
+    more than three columns show their blocks in order.
+
+    Any other block, and a block past a limit of Slack, shows its text form in a markdown
+    block. A block whose text form is empty shows nothing. Only the message holds markdown. A
+    container or a layout that holds a text form thus shows its own text form.
+
+    ``room`` holds what the message has left for the text of the cells of its data tables,
+    under ``cells``, and for its charts, under ``charts``. A block that shows its text form
+    takes nothing from it."""
+    draw = partial(get_parts, room=room, slack_file_ids=slack_file_ids, deep_link=deep_link)
+    room_before = dict(room)
+    parts: list[dict] = []
+    match block:
+        case ui.Facts(title=title, facts=items) | ui.Metrics(title=title, metrics=items):
+            texts = [f"*{title}*"]
+            texts += [f"*{item.label}*\n{item.value.to_markdown()}" for item in items]
+            texts = [escape_mrkdwn(text) for text in texts]
+            # Slack writes a link as <address|words>.
+            heading, *cells = [
+                _MARKDOWN_LINK.sub(r"<\2|\1>", text).replace("\\[", "[").replace("\\]", "]")
+                for text in texts
+            ]
+            if (
+                cells
+                and len(heading) <= slack.SECTION_TEXT_LIMIT
+                and all(len(cell) <= slack.FIELD_TEXT_LIMIT for cell in cells)
+            ):
+                parts = [
+                    {
+                        "type": "section",
+                        "fields": [
+                            {"type": "mrkdwn", "text": cell}
+                            for cell in cells[start : start + slack.SECTION_FIELDS_LIMIT]
+                        ],
+                    }
+                    for start in range(0, len(cells), slack.SECTION_FIELDS_LIMIT)
+                ]
+                if title:
+                    parts[0]["text"] = {"type": "mrkdwn", "text": heading}
+        case ui.Divider():
+            parts = [{"type": "divider"}]
+        case ui.Link():
+            parts = get_link_actions([block])
+        case ui.Text(text=text) if parent != "message":
+            mrkdwn = escape_mrkdwn(text)
+            if 0 < len(mrkdwn) <= slack.SECTION_TEXT_LIMIT:
+                parts = [{"type": "section", "text": {"type": "mrkdwn", "text": mrkdwn}}]
+        case ui.Table(title=title, columns=columns, rows=rows, actions=[]) if (
+            parent != "container" and 0 < len(columns) <= slack.TABLE_COLUMNS_LIMIT
+        ):
+            labels = [column.label or slack.EMPTY_CELL_TEXT for column in columns]
+            size = len("".join(labels))
+            body = []
+
+            for row_index, row in enumerate(rows[: slack.TABLE_ROWS_LIMIT]):
+                cells, texts = [], []
+
+                for cell_index, value in enumerate(row.cells):
+                    text = value.to_markdown() or slack.EMPTY_CELL_TEXT
+                    elements, end = [], 0
+
+                    for link in _MARKDOWN_LINK.finditer(text):
+                        escaped_words, address = link.groups()
+                        words = escaped_words.replace("\\[", "[").replace("\\]", "]")
+                        elements.append({"type": "text", "text": text[end : link.start()]})
+                        elements.append({"type": "link", "url": address, "text": words})
+                        end = link.end()
+                    match value:
+                        case ui.ControlsValue(controls=[ui.Action(fields=[]) as action]) if (
+                            token
+                            and (
+                                button := get_button(
+                                    action, encode_action(token, index, row_index, cell_index)
+                                )
+                            )
+                        ):
+                            cells.append({"type": "action_cell", "element": button})
+                            # Slack counts the text of a button toward the limit of the cells.
+                            text = action.label
+                        case ui.NumberValue(number=number):
+                            # Slack sorts a column of number cells as numbers.
+                            cells.append({"type": "raw_number", "value": number, "text": text})
+                        case _ if elements:
+                            elements.append({"type": "text", "text": text[end:]})
+                            # Slack takes no text element without text.
+                            section = {
+                                "type": "rich_text_section",
+                                "elements": [element for element in elements if element["text"]],
+                            }
+                            cells.append({"type": "rich_text", "elements": [section]})
+                        case _:
+                            cells.append({"type": "raw_text", "text": text})
+                    texts.append(text)
+
+                if size + len("".join(texts)) > room["cells"]:
+                    break
+                size += len("".join(texts))
+                body.append(cells)
+
+            # Slack draws a data table only with a row under its header.
+            if body and (parent == "message" or len(body) == len(rows)):
+                room["cells"] -= size
+                header = [{"type": "raw_text", "text": label} for label in labels]
+                caption = title or labels[0]
+                parts = [{"type": "data_table", "caption": caption, "rows": [header, *body]}]
+            if parts and len(body) < len(rows):
+                notice = TABLE_OMISSION_MESSAGE.format(left=len(rows) - len(body), total=len(rows))
+
+                if deep_link:
+                    notice += OMISSION_LINK.format(link=deep_link)
+                # Above the table, its link never comes right before the link of the message.
+                parts.insert(0, {"type": "markdown", "text": notice})
+        case ui.Chart(
+            kind="line" | "bar" | "area" as kind,
+            title=title,
+            categories=categories,
+            series=series,
+            category_label=category_label,
+            value_label=value_label,
+        ) if (
+            parent != "container"
+            and room["charts"]
+            and 0 < len(series) <= slack.CHART_SERIES_LIMIT
+            and 0 < len(categories) <= slack.CHART_POINTS_LIMIT
+        ):
+            heading = cut_text(title or value_label, slack.CHART_TITLE_LIMIT)
+            labels = [
+                cut_text(category or slack.EMPTY_CELL_TEXT, slack.CHART_LABEL_LIMIT)
+                for category in categories
+            ]
+            names = [
+                cut_text(one.label or slack.EMPTY_CELL_TEXT, slack.CHART_LABEL_LIMIT)
+                for one in series
+            ]
+
+            if heading and len(set(labels)) == len(labels) and len(set(names)) == len(names):
+                room["charts"] -= 1
+                axes: dict = {"categories": labels}
+
+                if category_label:
+                    axes["x_label"] = cut_text(category_label, slack.CHART_AXIS_TITLE_LIMIT)
+                if value_label:
+                    axes["y_label"] = cut_text(value_label, slack.CHART_AXIS_TITLE_LIMIT)
+                chart = {
+                    "type": kind,
+                    "series": [
+                        {
+                            "name": name,
+                            "data": [
+                                {"label": label, "value": point}
+                                for label, point in zip(labels, one.points, strict=True)
+                            ],
+                        }
+                        for name, one in zip(names, series, strict=True)
+                    ],
+                    "axis_config": axes,
+                }
+                parts = [{"type": "data_visualization", "title": heading, "chart": chart}]
+        case ui.Chart(
+            kind="pie",
+            title=title,
+            categories=categories,
+            series=[one],
+            value_label=value_label,
+        ) if (
+            parent != "container"
+            and room["charts"]
+            and 0 < len(categories) <= slack.CHART_SEGMENTS_LIMIT
+            # A cut label can hide the category of a share. Druks cuts no label of a pie.
+            and all(len(category) <= slack.CHART_LABEL_LIMIT for category in categories)
+        ):
+            heading = cut_text(title or value_label, slack.CHART_TITLE_LIMIT)
+
+            if heading:
+                room["charts"] -= 1
+                chart = {
+                    "type": "pie",
+                    "segments": [
+                        {"label": category or slack.EMPTY_CELL_TEXT, "value": point}
+                        for category, point in zip(categories, one.points, strict=True)
+                    ],
+                }
+                parts = [{"type": "data_visualization", "title": heading, "chart": chart}]
+        case ui.Action() if token:
+            parts = get_form(index, block.fields, {encode_action(token, index): block})
+        case ui.Form(submit="button") if token:
+            parts = get_form(
+                index,
+                block.fields,
+                {
+                    encode_action(token, index, number): action
+                    for number, action in enumerate([block.action, *block.extra_actions])
+                },
+            )
+        case ui.Image():
+            if image_block := get_image_block(block, slack_file_ids):
+                parts = [image_block]
+        case ui.ImageGallery(title=title, images=images) if parent == "message" and any(
+            get_image_block(image, slack_file_ids) for image in images
+        ):
+            parts = [{"type": "markdown", "text": f"### {title}"}] if title else []
+            for image in images:
+                if image_block := get_image_block(image, slack_file_ids):
+                    parts.append(image_block)
+                    continue
+                line = f"- {image.to_markdown()}"
+                if parts and parts[-1]["type"] == "markdown":
+                    parts[-1]["text"] += f"\n{line}"
+                else:
+                    parts.append({"type": "markdown", "text": line})
+        case ui.Card() if parent != "container" and (
+            card_block := get_card_block(block, slack_file_ids)
+        ):
+            parts = [card_block]
+        case ui.Card(title=title, description=description, link=link) if (
+            not is_simple_card(block) and parent != "container" and depth < slack.NESTING_LIMIT
+        ):
+            # The link of the card takes its title as its label, as in its text form.
+            links = [link.model_copy(update={"label": title})] if link else []
+            links += [control for control in block.controls if control.block == "link"]
+            child_blocks = [
+                part
+                for child in block.blocks
+                for part in draw(child, parent="container", depth=depth + 1)
+            ]
+            if container := get_container(
+                title, description, [*child_blocks, *get_link_actions(links)]
+            ):
+                parts = [container]
+        case ui.Cards(title=title, cards=cards) if cards and parent != "container":
+            heading = [{"type": "markdown", "text": f"### {title}"}] if title else []
+            card_blocks = [get_card_block(card, slack_file_ids) for card in cards]
+            if (
+                all(card_blocks)
+                and len(card_blocks) <= slack.CAROUSEL_CARDS_LIMIT
+                # Only the message holds the title of the list.
+                and (parent == "message" or not title)
+            ):
+                parts = [*heading, {"type": "carousel", "elements": card_blocks}]
+            elif parent == "message":
+                card_parts = [
+                    part for card in cards for part in draw(card, parent=parent, depth=depth)
+                ]
+                if card_parts:
+                    parts = [*heading, *card_parts]
+        case ui.Section(title=title, blocks=children, controls=controls):
+            # The links of the section come first, as in its text form.
+            actions = get_link_actions([control for control in controls if control.block == "link"])
+            if not title:
+                parts = [
+                    *actions,
+                    *(
+                        part
+                        for child in children
+                        for part in draw(child, parent=parent, depth=depth)
+                    ),
+                ]
+            elif parent != "container" and depth < slack.NESTING_LIMIT:
+                child_blocks = [
+                    part
+                    for child in children
+                    for part in draw(child, parent="container", depth=depth + 1)
+                ]
+                if container := get_container(title, "", [*actions, *child_blocks]):
+                    parts = [container]
+        case ui.Columns(blocks=columns) if len(columns) <= slack.LAYOUT_ITEMS_LIMIT:
+            # Columns that cannot be a layout here show their text form.
+            if parent != "layout" and depth < slack.NESTING_LIMIT:
+                # Each column is one item of the layout. An empty column is none.
+                items = [draw(column, parent="layout", depth=depth + 1) for column in columns]
+                items = [item for item in items if item]
+                if items and all(
+                    len(item) == 1 and item[0]["type"] != "markdown" for item in items
+                ):
+                    rows = []
+                    for is_wide, group in itertools.groupby(
+                        (item for (item,) in items),
+                        key=lambda item: item["type"] in slack.WIDE_BLOCK_TYPES,
+                    ):
+                        row_items = list(group)
+                        rows += [[item] for item in row_items] if is_wide else [row_items]
+                    layout_rows = [{"items": [{"block": item} for item in row]} for row in rows]
+                    parts = [{"type": "layout", "label": slack.LAYOUT_LABEL, "rows": layout_rows}]
+        case ui.Stack(blocks=children) | ui.Columns(blocks=children):
+            parts = [part for child in children for part in draw(child, parent=parent, depth=depth)]
+    if not parts:
+        room.update(room_before)
+        if text_form := block.to_markdown():
+            parts = [{"type": "markdown", "text": text_form}]
+    return parts
+
+
 def get_blocks(
     text: str,
     *,
@@ -308,36 +777,15 @@ def get_blocks(
     whole label. The message holds no input that Slack refuses. Druks still sends the message,
     with its question in the content.
 
-    Each kind of Druks block has a branch of its own. Facts and metrics become a section of
-    fields for each ten, with the title on the first. A divider becomes a divider. A link
-    becomes a button that opens it.
+    ``get_parts`` draws each of ``blocks``. While there is no ``outcome``, the actions of the
+    blocks carry ``token``. Text that follows text joins it in one markdown block.
 
-    A table becomes a data table of its first rows that fit. When rows do not fit, a line
-    above it says how many rows Druks did not send, with the link. A table that selects rows
-    becomes its text form, which holds its actions.
-
-    A chart becomes a chart of its kind under its title, or under its value label when it has
-    no title. Druks cuts each long title of a chart, and each long label of a line, bar, or
-    area chart. A pie has a segment for each category. Druks cuts no label of a pie. A
-    message draws the first two charts that Slack can draw.
-
-    While there is no ``outcome``, an action becomes an input for each of its fields and a
-    button that carries ``token`` and its position. An action with no fields, alone in a
-    cell of a table, also becomes such a button. A form that sends on a button becomes an
-    input for each of its fields and a button for each of its actions. A button asks with
-    Slack's dialog when its action asks to confirm.
-
-    An image at an outside address of a png, a jpg, or a gif becomes an image block. So does
-    an image whose address has a Slack file in ``slack_file_ids``. A gallery becomes one image
-    block for each such image, under its title. Each other image of a gallery keeps its line
-    of the text form, in its place. Any other block, and a block past a limit of Slack,
-    becomes its text form. Text that follows text joins it in one markdown block.
-
-    ``blocks`` use the room that the rest leaves, the question included. When no room is
-    left, the last block holds the text forms of the other blocks. A gallery or a form
-    that does not fit whole is one of them. When the markdown is longer than Slack accepts,
-    Druks cuts the end of the blocks. A line in place of the link then says so, with the
-    link."""
+    ``blocks`` use the room that the rest leaves, the question included. Each block inside a
+    container, a carousel, or a layout takes room too. When no room is left, the last block
+    holds the text forms of the other blocks. A block that does not fit whole, such as a
+    gallery, a form, or a container, is one of them. When the markdown is longer than Slack
+    accepts, Druks cuts the end of the blocks. A line in place of the link then says so, with
+    the link."""
     controls: list[dict] = []
     if fields and actions:
         inputs_by_id = {}
@@ -390,237 +838,29 @@ def get_blocks(
     if question:
         controls.insert(0, {"type": "markdown", "text": question})
     content: list[dict] = []
-    table_room = slack.MESSAGE_CELL_TEXT_LIMIT
-    chart_room = slack.MESSAGE_CHARTS_LIMIT
+    draw = partial(
+        get_parts,
+        room={"cells": slack.MESSAGE_CELL_TEXT_LIMIT, "charts": slack.MESSAGE_CHARTS_LIMIT},
+        slack_file_ids=slack_file_ids,
+        deep_link=deep_link,
+        token=None if outcome else token,
+    )
 
     for index, block in enumerate(blocks):
-        parts: list[dict] = []
-        match block:
-            case ui.Facts(title=title, facts=items) | ui.Metrics(title=title, metrics=items):
-                texts = [f"*{title}*"]
-                texts += [f"*{item.label}*\n{item.value.to_markdown()}" for item in items]
-                # Slack reads &, < and > as markup. It writes a link as <address|words>.
-                texts = [
-                    text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-                    for text in texts
-                ]
-                heading, *cells = [
-                    _MARKDOWN_LINK.sub(r"<\2|\1>", text).replace("\\[", "[").replace("\\]", "]")
-                    for text in texts
-                ]
-                if (
-                    cells
-                    and len(heading) <= slack.SECTION_TEXT_LIMIT
-                    and all(len(cell) <= slack.FIELD_TEXT_LIMIT for cell in cells)
-                ):
-                    parts = [
-                        {
-                            "type": "section",
-                            "fields": [
-                                {"type": "mrkdwn", "text": cell}
-                                for cell in cells[start : start + slack.SECTION_FIELDS_LIMIT]
-                            ],
-                        }
-                        for start in range(0, len(cells), slack.SECTION_FIELDS_LIMIT)
-                    ]
-                    if title:
-                        parts[0]["text"] = {"type": "mrkdwn", "text": heading}
-            case ui.Divider():
-                parts = [{"type": "divider"}]
-            case ui.Link(label=label, url=url):
-                address = get_absolute_url(url)
-                if (
-                    address
-                    and label
-                    and len(label) <= slack.BUTTON_TEXT_LIMIT
-                    and len(address) <= slack.BUTTON_URL_LIMIT
-                ):
-                    button = {
-                        "type": "button",
-                        "text": {"type": "plain_text", "text": label},
-                        "url": address,
-                        "action_id": slack.LINK_BUTTON_ACTION_ID,
-                    }
-                    parts = [{"type": "actions", "elements": [button]}]
-            case ui.Table(title=title, columns=columns, rows=rows, actions=[]) if (
-                0 < len(columns) <= slack.TABLE_COLUMNS_LIMIT
-            ):
-                labels = [column.label or slack.EMPTY_CELL_TEXT for column in columns]
-                size = len("".join(labels))
-                body = []
-
-                for row_index, row in enumerate(rows[: slack.TABLE_ROWS_LIMIT]):
-                    cells, texts = [], []
-
-                    for cell_index, value in enumerate(row.cells):
-                        text = value.to_markdown() or slack.EMPTY_CELL_TEXT
-                        elements, end = [], 0
-
-                        for link in _MARKDOWN_LINK.finditer(text):
-                            escaped_words, address = link.groups()
-                            words = escaped_words.replace("\\[", "[").replace("\\]", "]")
-                            elements.append({"type": "text", "text": text[end : link.start()]})
-                            elements.append({"type": "link", "url": address, "text": words})
-                            end = link.end()
-                        match value:
-                            case ui.ControlsValue(controls=[ui.Action(fields=[]) as action]) if (
-                                token
-                                and not outcome
-                                and (
-                                    button := get_button(
-                                        action, encode_action(token, index, row_index, cell_index)
-                                    )
-                                )
-                            ):
-                                cells.append({"type": "action_cell", "element": button})
-                                # Slack counts the text of a button toward the limit of the cells.
-                                text = action.label
-                            case ui.NumberValue(number=number):
-                                # Slack sorts a column of number cells as numbers.
-                                cells.append({"type": "raw_number", "value": number, "text": text})
-                            case _ if elements:
-                                elements.append({"type": "text", "text": text[end:]})
-                                # Slack takes no text element without text.
-                                section = {
-                                    "type": "rich_text_section",
-                                    "elements": [
-                                        element for element in elements if element["text"]
-                                    ],
-                                }
-                                cells.append({"type": "rich_text", "elements": [section]})
-                            case _:
-                                cells.append({"type": "raw_text", "text": text})
-                        texts.append(text)
-
-                    if size + len("".join(texts)) > table_room:
-                        break
-                    size += len("".join(texts))
-                    body.append(cells)
-
-                if body:
-                    # Slack draws a data table only with a row under its header.
-                    table_room -= size
-                    header = [{"type": "raw_text", "text": label} for label in labels]
-                    caption = title or labels[0]
-                    parts = [{"type": "data_table", "caption": caption, "rows": [header, *body]}]
-                if 0 < len(body) < len(rows):
-                    notice = TABLE_OMISSION_MESSAGE.format(
-                        left=len(rows) - len(body), total=len(rows)
-                    )
-
-                    if deep_link:
-                        notice += OMISSION_LINK.format(link=deep_link)
-                    # Druks puts the line above the table. Its link is then never directly
-                    # before the link that ends the message.
-                    parts.insert(0, {"type": "markdown", "text": notice})
-            case ui.Chart(
-                kind="line" | "bar" | "area" as kind,
-                title=title,
-                categories=categories,
-                series=series,
-                category_label=category_label,
-                value_label=value_label,
-            ) if (
-                chart_room
-                and 0 < len(series) <= slack.CHART_SERIES_LIMIT
-                and 0 < len(categories) <= slack.CHART_POINTS_LIMIT
-            ):
-                heading = cut_text(title or value_label, slack.CHART_TITLE_LIMIT)
-                labels = [
-                    cut_text(category or slack.EMPTY_CELL_TEXT, slack.CHART_LABEL_LIMIT)
-                    for category in categories
-                ]
-                names = [
-                    cut_text(one.label or slack.EMPTY_CELL_TEXT, slack.CHART_LABEL_LIMIT)
-                    for one in series
-                ]
-
-                if heading and len(set(labels)) == len(labels) and len(set(names)) == len(names):
-                    chart_room -= 1
-                    axes: dict = {"categories": labels}
-
-                    if category_label:
-                        axes["x_label"] = cut_text(category_label, slack.CHART_AXIS_TITLE_LIMIT)
-                    if value_label:
-                        axes["y_label"] = cut_text(value_label, slack.CHART_AXIS_TITLE_LIMIT)
-                    chart = {
-                        "type": kind,
-                        "series": [
-                            {
-                                "name": name,
-                                "data": [
-                                    {"label": label, "value": point}
-                                    for label, point in zip(labels, one.points, strict=True)
-                                ],
-                            }
-                            for name, one in zip(names, series, strict=True)
-                        ],
-                        "axis_config": axes,
-                    }
-                    parts = [{"type": "data_visualization", "title": heading, "chart": chart}]
-            case ui.Chart(
-                kind="pie",
-                title=title,
-                categories=categories,
-                series=[one],
-                value_label=value_label,
-            ) if (
-                chart_room
-                and 0 < len(categories) <= slack.CHART_SEGMENTS_LIMIT
-                # A cut label can hide the category of a share. Druks cuts no label of a pie.
-                and all(len(category) <= slack.CHART_LABEL_LIMIT for category in categories)
-            ):
-                heading = cut_text(title or value_label, slack.CHART_TITLE_LIMIT)
-
-                if heading:
-                    chart_room -= 1
-                    chart = {
-                        "type": "pie",
-                        "segments": [
-                            {"label": category or slack.EMPTY_CELL_TEXT, "value": point}
-                            for category, point in zip(categories, one.points, strict=True)
-                        ],
-                    }
-                    parts = [{"type": "data_visualization", "title": heading, "chart": chart}]
-            case ui.Action() if token and not outcome:
-                parts = get_form(index, block.fields, {encode_action(token, index): block})
-            case ui.Form(submit="button") if token and not outcome:
-                parts = get_form(
-                    index,
-                    block.fields,
-                    {
-                        encode_action(token, index, number): action
-                        for number, action in enumerate([block.action, *block.extra_actions])
-                    },
-                )
-            case ui.Image():
-                if image_block := get_image_block(block, slack_file_ids):
-                    parts = [image_block]
-            case ui.ImageGallery(title=title, images=images) if any(
-                get_image_block(image, slack_file_ids) for image in images
-            ):
-                parts = [{"type": "markdown", "text": f"### {title}"}] if title else []
-                for image in images:
-                    if image_block := get_image_block(image, slack_file_ids):
-                        parts.append(image_block)
-                        continue
-                    line = f"- {image.to_markdown()}"
-                    if parts and parts[-1]["type"] == "markdown":
-                        parts[-1]["text"] += f"\n{line}"
-                    else:
-                        parts.append({"type": "markdown", "text": line})
-        text_form = "" if parts else block.to_markdown()
+        parts = draw(block, index=index)
         # One block of the room stays free for the link. When no room is left, its last
         # block holds the other blocks as their text forms.
-        count = len(content) + len(parts) + bool(text_form)
-        is_full = count >= slack.MESSAGE_BLOCKS_LIMIT - len(controls)
+        is_full = len(list_blocks([*content, *parts])) >= slack.MESSAGE_BLOCKS_LIMIT - len(controls)
         if is_full:
-            parts, text_form = [], ui.Stack(blocks[index:]).to_markdown()
-        if text_form and content and content[-1]["type"] == "markdown":
-            content[-1] = {"type": "markdown", "text": f"{content[-1]['text']}\n\n{text_form}"}
-        elif text_form:
-            content.append({"type": "markdown", "text": text_form})
-        content += parts
+            parts = [{"type": "markdown", "text": ui.Stack(blocks[index:]).to_markdown()}]
+        for part in parts:
+            if part["type"] == "markdown" and content and content[-1]["type"] == "markdown":
+                content[-1] = {
+                    "type": "markdown",
+                    "text": f"{content[-1]['text']}\n\n{part['text']}",
+                }
+            else:
+                content.append(part)
         if is_full:
             break
     line = deep_link or ""
@@ -682,11 +922,11 @@ async def deliver(
     ``question_offset`` is where a chat agent's question starts in ``body``. The question
     keeps its room when Druks cuts the rest to fit, with blocks and without.
 
-    Before the post, Druks uploads to Slack the Druks file of each image that keeps its
-    block. The file is a png, a jpg, or a gif of at most 10 MiB, of an app that ``account``
-    can use. ``account`` is the account that the message is for. Only a message with no
-    blocks has none. Druks reads the record of the file in ``session``. Slack keeps each
-    file private.
+    Before the post, Druks uploads to Slack the Druks file of each image that the message
+    shows: in an image block, at any depth, or as the hero image of a card. The file is a
+    png, a jpg, or a gif of at most 10 MiB, of an app that ``account`` can use. ``account``
+    is the account that the message is for. Only a message with no blocks has none. Druks
+    reads the record of the file in ``session``. Slack keeps each file private.
 
     The uploads stop at Slack's answer missing_scope, because each upload after it fails
     too. An image whose upload fails keeps its link. Druks uploads nothing again when it
@@ -747,17 +987,10 @@ async def deliver(
         draw = partial(
             message, blocks=druks_blocks, question=question.lstrip("\n"), deep_link=deep_link
         )
-        images = []
-        for block in druks_blocks:
-            match block:
-                case ui.Image():
-                    images.append(block)
-                case ui.ImageGallery(images=gallery):
-                    images += gallery
         # An image names a Druks file by the address of the file, alone or after the endpoint.
         endpoint = get_settings().urls.endpoint.rstrip("/")
         files = {}
-        for image in images:
+        for image in iter_parts(druks_blocks, ui.Image):
             path = image.url.removeprefix(endpoint)
             if path.startswith(FILE_URL_PREFIX):
                 record = await session.get(FileRecord, path.removeprefix(FILE_URL_PREFIX))
@@ -773,8 +1006,9 @@ async def deliver(
         # This layout uses the address of each file in place of a Slack file id. An image
         # that keeps its block then names its address.
         drawn = draw(slack_file_ids={url: url for url in files})
+        shown_images = [part.get("hero_image", part) for part in list_blocks(drawn)]
         shown_urls = dict.fromkeys(
-            part["slack_file"]["id"] for part in drawn if "slack_file" in part
+            image["slack_file"]["id"] for image in shown_images if "slack_file" in image
         )
         slack_file_ids = {}
         for url in shown_urls:

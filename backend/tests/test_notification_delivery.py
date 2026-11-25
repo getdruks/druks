@@ -11,6 +11,7 @@ from druks.accounts.models import Account
 from druks.chat.channels.slack.channel import SlackChannel
 from druks.chat.channels.slack.constants import (
     IMAGE_BYTES_LIMIT,
+    LAYOUT_LABEL,
     LINK_BUTTON_ACTION_ID,
     MARKDOWN_TEXT_LIMIT,
     MESSAGE_BLOCKS_LIMIT,
@@ -741,15 +742,14 @@ def _mrkdwn(text: str) -> dict:
     return {"type": "mrkdwn", "text": text}
 
 
+def _url_button(label: str, url: str, action_id: str = LINK_BUTTON_ACTION_ID) -> dict:
+    """The button that opens ``url``."""
+    return {"type": "button", "text": _label(label), "url": url, "action_id": action_id}
+
+
 def _link_button(label: str, url: str) -> dict:
     """The actions block of a button that opens ``url``."""
-    button = {
-        "type": "button",
-        "text": _label(label),
-        "url": url,
-        "action_id": LINK_BUTTON_ACTION_ID,
-    }
-    return {"type": "actions", "elements": [button]}
+    return {"type": "actions", "elements": [_url_button(label, url)]}
 
 
 def _image_block(url: str, alternative_text: str) -> dict:
@@ -2820,3 +2820,709 @@ async def test_a_message_uploads_no_image_that_it_has_no_room_to_show(druks_db, 
     )
 
     assert not _list_uploads(slack)
+
+
+def _section(text: str) -> dict:
+    """The section of the mrkdwn ``text``."""
+    return {"type": "section", "text": _mrkdwn(text)}
+
+
+_FAN = ui.Facts([ui.Fact("Fan", "front")])
+_FAN_SECTION = {"type": "section", "fields": [_mrkdwn("*Fan*\nfront")]}
+
+
+async def test_an_approval_s_card_with_an_image_and_a_link_goes_out_as_slack_s_card(
+    druks_db, slack
+):
+    card = ui.Card(
+        title="Rack 3",
+        description="The front fan is out.",
+        blocks=[
+            ui.Image(
+                url="https://shots.example/rack.png",
+                alternative_text="Rack 3 with its front fan out.",
+                caption="Rack 3",
+            ),
+            ui.Link("Ticket", url="https://tickets.example/7"),
+        ],
+    )
+    approval = await _approval(druks_db, context=_stored(card))
+
+    await deliver(
+        SlackClient(token=_BOT_TOKEN),
+        "C1",
+        approval.body,
+        session=druks_db,
+        account=None,
+        blocks=approval.blocks,
+        actions=approval.actions,
+        fields=approval.fields,
+        token=approval.correlation_token,
+    )
+
+    (post,) = slack.posts
+    # Slack's image element has no title. The hero image shows no caption.
+    assert post["blocks"][:2] == [
+        {"type": "markdown", "text": "# Review"},
+        {
+            "type": "card",
+            "title": _label("Rack 3"),
+            "body": _label("The front fan is out."),
+            "hero_image": _image_block(
+                "https://shots.example/rack.png", "Rack 3 with its front fan out."
+            ),
+            "actions": [_url_button("Ticket", "https://tickets.example/7")],
+        },
+    ]
+
+
+def test_a_card_has_a_button_for_its_link_for_each_link_block_and_for_each_link_control():
+    set_endpoint("https://druks.example")
+    card = ui.Card(
+        title="Rack 3",
+        link=ui.Link(url="/field_notes/notes/3"),
+        blocks=[ui.Link("Ticket", url="https://tickets.example/7")],
+        controls=[_action(label="Archive"), ui.Link("Logs", url="https://logs.example/3")],
+    )
+
+    # Slack runs no action of a card. The link of the card takes its title.
+    assert get_blocks("text", blocks=[card], token="t") == [
+        {
+            "type": "card",
+            "title": _label("Rack 3"),
+            "actions": [
+                _url_button("Rack 3", "https://druks.example/field_notes/notes/3"),
+                _url_button("Ticket", "https://tickets.example/7", f"{LINK_BUTTON_ACTION_ID}:1"),
+                _url_button("Logs", "https://logs.example/3", f"{LINK_BUTTON_ACTION_ID}:2"),
+            ],
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("make", "limit"),
+    [
+        (lambda size: ui.Card(title="T" * size), 150),
+        (lambda size: ui.Card(title="Rack 3", description="D" * size), 200),
+        (
+            lambda size: ui.Card(
+                title="Rack 3",
+                blocks=[
+                    ui.Link(f"Log {number}", url=f"https://logs.example/{number}")
+                    for number in range(size)
+                ],
+            ),
+            3,
+        ),
+    ],
+    ids=["title", "body", "buttons"],
+)
+def test_a_card_takes_slack_s_card_up_to_a_limit_and_its_text_form_past_it(make, limit):
+    block_past_limit = make(limit + 1)
+
+    (card,) = get_blocks("text", blocks=[make(limit)])
+
+    assert card["type"] == "card"
+    assert get_blocks("text", blocks=[block_past_limit]) == [
+        {"type": "markdown", "text": block_past_limit.to_markdown()}
+    ]
+
+
+def test_a_card_with_nothing_that_slack_shows_is_no_card():
+    set_endpoint("https://druks.example")
+    archive_only = ui.Card(controls=[_action(label="Archive")])
+
+    blocks = get_blocks(
+        "text", blocks=[ui.Card(title="Rack 3"), ui.Card(), archive_only], token="t"
+    )
+
+    assert blocks == [
+        {"type": "card", "title": _label("Rack 3")},
+        {"type": "markdown", "text": "[Archive](https://druks.example/runs/run-1)"},
+    ]
+
+
+def test_a_card_that_holds_blocks_and_a_section_with_a_title_go_out_as_containers():
+    set_endpoint("https://druks.example")
+    card = ui.Card(
+        title="Rack 3",
+        description="Fan noise since Monday.",
+        link=ui.Link(url="/field_notes/notes/3"),
+        blocks=[ui.Text("Swap the <front> fan & test it."), ui.Divider()],
+        controls=[_action(label="Archive"), ui.Link("Logs", url="https://logs.example/3")],
+    )
+    section = ui.Section(
+        title="Next steps",
+        blocks=[ui.Link("Runbook", url="https://docs.example/runbook")],
+        controls=[
+            ui.Link("Docs", url="https://docs.example/a"),
+            ui.Link("Logs", url="https://logs.example/3"),
+        ],
+    )
+
+    card_container, section_container = get_blocks("text", blocks=[card, section], token="t")
+
+    # The links of a card follow its blocks. The links of a section come first.
+    assert card_container == {
+        "type": "container",
+        "title": _label("Rack 3"),
+        "subtitle": _label("Fan noise since Monday."),
+        "child_blocks": [
+            _section("Swap the &lt;front&gt; fan &amp; test it."),
+            {"type": "divider"},
+            {
+                "type": "actions",
+                "elements": [
+                    _url_button("Rack 3", "https://druks.example/field_notes/notes/3"),
+                    _url_button("Logs", "https://logs.example/3", f"{LINK_BUTTON_ACTION_ID}:1"),
+                ],
+            },
+        ],
+    }
+    assert section_container == {
+        "type": "container",
+        "title": _label("Next steps"),
+        "child_blocks": [
+            {
+                "type": "actions",
+                "elements": [
+                    _url_button("Docs", "https://docs.example/a"),
+                    _url_button("Logs", "https://logs.example/3", f"{LINK_BUTTON_ACTION_ID}:1"),
+                ],
+            },
+            _link_button("Runbook", "https://docs.example/runbook"),
+        ],
+    }
+
+
+@pytest.mark.parametrize(
+    ("make", "limit"),
+    [
+        (lambda size: ui.Section(title="T" * size, blocks=[ui.Divider()]), 150),
+        (lambda size: ui.Card(title="Rack 3", description="D" * size, blocks=[ui.Divider()]), 150),
+        (lambda size: ui.Section(title="Log", blocks=[ui.Text("x" * size)]), 3000),
+    ],
+    ids=["title", "subtitle", "section-text"],
+)
+def test_a_container_takes_slack_s_container_up_to_a_limit_and_its_text_form_past_it(make, limit):
+    block_past_limit = make(limit + 1)
+
+    (container,) = get_blocks("text", blocks=[make(limit)])
+
+    assert container["type"] == "container"
+    assert get_blocks("text", blocks=[block_past_limit]) == [
+        {"type": "markdown", "text": block_past_limit.to_markdown()}
+    ]
+
+
+async def test_a_container_of_14_blocks_or_with_no_title_shows_its_text_form(druks_db, slack):
+    fourteen = ui.Section(
+        title="Fans",
+        blocks=[ui.Facts([ui.Fact(f"Fan {number}", "front")]) for number in range(14)],
+    )
+    untitled = ui.Card(description="Fan noise.", blocks=[ui.Divider()])
+
+    await deliver(
+        SlackClient(token=_BOT_TOKEN),
+        "C1",
+        "text",
+        session=druks_db,
+        account=None,
+        blocks=_stored(fourteen, untitled, ui.Section(title="Racks", blocks=[ui.Divider()])),
+    )
+
+    (post,) = slack.posts
+    assert post["blocks"] == [
+        {"type": "markdown", "text": f"{fourteen.to_markdown()}\n\n{untitled.to_markdown()}"},
+        {"type": "container", "title": _label("Racks"), "child_blocks": [{"type": "divider"}]},
+    ]
+
+
+def test_a_container_holds_text_facts_metrics_a_divider_a_link_an_image_and_columns():
+    section = ui.Section(
+        title="Rack 3",
+        blocks=[
+            ui.Text("Fan noise."),
+            _FAN,
+            ui.Metrics([ui.Metric("Noise", ui.NumberValue(72, unit="dB"))]),
+            ui.Divider(),
+            ui.Link("Docs", url="https://docs.example/a"),
+            ui.Image(url="https://shots.example/rack.png", alternative_text="Rack 3."),
+            ui.Columns([_FAN, ui.Text("Fan noise.")]),
+        ],
+    )
+
+    (container,) = get_blocks("text", blocks=[section])
+
+    assert container["child_blocks"] == [
+        _section("Fan noise."),
+        _FAN_SECTION,
+        {"type": "section", "fields": [_mrkdwn("*Noise*\n72 dB")]},
+        {"type": "divider"},
+        _link_button("Docs", "https://docs.example/a"),
+        _image_block("https://shots.example/rack.png", "Rack 3."),
+        {
+            "type": "layout",
+            "label": LAYOUT_LABEL,
+            "rows": [{"items": [{"block": _FAN_SECTION}, {"block": _section("Fan noise.")}]}],
+        },
+    ]
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        ui.Markdown("**Loud** fan."),
+        ui.Table(columns=[ui.TableColumn("Fan")], rows=[ui.TableRow(["front"])]),
+        ui.Chart(
+            title="Speeds", categories=["Mon"], series=[ui.ChartSeries(label="rpm", points=[1])]
+        ),
+        ui.Card(title="Fan"),
+        ui.Cards(cards=[ui.Card(title="Fan")]),
+        ui.Section(title="Fans", blocks=[ui.Divider()]),
+        ui.ImageGallery([ui.Image(url="https://shots.example/rack.png", alternative_text="Rack.")]),
+        _action(label="Archive"),
+    ],
+    ids=["markdown", "table", "chart", "card", "cards", "titled-section", "gallery", "action"],
+)
+def test_a_container_with_a_block_that_it_cannot_hold_shows_its_text_form(block):
+    # A stack in a container holds what the container holds.
+    section = ui.Section(title="Rack 3", blocks=[ui.Divider(), ui.Stack([block])])
+    racks = ui.Section(title="Racks", blocks=[ui.Divider()])
+
+    # Only the message holds markdown. No part of the first section shows as a container.
+    assert get_blocks("text", blocks=[section, racks], token="t") == [
+        {"type": "markdown", "text": section.to_markdown()},
+        {"type": "container", "title": _label("Racks"), "child_blocks": [{"type": "divider"}]},
+    ]
+
+
+def test_a_stack_and_a_section_with_no_title_show_their_blocks_in_order():
+    stack = ui.Stack([_FAN, ui.Markdown("**Loud** fan."), ui.Divider()])
+    section = ui.Section(
+        blocks=[ui.Divider()], controls=[ui.Link("Docs", url="https://docs.example/a")]
+    )
+
+    assert get_blocks("text", blocks=[ui.Markdown("# Review"), stack, section]) == [
+        {"type": "markdown", "text": "# Review"},
+        _FAN_SECTION,
+        {"type": "markdown", "text": "**Loud** fan."},
+        {"type": "divider"},
+        _link_button("Docs", "https://docs.example/a"),
+        {"type": "divider"},
+    ]
+
+
+async def test_only_an_action_at_the_top_of_the_context_goes_out_with_inputs_and_a_button(
+    druks_db, slack
+):
+    set_endpoint("https://druks.example")
+    page = "https://druks.example/runs/run-1"
+    rename = _action(
+        label="Rename", operation="write_note", fields=[ui.TextField(name="title", label="Title")]
+    )
+    table = ui.Table(
+        columns=[ui.TableColumn("Note"), ui.TableColumn("")],
+        rows=[ui.TableRow(["Fan noise", ui.ControlsValue([_action(label="Archive")])])],
+    )
+
+    await deliver(
+        SlackClient(token=_BOT_TOKEN),
+        "C1",
+        "text",
+        session=druks_db,
+        account=None,
+        blocks=_stored(ui.Stack([rename, _form(), table]), rename),
+        token="t",
+    )
+
+    (post,) = slack.posts
+    # Only the action at the top has inputs and a button. They name its position.
+    assert post["blocks"] == [
+        {"type": "markdown", "text": f"[Rename]({page})\n\n### Ship it\n\n[Ship]({page})"},
+        {
+            "type": "data_table",
+            "caption": "Note",
+            "rows": [
+                [{"type": "raw_text", "text": "Note"}, {"type": "raw_text", "text": "—"}],
+                [
+                    {"type": "raw_text", "text": "Fan noise"},
+                    _rich_text({"type": "link", "url": page, "text": "Archive"}),
+                ],
+            ],
+        },
+        {
+            "type": "input",
+            "block_id": "1.title",
+            "label": _label("Title"),
+            "optional": True,
+            "element": {"type": "plain_text_input", "multiline": False},
+        },
+        {
+            "type": "actions",
+            "elements": [
+                {"type": "button", "text": _label("Rename"), "action_id": encode_action("t", 1)}
+            ],
+        },
+    ]
+
+
+async def test_an_approval_s_list_of_four_simple_cards_goes_out_as_a_carousel(druks_db, slack):
+    cards = [
+        ui.Card(
+            title=f"Rack {number}", blocks=[ui.Link("Open", url=f"https://racks.example/{number}")]
+        )
+        for number in range(4)
+    ]
+
+    await deliver(
+        SlackClient(token=_BOT_TOKEN),
+        "C1",
+        "text",
+        session=druks_db,
+        account=None,
+        blocks=_stored(ui.Cards(title="Racks", cards=cards)),
+    )
+
+    (post,) = slack.posts
+    assert post["blocks"] == [
+        {"type": "markdown", "text": "### Racks"},
+        {
+            "type": "carousel",
+            "elements": [
+                {
+                    "type": "card",
+                    "title": _label(f"Rack {number}"),
+                    "actions": [_url_button("Open", f"https://racks.example/{number}")],
+                }
+                for number in range(4)
+            ],
+        },
+    ]
+
+
+@pytest.mark.parametrize(
+    ("count", "types"),
+    [(1, ["carousel"]), (10, ["carousel"]), (11, ["card"] * 11)],
+    ids=["one", "ten", "eleven"],
+)
+def test_a_carousel_takes_1_to_10_cards_and_a_longer_list_shows_each_card(count, types):
+    titles = [f"Rack {number}" for number in range(count)]
+
+    blocks = get_blocks("text", blocks=[ui.Cards(cards=[ui.Card(title=title) for title in titles])])
+
+    assert [block["type"] for block in blocks] == types
+    cards = [card for block in blocks for card in block.get("elements", [block])]
+    assert [card["title"]["text"] for card in cards] == titles
+
+
+def test_a_list_with_a_card_that_a_carousel_cannot_hold_shows_each_card_in_order():
+    holds_text = ui.Card(title="Rack 4", blocks=[ui.Text("Fan noise.")])
+    untitled = ui.Card(blocks=[ui.Text("Fan noise.")])
+    racks = ui.Cards(title="Racks", cards=[ui.Card(title="Rack 3"), holds_text, untitled])
+    shelves = ui.Cards(title="Shelves", empty=ui.EmptyState("No shelves", description="Add one."))
+
+    # An empty list shows its title and its empty state as text, with no carousel.
+    assert get_blocks("text", blocks=[racks, shelves]) == [
+        {"type": "markdown", "text": "### Racks"},
+        {"type": "card", "title": _label("Rack 3")},
+        {"type": "container", "title": _label("Rack 4"), "child_blocks": [_section("Fan noise.")]},
+        {"type": "markdown", "text": "Fan noise.\n\n### Shelves\n\nNo shelves\n\nAdd one."},
+    ]
+
+
+async def test_columns_of_two_blocks_go_out_side_by_side_in_a_layout(druks_db, slack):
+    await deliver(
+        SlackClient(token=_BOT_TOKEN),
+        "C1",
+        "text",
+        session=druks_db,
+        account=None,
+        blocks=_stored(ui.Columns([_FAN, ui.Link("Docs", url="https://docs.example/a")])),
+    )
+
+    (post,) = slack.posts
+    assert post["blocks"] == [
+        {
+            "type": "layout",
+            "label": LAYOUT_LABEL,
+            "rows": [
+                {
+                    "items": [
+                        {"block": _FAN_SECTION},
+                        {"block": _link_button("Docs", "https://docs.example/a")},
+                    ]
+                }
+            ],
+        }
+    ]
+
+
+def test_columns_of_three_share_a_row_and_more_columns_go_one_under_the_other():
+    racks = ui.Section(title="Racks", blocks=[ui.Divider()])
+    links = [ui.Link(f"Log {number}", url=f"https://logs.example/{number}") for number in range(4)]
+
+    three, *four = get_blocks(
+        "text", blocks=[ui.Columns([ui.Card(title="Rack 3"), racks, links[0]]), ui.Columns(links)]
+    )
+
+    assert three["rows"] == [
+        {
+            "items": [
+                {"block": {"type": "card", "title": _label("Rack 3")}},
+                {
+                    "block": {
+                        "type": "container",
+                        "title": _label("Racks"),
+                        "child_blocks": [{"type": "divider"}],
+                    }
+                },
+                {"block": _link_button("Log 0", "https://logs.example/0")},
+            ]
+        }
+    ]
+    assert four == [
+        _link_button(f"Log {number}", f"https://logs.example/{number}") for number in range(4)
+    ]
+
+
+def test_a_carousel_a_data_table_and_a_chart_each_take_a_row_of_the_layout():
+    chart = ui.Chart(
+        title="Speeds", categories=["Mon"], series=[ui.ChartSeries(label="rpm", points=[1])]
+    )
+    table = ui.Table(columns=[ui.TableColumn("Fan")], rows=[ui.TableRow(["front"])])
+    cards = ui.Cards(cards=[ui.Card(title="Rack 3"), ui.Card(title="Rack 4")])
+
+    first, second = get_blocks(
+        "text", blocks=[ui.Columns([_FAN, _FAN, chart]), ui.Columns([cards, table, _FAN])]
+    )
+
+    assert [[item["block"]["type"] for item in row["items"]] for row in first["rows"]] == [
+        ["section", "section"],
+        ["data_visualization"],
+    ]
+    assert [[item["block"]["type"] for item in row["items"]] for row in second["rows"]] == [
+        ["carousel"],
+        ["data_table"],
+        ["section"],
+    ]
+
+
+def test_containers_and_layouts_nest_two_levels_deep_and_a_stack_adds_no_level():
+    layout_of_containers = ui.Columns([ui.Section(title="Rack 3", blocks=[ui.Stack([_FAN])]), _FAN])
+    container_of_layouts = ui.Section(
+        title="Racks", blocks=[ui.Section(blocks=[ui.Columns([_FAN, _FAN])])]
+    )
+    three_levels = ui.Columns([ui.Section(title="Rack 3", blocks=[ui.Columns([_FAN, _FAN])]), _FAN])
+
+    layout, container, text = get_blocks(
+        "text", blocks=[layout_of_containers, container_of_layouts, three_levels]
+    )
+
+    assert layout["rows"][0]["items"][0]["block"] == {
+        "type": "container",
+        "title": _label("Rack 3"),
+        "child_blocks": [_FAN_SECTION],
+    }
+    assert container["child_blocks"] == [
+        {
+            "type": "layout",
+            "label": LAYOUT_LABEL,
+            "rows": [{"items": [{"block": _FAN_SECTION}, {"block": _FAN_SECTION}]}],
+        }
+    ]
+    assert text == {"type": "markdown", "text": three_levels.to_markdown()}
+
+
+def test_columns_with_a_column_of_more_than_one_block_show_their_text_form():
+    two_blocks = ui.Columns([ui.Section(blocks=[_FAN, ui.Divider()]), _FAN])
+
+    layout, text = get_blocks("text", blocks=[ui.Columns([_FAN, _FAN]), two_blocks])
+
+    assert layout["type"] == "layout"
+    assert text == {"type": "markdown", "text": two_blocks.to_markdown()}
+
+
+@pytest.mark.parametrize(
+    ("dividers", "types"),
+    [
+        (4, ["container", "markdown", "markdown", "input", "actions"]),
+        (5, ["markdown", "markdown", "input", "actions"]),
+    ],
+    ids=["room", "no-room"],
+)
+def test_each_block_inside_a_container_takes_room_that_the_approval_leaves(dividers, types):
+    links = [
+        ui.Link(f"Link {number}", url=f"https://docs.example/{number}") for number in range(41)
+    ]
+    section = ui.Section(title="Racks", blocks=[ui.Divider()] * dividers)
+
+    # The question, the note, and the button take a block each. One more stays for the link.
+    blocks = get_blocks(
+        "text",
+        blocks=[*links, section],
+        question="Which rack?",
+        deep_link="https://druks.example/runs/run-1",
+        actions=[_APPROVE],
+        fields=[_NOTE],
+        token="t",
+    )
+
+    assert [block["type"] for block in blocks[41:]] == types
+
+
+def test_a_chart_in_a_layout_takes_a_chart_of_the_message_and_a_text_form_takes_none():
+    series = [ui.ChartSeries(label="rpm", points=[1])]
+    first, second, third = (
+        ui.Chart(title=title, categories=["Mon"], series=series)
+        for title in ("First", "Second", "Third")
+    )
+    # A layout holds no markdown. Its text form takes no room for a chart.
+    refused_columns = ui.Columns([first, ui.Markdown("**Loud** fan.")])
+
+    parts = get_blocks(
+        "text",
+        blocks=[refused_columns, ui.Columns([second, ui.Text("Fan noise.")]), third, first],
+    )
+
+    assert [part["type"] for part in parts] == [
+        "markdown",
+        "layout",
+        "data_visualization",
+        "markdown",
+    ]
+
+
+def test_a_table_in_a_layout_shows_all_of_its_rows_and_one_in_a_text_form_takes_no_room():
+    # With its header, the first table takes 16,000 of the 20,000 characters of the cells.
+    log = ui.Table(columns=[ui.TableColumn("Log")], rows=[ui.TableRow(["x" * 15_997])])
+    fans = ui.Table(
+        columns=[ui.TableColumn("Fan")],
+        rows=[ui.TableRow(["y" * 1_998]), ui.TableRow(["y" * 1_999])],
+    )
+    # The cells of these columns need one character more than the message has left.
+    long_columns = ui.Columns([fans.model_copy(update={"rows": [*fans.rows, ui.TableRow(["z"])]})])
+    refused_columns = ui.Columns([fans, ui.Markdown("**Loud** fan.")])
+
+    data_table, text, layout = get_blocks(
+        "text", blocks=[log, long_columns, refused_columns, ui.Columns([fans])]
+    )
+
+    assert data_table == _data_table("Log", ["Log"], ["x" * 15_997])
+    # Only the top of the message holds the line that says how many rows Druks did not send.
+    assert text == {
+        "type": "markdown",
+        "text": f"{long_columns.to_markdown()}\n\n{refused_columns.to_markdown()}",
+    }
+    assert layout["rows"] == [
+        {"items": [{"block": _data_table("Fan", ["Fan"], ["y" * 1_998], ["y" * 1_999])}]}
+    ]
+
+
+@pytest.mark.usefixtures("tmp_data_dir")
+async def test_a_druks_image_in_a_card_a_container_or_a_layout_goes_up_once_as_a_private_file(
+    druks_db, slack, operator
+):
+    rack, shelf = await _druks_file("rack.png"), await _druks_file("shelf.png")
+    rack_card = ui.Card(title="Rack 3", blocks=[ui.Image(url=rack.url, alternative_text="Rack 3.")])
+    shelf_card = ui.Card(
+        title="Shelf", blocks=[ui.Image(url=shelf.url, alternative_text="The shelf.")]
+    )
+
+    await deliver(
+        SlackClient(token=_BOT_TOKEN),
+        "C1",
+        "text",
+        session=druks_db,
+        account=operator,
+        blocks=_stored(
+            ui.Cards(cards=[rack_card, shelf_card]),
+            ui.Section(title="Racks", blocks=[ui.Image(url=rack.url, alternative_text="Rack 3.")]),
+            ui.Columns([rack_card, ui.Image(url=shelf.url, alternative_text="The shelf.")]),
+        ),
+    )
+
+    # The message shows each image more than once. Each goes up once.
+    assert _list_uploads(slack) == ["rack.png", "shelf.png"]
+    (post,) = slack.posts
+    carousel, container, layout = post["blocks"]
+    assert [card["hero_image"] for card in carousel["elements"]] == [
+        _slack_file_block("F1", "Rack 3."),
+        _slack_file_block("F2", "The shelf."),
+    ]
+    assert container["child_blocks"] == [_slack_file_block("F1", "Rack 3.")]
+    assert [item["block"] for item in layout["rows"][0]["items"]] == [
+        {
+            "type": "card",
+            "title": _label("Rack 3"),
+            "hero_image": _slack_file_block("F1", "Rack 3."),
+        },
+        _slack_file_block("F2", "The shelf."),
+    ]
+
+
+@pytest.mark.usefixtures("tmp_data_dir")
+async def test_a_card_whose_druks_image_does_not_go_up_shows_its_text_form_with_the_link(
+    druks_db, slack, operator
+):
+    set_endpoint("https://druks.example")
+    front, top = await _druks_file("front.png"), await _druks_file("top.png")
+    cards = ui.Cards(
+        cards=[
+            ui.Card(title="Front", blocks=[ui.Image(url=front.url, alternative_text="The front.")]),
+            ui.Card(title="Top", blocks=[ui.Image(url=top.url, alternative_text="The top.")]),
+        ]
+    )
+    slack.upload_refusals = ["ratelimited"]
+
+    await deliver(
+        SlackClient(token=_BOT_TOKEN),
+        "C1",
+        "text",
+        session=druks_db,
+        account=operator,
+        blocks=_stored(cards),
+    )
+
+    (post,) = slack.posts
+    # The list is no carousel. Each of its cards shows on its own.
+    assert post["blocks"] == [
+        {
+            "type": "markdown",
+            "text": f"### Front\n\n[The front.](https://druks.example{front.url})",
+        },
+        {"type": "card", "title": _label("Top"), "hero_image": _slack_file_block("F1", "The top.")},
+    ]
+
+
+@pytest.mark.usefixtures("tmp_data_dir")
+async def test_a_message_uploads_no_druks_image_of_a_block_that_shows_its_text_form(
+    druks_db, slack, operator
+):
+    shown, refused, late = [
+        await _druks_file(name) for name in ("shown.png", "refused.png", "late.png")
+    ]
+    refused_section = ui.Section(
+        title="Rack 3",
+        blocks=[ui.Image(url=refused.url, alternative_text="Rack 3."), ui.Markdown("**Loud**")],
+    )
+    links = [
+        ui.Link(f"Link {number}", url=f"https://docs.example/{number}") for number in range(47)
+    ]
+
+    await deliver(
+        SlackClient(token=_BOT_TOKEN),
+        "C1",
+        "text",
+        session=druks_db,
+        account=operator,
+        blocks=_stored(
+            ui.Card(title="Shown", blocks=[ui.Image(url=shown.url, alternative_text="Shown.")]),
+            refused_section,
+            *links,
+            # The message has no room left for this card.
+            ui.Card(title="Late", blocks=[ui.Image(url=late.url, alternative_text="Late.")]),
+        ),
+    )
+
+    assert _list_uploads(slack) == ["shown.png"]

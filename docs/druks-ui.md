@@ -520,7 +520,9 @@ an `Action`, a `Form`, or a `GateControls`, before it saves the status.
 
 ## Approvals in Slack
 
-At the top of an approval's context, Slack draws these blocks with its own blocks:
+Slack draws these blocks of an approval's context with its own blocks.
+[Cards and groups in Slack](#cards-and-groups-in-slack) says which of them Slack
+draws inside another block:
 
 | Block | In Slack |
 | --- | --- |
@@ -531,6 +533,11 @@ At the top of an approval's context, Slack draws these blocks with its own block
 | `Chart` | A chart of the same kind: line, bar, area, or pie. A line, bar, or area chart has the categories along the axis, in their order. Each series has a point for each category. The category label and the value label are the titles of the axes. A pie has no axes. It has a segment for each category, in their order, with the label of the category and its value. A chart with no title takes its value label as its title. An empty category or series label shows a dash. |
 | `Image` | An image. Slack fetches an image at an outside address. Druks uploads the image of a Druks file to Slack. The alternative text is its alt text. The caption is its title. An image with no caption has no title. |
 | `ImageGallery` | An image for each image of the gallery, in their order. The title of the gallery is a heading above them, as in its text form. A gallery with no title has no heading. |
+| `Card` | A card with its title, its description, its image, and a button for each link. A card that holds other blocks is a container. |
+| `Cards` | A carousel of cards that the person can scroll, under the title of the list. |
+| `Section` | A container under its title. A section with no title shows its blocks in order. |
+| `Columns` | A layout with the columns side by side. |
+| `Stack` | Its blocks, in order. |
 | `Action` | At the top of the context, an input for each of its fields. Under them, a button runs the action as the person who clicks it. See [Actions in Slack](#actions-in-slack). |
 | `Form` | At the top of the context, a form that sends on a button has an input for each of its fields. Under them, it has a button for its action and one for each of its extra actions. See [Actions in Slack](#actions-in-slack). |
 
@@ -652,6 +659,93 @@ Druks edits the message when the approval gets an answer or closes. The edit
 draws the blocks again, with the outcome in place of the buttons. An action and a
 form then show their text forms.
 
+### Cards and groups in Slack
+
+A `Card` that holds only `Link` blocks and one `Image` at most is a card of
+Slack. The card shows the title, the description as its body, and the image as
+its hero image. It has a button for each link: the `link` of the card, each
+`Link` among its blocks, then each `Link` of its controls. The button for the
+`link` of the card shows the title, as in its text form. A card with no title
+shows no button for its `link`.
+
+Any other `Card` is a container. The container shows the title, the
+description as its subtitle, and the blocks of the card. The buttons for the
+`link` of the card and for each `Link` of its controls follow the blocks. A
+`Section` with a title is a container too, under its title. The buttons for the
+`Link` controls of a section come before its blocks.
+
+Slack runs no action of the controls of a card or a section. An `Action` of the
+controls does not show in Slack. The drag of a card and the `drop` action of a
+`Cards` list stay in the dashboard.
+
+A `Cards` list is a carousel when each of its cards is a card of Slack. A
+carousel holds 1 to 10 cards. Otherwise each card of the list shows on its own,
+in order. The card is then a card of Slack, a container, or its text form. The
+title of the list is a heading above the cards. An empty list shows its text
+form: its title and its `empty` state. Each `layout` of a list follows these
+rules: `wrap`, `stack`, and `tiles` show alike.
+
+`Columns` of 3 blocks or fewer are a layout of Slack, with the columns side by
+side, in order. More than 3 columns show one under the other, as a `Stack`
+does. The columns of a layout have the same width for each `layout`: `even`,
+`sidebar`, and `split`. A carousel, a data table, and a chart each take a row
+of the layout. The other columns share a row. A layout holds 3 items in a row
+and 5 rows. Slack requires a label for a layout. Druks gives it the label
+`Columns`, which Slack does not show.
+
+A `Stack` and a `Section` with no title show their blocks in order, in their
+place. The buttons for the `Link` controls of the section come first.
+
+Slack holds only some blocks inside a container or a layout:
+
+- A container holds `Text`, `Facts`, `Metrics`, a `Divider`, a `Link`, an
+  `Image`, and `Columns`. Text is a section of Slack's mrkdwn. Druks escapes
+  `&`, `<`, and `>` in it.
+- An item of a layout holds the same blocks, except `Columns`. It also holds a
+  `Card`, a `Cards` list with no title that is a carousel, a `Section` with a
+  title, a `Table` that selects no rows, and a `Chart`.
+- A `Stack` and a `Section` with no title hold the blocks that their place
+  holds. They add no level.
+- Slack puts a container or a layout in another one 2 levels deep at most.
+- Each column of a layout is one block. A column that shows more than one block
+  makes the columns show their text form. Examples are a stack of two blocks,
+  and `Facts` of more than 10 facts.
+
+A group that holds any other block shows its text form. So does a group with a
+block past a limit of Slack, or a block that Slack cannot draw. The text form is
+a markdown block at the top of the message, in place of the whole group. Slack
+takes no markdown inside a container or a layout. Druks thus shows no part of
+such a group with Slack's blocks.
+
+A group shows its text form past one of these limits of Slack:
+
+- The title of a card of more than 150 characters, a description of more than
+  200 characters, or more than 3 links
+- The title or the subtitle of a container of more than 150 characters, no
+  title, or more than 10 blocks inside
+- Text inside a container or a layout of more than 3,000 characters
+- A table in a layout whose rows do not all fit. Only the top of the message
+  holds the line that says how many rows Druks did not send.
+
+Under a `Card`, a `Cards` list, a `Section`, `Columns`, or a `Stack`, an action
+and a form show their text forms. A cell of a table there shows the text of its
+action. See [Actions in Slack](#actions-in-slack).
+
+Each block inside a container, a carousel, or a layout takes one of the 50
+blocks of a message. When the message has no room for a whole group, the group
+shows its text form in the last block, as other blocks do. A table and a chart
+inside a layout use the room of the message for its data tables and charts. A
+group that shows its text form takes none of that room. Its text counts in the
+12,000 characters of markdown.
+
+The image of a card is its hero image. Slack shows no caption on a hero image.
+Druks uploads the image of a Druks file to Slack for a card, a container, and a
+layout too, with the same checks as for an `Image` block. Each file goes up once
+for a message, however many times the message shows it. Druks uploads no image
+of a group that shows its text form. When Slack cannot show the image of a
+card, the card shows its text form, with the link to the image. A list of cards
+then shows each of its cards on its own.
+
 ### Actions in Slack
 
 An approval in Slack draws an `Action` and a `Form` at the top of the review's
@@ -672,7 +766,9 @@ reply = await self.review(
 ```
 
 An action with no fields that is alone in a cell of a table is a button too. The
-table must be at the top of the context and select no rows.
+table must be at the top of the context and select no rows. A block inside a
+`Card`, a `Cards` list, a `Section`, `Columns`, or a `Stack` is not at the top of
+the context.
 
 The `operation` of each action in the context names a write of the run's own
 app. `review` checks the operation when the run parks, as a page read checks it.
