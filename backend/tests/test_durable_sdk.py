@@ -62,7 +62,7 @@ from druks.secrets.models import VaultSecret
 from druks.settings import Settings, configure_settings, get_settings
 from druks.signals import subscribe
 from druks.teams.models import Team
-from druks.testing import asgi_client, init_db
+from druks.testing import asgi_client, init_db, worker_name
 from druks.user_settings.models import InstallationSettings, SettingsOverride
 from druks.workflows import (
     GATE_TTL_SECONDS,
@@ -87,7 +87,7 @@ from sqlalchemy import NullPool, column, create_engine, delete, func, select, te
 from sqlalchemy.ext.asyncio import create_async_engine
 
 PG_BASE = os.environ.get("DRUKS_TEST_PG", "postgresql://druks:druks@localhost:5432")
-DB = "druks_durable_test"
+DB = worker_name("druks_durable_test")
 URL = f"{PG_BASE.replace('postgresql://', 'postgresql+psycopg://')}/{DB}"
 
 # Each test names its agent. Druks refuses a second agent with the same name.
@@ -222,7 +222,7 @@ async def runtime():
             raise RuntimeError("retry task")
         SINK.append("task:retried")
 
-    @task(every="0 6 * * *")
+    @task(every="0 0 1 1 *")
     async def scheduled_task() -> None:
         SINK.append("task:scheduled")
 
@@ -308,7 +308,7 @@ async def runtime():
             await record_task.enqueue(repo="from-a-body")
 
     class DailySweep(Workflow):
-        every = "0 6 * * *"
+        every = "0 0 1 1 *"
 
         async def run(self) -> None:
             SINK.append("swept")
@@ -1114,7 +1114,7 @@ async def test_a_scheduled_task_runs_its_body_with_no_arguments(runtime):
 async def test_a_scheduled_task_needs_a_default_for_each_parameter(runtime):
     with pytest.raises(WorkflowError, match="Give each parameter a default"):
 
-        @task(every="0 6 * * *")
+        @task(every="0 0 1 1 *")
         async def needs_argument(target: str) -> None: ...
 
     @task(every="0 6 * * *")
@@ -1273,7 +1273,7 @@ async def test_a_scheduled_dispatch_needs_a_default_for_each_parameter(runtime, 
     with pytest.raises(WorkflowError, match="Give each parameter a default"):
 
         class NeedsArgument(Workflow):
-            every = "0 6 * * *"
+            every = "0 0 1 1 *"
 
             async def run(self) -> None: ...
 
@@ -1309,12 +1309,12 @@ async def test_apply_schedules_drops_undeclared(runtime):
 async def test_apply_schedules_resolves_operator_overrides(runtime):
     async with session_scope(runtime.engine) as session:
         await SettingsOverride.set_workflow_setting(
-            session, kind="durable_sdk.daily_sweep", field="schedule", value="0 9 * * *"
+            session, kind="durable_sdk.daily_sweep", field="schedule", value="0 0 2 1 *"
         )
     async with session_scope(runtime.engine) as session:
         await apply_schedules(session)
     schedule = await DBOS.get_schedule_async("durable_sdk.daily_sweep")
-    assert schedule["schedule"] == "0 9 * * *"
+    assert schedule["schedule"] == "0 0 2 1 *"
 
     async with session_scope(runtime.engine) as session:
         await SettingsOverride.set_workflow_setting(
@@ -1328,13 +1328,13 @@ async def test_apply_schedules_resolves_operator_overrides(runtime):
 
     async with session_scope(runtime.engine) as session:
         await SettingsOverride.set_workflow_setting(
-            session, kind="durable_sdk.daily_sweep", field="schedule", value="0 10 * * *"
+            session, kind="durable_sdk.daily_sweep", field="schedule", value="0 0 3 1 *"
         )
     async with session_scope(runtime.engine) as session:
         await apply_schedules(session)
     retuned = await DBOS.get_schedule_async("durable_sdk.daily_sweep")
     assert retuned["status"] == "PAUSED"
-    assert retuned["schedule"] == "0 10 * * *"
+    assert retuned["schedule"] == "0 0 3 1 *"
     assert retuned["schedule_id"] == schedule["schedule_id"]
 
     invocation = await trigger_schedule("durable_sdk.daily_sweep")
@@ -1356,7 +1356,7 @@ async def test_apply_schedules_resolves_operator_overrides(runtime):
     async with session_scope(runtime.engine) as session:
         await apply_schedules(session)
     restored = await DBOS.get_schedule_async("durable_sdk.daily_sweep")
-    assert restored["schedule"] == "0 6 * * *"
+    assert restored["schedule"] == "0 0 1 1 *"
     assert restored["status"] == "ACTIVE"
 
 

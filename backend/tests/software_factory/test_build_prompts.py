@@ -7,7 +7,9 @@ from druks.contrib import software_factory
 from druks.contrib.software_factory.app import SoftwareFactory
 from druks.contrib.software_factory.contracts import (
     CiReport,
+    CommandCheckOutput,
     FindingOutput,
+    ImplementationOutput,
     ReviewReport,
     TriageOutput,
 )
@@ -110,6 +112,27 @@ async def test_generate_plan_prompt_prioritizes_operator_note_over_reviewer_crit
     assert "Before deep code reading" not in prompt
 
 
+async def test_generate_plan_prompt_asks_for_a_change_map_from_files_it_opened():
+    prompt = await _generate_plan_prompt()
+
+    assert "End the plan with a `## Change map`" in prompt
+    assert "never from a guess" in prompt
+    assert "never by line range" in " ".join(prompt.split())
+
+
+async def test_implement_prompt_starts_from_the_plans_change_map():
+    prompt = await render_prompt(
+        "software_factory/build/implement.md",
+        build=_build(),
+        verification="VERIFICATION-BLOCK",
+        workspace=_workspace(),
+        can_resume=False,
+    )
+
+    assert "Start from the change map" in prompt
+    assert "say so in `known_risks`" in prompt
+
+
 async def test_generate_plan_prompt_without_reviewer_notes_omits_critique_instructions():
     prompt = await _generate_plan_prompt(operator_note="keep the existing endpoint")
 
@@ -139,7 +162,7 @@ async def test_verification_profile_renders_ci_provenance_per_command():
         "## Verification profile",
         "",
         "**Lint:**",
-        "- `ruff check .` — CI: `Backend / lint`",
+        "- `ruff check .` (CI job `Backend / lint` runs this too)",
         "**Tests:**",
         "- `pytest`",
     ]
@@ -211,6 +234,88 @@ async def test_implement_prompt_renders_the_prior_review():
     assert "### Round 1 — decision: request_changes" in prompt
     assert "Rename the flag." in prompt
     assert "- **high** The flag keeps its old name. (`app/flags.py:12`)" in prompt
+
+
+def _delivery(**overrides) -> ImplementationOutput:
+    fields = dict(
+        type="result",
+        status="success",
+        base_sha="1a2b3c4d",
+        head_sha="5e6f7a8b",
+        commit_sha="5e6f7a8b",
+        pr_number=7,
+        files_changed=["app/flags.py"],
+        acceptance_results=[],
+        checks=[CommandCheckOutput(command="ruff check .", status="pass", exit_code=0, reason="")],
+        known_risks=["The old flag name stays in the changelog."],
+        summary="Renamed the flag.",
+        workspace_path="/home/agent/work/repo",
+        workspace_retention=None,
+    )
+    return ImplementationOutput(**{**fields, **overrides})
+
+
+async def test_implement_prompt_hands_over_the_previous_round():
+    build = _build()
+    build.journal.add(_delivery())
+
+    prompt = await render_prompt(
+        "software_factory/build/implement.md",
+        build=build,
+        verification="VERIFICATION-BLOCK",
+        workspace=_workspace(),
+    )
+
+    assert "## Your previous round" in prompt
+    assert "You delivered `5e6f7a8b` on this branch." in prompt
+    assert "Renamed the flag." in prompt
+    assert "- `app/flags.py`" in prompt
+    assert "- `ruff check .`: pass" in prompt
+    assert "- The old flag name stays in the changelog." in prompt
+    assert (
+        "The branch may have moved since, so run `git log -1` before you rely on this head."
+        in prompt
+    )
+
+
+async def test_the_previous_round_says_none_for_a_delivery_with_no_files():
+    build = _build()
+    build.journal.add(_delivery(files_changed=[]))
+
+    prompt = await render_prompt(
+        "software_factory/build/implement.md",
+        build=build,
+        verification="VERIFICATION-BLOCK",
+        workspace=_workspace(),
+    )
+
+    assert "**Files changed:** none\n" in prompt
+    assert "**Files changed:**\n" not in prompt
+
+
+async def test_implement_prompt_reads_regions_not_whole_files():
+    prompt = await render_prompt(
+        "software_factory/build/implement.md",
+        build=_build(),
+        verification="VERIFICATION-BLOCK",
+        workspace=_workspace(),
+        can_resume=False,
+    )
+
+    flat = " ".join(prompt.split())
+    assert "Read a region with the Read tool and its line range, not a whole file" in flat
+    assert "only when the plan depends on it" in flat
+
+
+async def test_implement_prompt_has_no_previous_round_on_the_first_round():
+    prompt = await render_prompt(
+        "software_factory/build/implement.md",
+        build=_build(),
+        verification="VERIFICATION-BLOCK",
+        workspace=_workspace(),
+    )
+
+    assert "## Your previous round" not in prompt
 
 
 async def test_implement_prompt_puts_red_ci_ahead_of_older_instructions():

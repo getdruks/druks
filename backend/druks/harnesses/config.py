@@ -1,6 +1,7 @@
 import hashlib
 import json
 from dataclasses import dataclass
+from typing import get_args
 
 from drukbox_sdk import Secret
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +14,7 @@ from druks.secrets.datastructures import Audience
 from druks.secrets.enums import SecretKind
 from druks.secrets.exceptions import MissingSecretError
 from druks.secrets.models import VaultSecret
+from druks.user_settings.datastructures import Effort
 from druks.user_settings.models import InstallationSettings, SettingsOverride
 
 from . import exceptions
@@ -20,6 +22,15 @@ from .base import Harness
 from .models import ProviderCatalog
 from .providers import get_provider, is_registered, provider_label
 from .registry import get_harness
+
+
+def cap_effort(configured: str, requested: str | None) -> str:
+    """The effort a call runs at: ``requested`` when it is below the operator's ``configured``
+    setting, which stays the ceiling. An unknown level raises."""
+    levels = get_args(Effort)
+    if requested and levels.index(requested) < levels.index(configured):
+        return requested
+    return configured
 
 
 @dataclass(frozen=True)
