@@ -722,7 +722,9 @@ verification:
 
 The profiler drafts such a script when a verification command needs a tool that the
 default box lacks, and the repository's page shows the draft with a button to copy
-it. Druks never runs a draft: a person reads it, commits it, and sets `setup`.
+it. It also drafts a start script, for the services and the dependency sync that each
+check needs, and the page shows that below it. Druks never runs a draft: a person reads
+it, commits it, and sets `setup` or `start`.
 
 The script is a path in `.druks/software_factory/`, and Druks reads it from the
 default branch, so a pull request cannot change the sandbox that its own checks
