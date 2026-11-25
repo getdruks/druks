@@ -13,6 +13,8 @@ export interface RepoProfile {
     typecheck_commands?: { command: string; ci_check: string | null }[]
   }
   recommended_skills?: string[]
+  setup_script_draft?: string | null
+  sandbox_template?: string
 }
 
 // Where a repo's profiling stands. Derived here from what the repo carries and

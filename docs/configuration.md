@@ -720,6 +720,10 @@ verification:
     setup: .druks/software_factory/setup.sh
 ```
 
+The profiler drafts such a script when a verification command needs a tool that the
+default box lacks, and the repository's page shows the draft with a button to copy
+it. Druks never runs a draft: a person reads it, commits it, and sets `setup`.
+
 The script is a path in `.druks/software_factory/`, and Druks reads it from the
 default branch, so a pull request cannot change the sandbox that its own checks
 run on. When the repository profiler runs, Druks asks drukbox for a template

@@ -293,6 +293,18 @@ function RepoRow({ projectId, repo }: { projectId: number; repo: ProjectRepo }) 
     ...(repo.profile.verification?.typecheck_commands ?? []),
   ].map((entry) => entry.command))]
   const skills = repo.profile.recommended_skills ?? []
+  // A repo with a template has a setup script already, so the draft has nothing to offer.
+  const setupDraft = repo.profile.sandbox_template ? '' : repo.profile.setup_script_draft ?? ''
+  const [isCopyRefused, setCopyRefused] = useState(false)
+  async function copySetupDraft() {
+    // A page that is not served over HTTPS has no clipboard, and a browser can refuse it.
+    try {
+      await navigator.clipboard.writeText(setupDraft)
+      setCopyRefused(false)
+    } catch {
+      setCopyRefused(true)
+    }
+  }
   const summary = repo.profile.stack_summary ?? ''
   const isLongSummary = summary.length > 280
 
@@ -383,6 +395,17 @@ function RepoRow({ projectId, repo }: { projectId: number; repo: ProjectRepo }) 
               </div>
             )}
             {skills.length > 0 && <div className="pj-profile-line"><h3>Skills</h3><p className="mono">{skills.join(' · ')}</p></div>}
+            {setupDraft && (
+              <div className="pj-profile-line">
+                <h3>Setup</h3>
+                <div>
+                  <p>A draft for the box that checks run on. An agent wrote it from the files of the repo, and Druks never runs it. Read it, then commit it as <code>.druks/software_factory/setup.sh</code> and set <code>verification.sandbox.setup</code> in <code>config.yml</code>.</p>
+                  <pre className="pj-profile-script"><code>{setupDraft}</code></pre>
+                  <button type="button" className="pj-text-button druks-button druks-button--quiet druks-button--compact" onClick={() => void copySetupDraft()}>Copy script</button>
+                  {isCopyRefused && <p className="pj-error" role="alert">The browser refused the copy. Select the script and copy it by hand.</p>}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>

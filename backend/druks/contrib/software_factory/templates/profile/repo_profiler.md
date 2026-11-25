@@ -50,4 +50,19 @@ Skills catalog (name — description):
    repo of the same project that decides whether to clone this one. Name what it owns, for
    example "The public marketing site and its blog", not its stack.
 
-6. Return the structured result. No prose, no preamble.
+6. **Draft the setup script of the check box** as `setup_script_draft`. A check runs on a
+   fresh box that has Ubuntu with `git`, `curl`, Python 3, and Node, and the script installs
+   what the verification commands need beyond that, for example `uv` or a system library.
+   The build runs the script as root with no checkout, no lockfile, and no secret, so it
+   installs tools and never the repo's own dependencies, and it never reads a repo file.
+   Write POSIX `sh` that starts with `#!/bin/sh` and `set -eu`, installs into a place on
+   every user's `PATH` such as `/usr/local/bin`, and pins a version when the repo pins one.
+   The build runs the script once and keeps the disk, so nothing that runs in it is still
+   running when a check starts. It never starts a service or a daemon and never creates
+   data, such as a database, a role, or a schema. When a verification command needs a
+   service, install its packages and write one comment at the top that names the service,
+   because starting it is for a start script that a person adds later.
+   Return null when the box already has everything. A person reads the draft before
+   anyone commits it.
+
+7. Return the structured result. No prose, no preamble.

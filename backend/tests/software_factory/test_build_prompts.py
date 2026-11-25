@@ -421,3 +421,17 @@ async def test_get_for_repo_raises_when_the_repo_was_transferred(druks_db):
     await ProjectRepo.create(project_id=project.id, full_name="czpython/druks")
     with pytest.raises(FatalError, match="renamed or transferred"):
         await ProjectRepo.get_for_repo("clawhaven/druks", raise_on_missing=True)
+
+
+async def test_the_profiler_drafts_a_setup_script_that_starts_no_service_and_creates_no_data():
+    prompt = await render_prompt(
+        "software_factory/profile/repo_profiler.md",
+        repo="acme/api",
+        workspace=_workspace(),
+        skills_catalog=[],
+    )
+
+    assert "`setup_script_draft`" in prompt
+    # The build keeps the disk and nothing in the script runs when a check starts.
+    assert "never starts a service or a daemon and never creates" in prompt
+    assert "starting it is for a start script that a person adds later" in prompt
