@@ -11,6 +11,8 @@ TICKET_TOOLS = (
     "software_factory_update_ticket",
     "software_factory_create_ticket",
 )
+# The steps of a build, in the order that its status shows them.
+BUILD_STEPS = ("Plan", "Implement", "Draft pull request", "Review")
 # A repo with CI registers a check within this long of a push. With none by then, the
 # repo has no CI, and the build goes on as if CI were green.
 CI_REGISTER_SECONDS = 3 * 60
