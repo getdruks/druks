@@ -1,5 +1,6 @@
 import asyncio
 import subprocess
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,7 +20,16 @@ from druks.sandbox import SandboxSecret
 from druks.sandbox.exceptions import ExecFailed
 from druks.sandbox.layout import get_repo_root
 from druks.secrets.models import VaultSecret
-from druks.workspaces import RepoWorkspace, Workspace
+from druks.workspaces import (
+    START_FAILED_OUTPUT_CHARS,
+    START_OUTPUT_CHARS,
+    START_OUTPUT_LINES,
+    START_SCRIPT_FAILED,
+    START_SCRIPT_TIMED_OUT,
+    RepoWorkspace,
+    Workspace,
+    _run_after_start,
+)
 
 _CONFIG = SimpleNamespace(
     harness_class=ClaudeHarness,
@@ -422,3 +432,98 @@ async def test_a_check_in_the_agents_checkout_keeps_its_uncommitted_and_unpushed
     assert " M kept.txt" in result.output
     assert "unpushed change" in result.output
     assert (checkout / "untracked.txt").read_text() == "untracked\n"
+
+
+def _shell(command: str) -> subprocess.CompletedProcess[str]:
+    # What the check box does with the string: its shell runs it.
+    return subprocess.run(
+        command, shell=True, capture_output=True, text=True, timeout=20, stdin=subprocess.DEVNULL
+    )
+
+
+def test_a_check_runs_after_the_start_script_and_shows_its_output():
+    done = _shell(_run_after_start("echo CHECK-RAN", "echo START-RAN\n", 30))
+
+    assert done.returncode == 0
+    assert done.stdout.splitlines() == ["START-RAN", "CHECK-RAN"]
+
+
+def test_a_start_script_that_fails_ends_the_check_with_its_own_code_and_says_so():
+    done = _shell(_run_after_start("echo CHECK-RAN", "echo boom\nexit 3\n", 30))
+
+    assert done.returncode == 3
+    assert "boom" in done.stdout
+    assert f"{START_SCRIPT_FAILED} 3" in done.stderr
+    assert "CHECK-RAN" not in done.stdout
+
+
+def test_a_service_that_the_start_script_leaves_running_does_not_hold_the_check():
+    started = time.monotonic()
+    # The service keeps the output that it inherited. Were that the channel of the check,
+    # the check would wait for the service to exit.
+    done = _shell(_run_after_start("echo CHECK-RAN", "sleep 6 &\n", 30))
+
+    assert done.stdout.strip() == "CHECK-RAN"
+    assert time.monotonic() - started < 5
+
+
+def test_a_check_with_quotes_and_several_lines_runs_as_written_after_the_start_script():
+    command = "cd /tmp\necho 'a  b' \"c\"\npwd"
+
+    done = _shell(_run_after_start(command, "true\n", 30))
+
+    assert done.stdout.splitlines() == ["a  b c", "/tmp"] or done.stdout.splitlines() == [
+        "a  b c",
+        subprocess.run(["pwd", "-P"], cwd="/tmp", capture_output=True, text=True).stdout.strip(),
+    ]
+
+
+def test_a_start_script_that_succeeds_shows_only_the_end_of_its_output():
+    done = _shell(_run_after_start("echo CHECK-RAN", "seq 1 100\n", 30))
+
+    lines = done.stdout.splitlines()
+    assert lines == [str(n) for n in range(101 - START_OUTPUT_LINES, 101)] + ["CHECK-RAN"]
+
+
+def test_a_start_script_that_fails_shows_all_of_its_output():
+    done = _shell(_run_after_start("echo CHECK-RAN", "seq 1 100\nexit 2\n", 30))
+
+    assert done.returncode == 2
+    assert done.stdout.splitlines() == [str(n) for n in range(1, 101)]
+
+
+def test_a_start_script_that_never_ends_is_stopped_on_its_own_time_and_says_so():
+    started = time.monotonic()
+
+    done = _shell(_run_after_start("echo CHECK-RAN", "echo waiting\nsleep 30\n", 1))
+
+    assert done.returncode == 124
+    assert "waiting" in done.stdout
+    assert f"{START_SCRIPT_TIMED_OUT} 1 seconds" in done.stderr
+    assert "CHECK-RAN" not in done.stdout
+    assert time.monotonic() - started < 15
+
+
+def test_a_start_script_that_prints_one_very_long_line_cannot_crowd_out_the_check():
+    done = _shell(_run_after_start("echo CHECK-RAN", "head -c 50000 /dev/zero | tr '\\0' x\n", 30))
+
+    assert done.stdout.splitlines()[-1] == "CHECK-RAN"
+    assert len(done.stdout) <= START_OUTPUT_CHARS + len("CHECK-RAN\n") + 1
+
+
+def test_a_start_script_that_fails_with_a_very_long_line_shows_only_its_end():
+    done = _shell(
+        _run_after_start("echo CHECK-RAN", "head -c 50000 /dev/zero | tr '\\0' x\nexit 2\n", 30)
+    )
+
+    assert done.returncode == 2
+    # The end of the output, and the newline that keeps the line of the failure apart.
+    assert len(done.stdout) <= START_FAILED_OUTPUT_CHARS + 1
+
+
+def test_a_start_script_that_exits_124_by_itself_is_a_failure_and_not_a_timeout():
+    done = _shell(_run_after_start("echo CHECK-RAN", "exit 124\n", 30))
+
+    assert done.returncode == 124
+    assert f"{START_SCRIPT_FAILED} 124" in done.stderr
+    assert START_SCRIPT_TIMED_OUT not in done.stderr

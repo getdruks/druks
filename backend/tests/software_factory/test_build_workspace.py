@@ -15,6 +15,7 @@ from druks.contrib.software_factory.constants import (
     GITHUB_MCP_URL,
     TICKET_TOOLS,
 )
+from druks.contrib.software_factory.exceptions import SandboxSetupMissing
 from druks.contrib.software_factory.models import Project, ProjectRepo
 from druks.contrib.software_factory.policy import (
     RepoPolicy,
@@ -429,3 +430,55 @@ async def test_a_builds_prompt_carries_its_run_id_and_the_checks_of_its_repo(dru
 
     assert context["build"].run_id == "run-77"
     assert context["build"].checks == ("make test", "make lint")
+
+
+START = ".druks/software_factory/start.sh"
+
+
+async def _repo_with_template(monkeypatch, start_body):
+    project = await Project.create(name="Start")
+    repo = await ProjectRepo.create(project_id=project.id, full_name="o/main")
+    await repo.set_profile(baseline={}, effective={"sandbox_template": "template-1"})
+    _sandbox_config(monkeypatch, setup=".druks/software_factory/setup.sh", start=START)
+    fetched = []
+
+    async def fetch_file(*, repo, path):
+        fetched.append((repo, path))
+        return start_body
+
+    monkeypatch.setattr("druks.contrib.software_factory.workflows.fetch_file", fetch_file)
+    return fetched
+
+
+async def test_a_build_starts_its_check_box_with_the_script_of_the_default_branch(
+    druks_db, monkeypatch
+):
+    fetched = await _repo_with_template(monkeypatch, "redis-server --daemonize yes\n")
+
+    box = await BuildWorkspace.get_check_box(SimpleNamespace(repo="o/main"))
+
+    assert box == {"template": "template-1", "start": "redis-server --daemonize yes\n"}
+    assert fetched == [("o/main", START)]
+
+
+async def test_a_start_script_that_the_default_branch_lost_fails_loudly(druks_db, monkeypatch):
+    await _repo_with_template(monkeypatch, None)
+
+    with pytest.raises(SandboxSetupMissing, match=f"o/main has no {START}"):
+        await BuildWorkspace.get_check_box(SimpleNamespace(repo="o/main"))
+
+
+async def test_a_build_with_no_start_script_reads_none(druks_db, monkeypatch):
+    project = await Project.create(name="Plain")
+    repo = await ProjectRepo.create(project_id=project.id, full_name="o/main")
+    await repo.set_profile(baseline={}, effective={"sandbox_template": "template-1"})
+    _sandbox_config(monkeypatch, setup=".druks/software_factory/setup.sh")
+
+    async def fetch_file(*, repo, path):
+        raise AssertionError("no start script is configured, so none is read")
+
+    monkeypatch.setattr("druks.contrib.software_factory.workflows.fetch_file", fetch_file)
+
+    assert await BuildWorkspace.get_check_box(SimpleNamespace(repo="o/main")) == {
+        "template": "template-1"
+    }

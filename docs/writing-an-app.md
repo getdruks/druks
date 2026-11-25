@@ -959,7 +959,10 @@ that names the box as the likely cause.
 `get_check_box(subject)` describes the box that the check runs on. It returns a
 dict, empty by default, with the fields that Druks gives the sandbox when it makes
 the box: `template`, the template that the box forks from, and `env`, the
-variables set on it. Without a `template`, the default image would hold none of the
+variables set on it. It can also carry `start`, the text of a script that Druks runs on
+the box before the command, with the output kept in a file so a service that the script
+leaves running does not hold the check: a script that fails ends the check with its own
+exit code. Without a `template`, the default image would hold none of the
 repo's tools, so Druks makes no box: the command runs in the agent's own checkout,
 on the agent's box, and the agent still ends its turn and gets the result.
 

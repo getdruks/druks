@@ -33,7 +33,10 @@ from druks.workspaces import (
     CHECK_KILL_GRACE_SECONDS,
     CHECK_OUTPUT_CHARS,
     COMMAND_NOT_FOUND_HINT,
+    START_SCRIPT_FAILED,
+    START_SCRIPT_TIMEOUT_SECONDS,
     RepoWorkspace,
+    _run_after_start,
 )
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -297,7 +300,80 @@ async def test_an_env_that_has_no_template_to_ride_on_is_said_not_to_be_set(
     with caplog.at_level("WARNING", logger="druks.workspaces"):
         assert _ask(client, run).status_code == 200
 
-    assert "env of the check box of acme/app is not set" in caplog.text
+    assert "env and the start script of the check box of acme/app are not used" in caplog.text
+
+
+async def test_a_check_on_a_template_runs_after_the_start_script_that_the_box_names(
+    client, account, druks_db, box, monkeypatch
+):
+    async def get_check_box(cls, subject):
+        return {"template": "template-1", "start": "redis-server --daemonize yes\n"}
+
+    monkeypatch.setattr(_Repo, "get_check_box", classmethod(get_check_box))
+    run = await _run(druks_db, account)
+
+    assert _ask(client, run).status_code == 200
+
+    kwargs = box.run_command.await_args.kwargs
+    # The default time of a check is 600 seconds: half of it is the limit of a start.
+    assert kwargs["command"] == _run_after_start(
+        CHECK, "redis-server --daemonize yes\n", START_SCRIPT_TIMEOUT_SECONDS
+    )
+    assert kwargs["template"] == "template-1"
+    assert "start" not in kwargs
+
+
+async def test_a_start_script_gets_half_of_the_time_of_the_check_and_no_more_than_its_limit(
+    client, account, druks_db, box, monkeypatch
+):
+    async def get_check_box(cls, subject):
+        return {"template": "template-1", "start": "true\n"}
+
+    monkeypatch.setattr(_Repo, "get_check_box", classmethod(get_check_box))
+    run = await _run(druks_db, account)
+
+    for seconds in (60, 400, 3600):
+        assert _ask(client, run, timeout_seconds=seconds).status_code == 200
+
+    commands = [call.kwargs["command"] for call in box.run_command.await_args_list]
+    assert commands == [
+        _run_after_start(CHECK, "true\n", 30),
+        _run_after_start(CHECK, "true\n", 200),
+        _run_after_start(CHECK, "true\n", START_SCRIPT_TIMEOUT_SECONDS),
+    ]
+
+
+async def test_the_hint_for_a_missing_tool_is_not_sent_when_the_start_script_failed(
+    client, account, druks_db, box
+):
+    run = await _run(druks_db, account)
+    box.run_command.return_value = SandboxRun(
+        exit_code=127,
+        timed_out=False,
+        output=f"sh: 1: redis-server: not found\n{START_SCRIPT_FAILED} 127\n",
+        duration_seconds=1.0,
+    )
+
+    output = _ask(client, run).json()["output"]
+
+    assert START_SCRIPT_FAILED in output
+    assert COMMAND_NOT_FOUND_HINT not in output
+
+
+async def test_a_start_script_that_has_no_template_to_run_on_is_said_not_to_be_used(
+    client, account, druks_db, box, monkeypatch, caplog
+):
+    async def get_check_box(cls, subject):
+        return {"start": "redis-server --daemonize yes\n"}
+
+    monkeypatch.setattr(_Repo, "get_check_box", classmethod(get_check_box))
+    run = await _run(druks_db, account)
+
+    with caplog.at_level("WARNING", logger="druks.workspaces"):
+        assert _ask(client, run).status_code == 200
+
+    box.run_command.assert_not_awaited()
+    assert "start script of the check box of acme/app are not used" in caplog.text
 
 
 async def test_a_failing_check_answers_with_its_exit_code(client, account, druks_db, box):

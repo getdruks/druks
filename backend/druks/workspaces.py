@@ -1,8 +1,10 @@
 import asyncio
+import base64
 import functools
 import hashlib
 import json
 import logging
+import shlex
 import subprocess
 import time
 from dataclasses import replace
@@ -283,12 +285,62 @@ CHECK_OUTPUT_CHARS = 20_000
 # How long a check that outlived its timeout has to stop on a TERM before it is killed.
 CHECK_KILL_GRACE_SECONDS = 30
 
+# The lines that a check ends with when the start script of its box fails or runs too long.
+START_SCRIPT_FAILED = "The start script of the check box failed with exit code"
+START_SCRIPT_TIMED_OUT = "The start script of the check box timed out after"
+# A start script gets this long, or half of the check's time when that is less, so a start that
+# never ends cannot use the whole budget of the check.
+START_SCRIPT_TIMEOUT_SECONDS = 300
+START_KILL_GRACE_SECONDS = 10
+# How much of the output of a start script the check shows: the last lines, and no more than
+# this many characters, for a script that succeeded; the last characters of one that failed.
+START_OUTPUT_LINES = 20
+START_OUTPUT_CHARS = 2000
+START_FAILED_OUTPUT_CHARS = 6000
+
 # Exit code 127 is the shell's "command not found". On a check box the cause is the box.
 COMMAND_NOT_FOUND_HINT = (
     "Exit code 127 means the shell found no such command. The check box holds only what "
     "the repo's sandbox setup installs. If your change did not touch that tool, the box is "
     "the likely cause: run the command on your own box to confirm."
 )
+
+
+def _run_after_start(command: str, script: str, start_timeout: int) -> str:
+    """``command``, run after ``script`` has run and succeeded. The script's output goes to a
+    file, so a service that it starts in the background holds the file and not the channel of
+    the check, which would wait for it to exit. A script that succeeds shows the end of its
+    output, by lines and by characters, so a long log of installs or a progress bar on one line
+    does not push the output of the check out of what the service keeps. A script that fails
+    or outlives ``start_timeout`` seconds ends the check, with the end of its output, its own
+    exit code and a line that says it was the start script. An exit code of 124 that came
+    sooner than ``start_timeout`` is the script's own, and is a failure like any other."""
+    encoded = base64.b64encode(script.encode()).decode()
+    return "sh -c " + shlex.quote(
+        f"""f=$(mktemp); o=$(mktemp)
+printf %s {encoded} | base64 -d > "$f"
+began=$(date +%s)
+timeout -k {START_KILL_GRACE_SECONDS} {start_timeout} sh "$f" > "$o" 2>&1 < /dev/null
+code=$?
+took=$(( $(date +%s) - began ))
+if [ "$code" -eq 0 ]; then
+  tail -n {START_OUTPUT_LINES} "$o" | tail -c {START_OUTPUT_CHARS}
+else
+  tail -c {START_FAILED_OUTPUT_CHARS} "$o"
+fi
+[ -z "$(tail -c 1 "$o")" ] || echo
+rm -f "$f" "$o"
+if [ "$code" -eq 124 ] && [ "$took" -ge {start_timeout} ]; then
+  echo "{START_SCRIPT_TIMED_OUT} {start_timeout} seconds" >&2
+  exit 124
+fi
+if [ "$code" -ne 0 ]; then
+  echo "{START_SCRIPT_FAILED} $code" >&2
+  exit "$code"
+fi
+{command}
+"""
+    )
 
 
 class RepoWorkspace(Workspace):
@@ -420,14 +472,19 @@ class RepoWorkspace(Workspace):
         the default image, which holds none of the repo's tools, so the command runs in this
         checkout, on the agent's own box."""
         box = await type(self).get_check_box(self.subject)
+        # Druks runs the start script itself, ahead of the command: it is no field of the box.
+        start = box.pop("start", None)
         if "template" not in box:
-            if box.get("env"):
+            if box.get("env") or start:
                 logger.warning(
-                    "the env of the check box of %s is not set: it has no template yet, so the "
-                    "check runs on the agent's box",
+                    "the env and the start script of the check box of %s are not used: it has "
+                    "no template yet, so the check runs on the agent's box",
                     self.subject.repo,
                 )
             return await self._run_check_here(command, timeout_seconds)
+        if start:
+            start_timeout = min(START_SCRIPT_TIMEOUT_SECONDS, max(timeout_seconds // 2, 1))
+            command = _run_after_start(command, start, start_timeout)
         patch = await self.get_diff(binary=True)
         commit = await self.get_base_commit()
         refs = await type(self).get_secret_refs(self.subject)
@@ -455,7 +512,9 @@ class RepoWorkspace(Workspace):
         finally:
             # A caller that is cancelled still revokes, on a session of its own.
             await asyncio.shield(_revoke(identity.id))
-        if result.exit_code == 127:
+        # A start script that is the one missing a tool says so itself: the hint is about the
+        # command of the check, and sends the agent to its own box for nothing.
+        if result.exit_code == 127 and START_SCRIPT_FAILED not in result.output:
             result = replace(result, output=f"{result.output}\n\n{COMMAND_NOT_FOUND_HINT}")
         return result
 
