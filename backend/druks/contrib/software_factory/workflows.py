@@ -206,7 +206,9 @@ class Build(Workflow):
         assignee_email: str | None = None,
         assignee_name: str | None = None,
         blockers: tuple[str, ...] = (),
-    ) -> None:
+    ) -> dict[str, str | int] | None:
+        """Return the pull request that the build delivered. A build that delivers none
+        returns nothing."""
         # Steps read the policy, the profile, the settings, and the blockers, so replay
         # reuses them.
         resolved = await self._load_policy_and_profile()
@@ -224,6 +226,12 @@ class Build(Workflow):
                 await self._report_step("Plan", new_tickets=new_tickets)
             else:
                 await self._implement_phase()
+                repo = (await self.subject).repo
+                return {
+                    "repo": repo,
+                    "pr_number": self.pr_number,
+                    "url": f"https://github.com/{repo}/pull/{self.pr_number}",
+                }
 
     async def _report_step(
         self,

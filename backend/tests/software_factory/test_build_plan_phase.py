@@ -686,6 +686,40 @@ async def test_an_approved_split_reports_its_new_tickets_instead_of_implementing
     ]
 
 
+async def test_a_build_returns_the_pull_request_that_it_delivered(monkeypatch):
+    flow = Build()
+    flow.subject = SimpleNamespace(repo="org/repo")
+    flow.journal = BuildJournal()
+    monkeypatch.setattr(Build, "pr_number", property(lambda self: 42))
+
+    async def load_policy_and_profile():
+        return {"policy": RepoPolicy().model_dump(mode="json"), "profile": {}}
+
+    async def load_settings():
+        return Build.Settings()
+
+    async def load_blockers():
+        return []
+
+    async def plan_phase():
+        return True
+
+    async def implement_phase():
+        return
+
+    flow._load_policy_and_profile = load_policy_and_profile
+    flow._load_settings = load_settings
+    flow._load_blockers = load_blockers
+    flow._plan_phase = plan_phase
+    flow._implement_phase = implement_phase
+
+    assert await flow.run_multistep() == {
+        "repo": "org/repo",
+        "pr_number": 42,
+        "url": "https://github.com/org/repo/pull/42",
+    }
+
+
 async def test_a_split_creates_the_tickets_and_links_then_releases_the_spike(druks_db, monkeypatch):
     keys = {"acme/api": "ENG-2", "acme/web": "ENG-3"}
     calls = []
