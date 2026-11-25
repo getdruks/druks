@@ -251,6 +251,10 @@ class WorkItem(StoredSubject):
     def ref(self) -> str | None:
         return self.branch
 
+    @property
+    def has_open_pr(self) -> bool:
+        return bool(self.pr_number and not self.resolution)
+
     def __str__(self) -> str:
         return f"{self.ticket_key} {self.title}".strip()
 
@@ -286,9 +290,10 @@ class WorkItem(StoredSubject):
         )
         return (await db_session().scalars(statement)).first()
 
-    async def create_branch(self) -> None:
+    async def create_branch(self, *, base: str | None = None) -> str:
         """Create the attempt's branch, so the implementer starts on it and the
-        ``pr.opened`` webhook finds this item. A name GitHub holds gets a number."""
+        ``pr.opened`` webhook finds this item. A name GitHub holds gets a number. Return the
+        commit that the branch starts on."""
         stem = f"agent/{self.ticket_key}"
         if self.source == "github":
             # A GitHub ticket key is ``owner/repo#42``.
@@ -298,8 +303,9 @@ class WorkItem(StoredSubject):
         while await github.has_branch(self.repo, branch):
             number += 1
             branch = f"{stem}-{number}"
-        await github.create_branch(self.repo, branch)
+        tip = await github.create_branch(self.repo, branch, base=base)
         await self.update(branch=branch)
+        return tip
 
     async def start_attempt(self) -> None:
         self.branch = None

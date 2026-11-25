@@ -15,6 +15,20 @@ class GitHubAppNotInstalledError(DruksError):
         self.repo = repo
 
 
+class GitHubMergeConflictError(DruksError):
+    """GitHub could not merge one branch into another."""
+
+
+class GitHubStackError(DruksError):
+    """GitHub refused to put a pull request in a stack, for example because the repo has no
+    stacked pull requests, or because the pull request below it already has one above it.
+    ``status_code`` is GitHub's: 409 means the stack is being changed, and a retry can work."""
+
+    def __init__(self, message: str, *, status_code: int) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
 class GitHubAppNotActiveError(DruksError):
     """The GitHub App has no installation that is not suspended."""
 

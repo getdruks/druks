@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from conftest import connect_service
@@ -12,9 +13,10 @@ from druks.contrib.software_factory.exceptions import (
     TicketBlocked,
     TicketNotRoutable,
 )
-from druks.contrib.software_factory.models import Project, ProjectRepo, Ticket
+from druks.contrib.software_factory.models import Project, ProjectRepo, Ticket, WorkItem
 from druks.contrib.software_factory.ticketing.base import Tracker
 from druks.contrib.software_factory.workflows import Build
+from druks.core.apis.exceptions import GitHubMergeConflictError
 from druks.events.models import Event
 from druks.services.exceptions import ServiceNotConnectedError
 from druks.signals import publish
@@ -210,7 +212,7 @@ async def test_create_branch_takes_a_name_github_does_not_hold(
     async def has_branch(repo, name):
         return name in held
 
-    async def create_branch(repo, name):
+    async def create_branch(repo, name, base=None):
         created.append((repo, name))
 
     async def get_client(repo):
@@ -228,10 +230,18 @@ class _FakeTracker(Tracker):
     """Tickets that block one another, with no HTTP. ``blocking`` holds the tickets the
     Done ticket blocks, and each of them is blocked by ``blocked_by``."""
 
-    def __init__(self, *, blocked_by: dict[str, bool], blocking: dict[str, dict] | None = None):
+    def __init__(
+        self,
+        *,
+        blocked_by: dict[str, bool],
+        blocking: dict[str, dict] | None = None,
+        statuses: dict[str, str] | None = None,
+    ):
         super().__init__(status_names={})
         self.blocked_by = blocked_by
         self.blocking = blocking or {}
+        # The status of each ticket that the fake holds besides the ones that Done blocks.
+        self.statuses = statuses or {}
 
     async def get_ticket(self, key):
         # The Done subscriber takes the blocked tickets from get_blocking, whole.
@@ -244,7 +254,9 @@ class _FakeTracker(Tracker):
         return list(self.blocking.values())
 
     async def get_status_name(self, key):
-        return self.blocking[key]["status"]
+        # Strict: a ticket that the fake does not hold fails, and shows which one was asked.
+        held = {**{key: ticket["status"] for key, ticket in self.blocking.items()}, **self.statuses}
+        return held[key]
 
     async def set_status(self, key, status):
         return
@@ -272,6 +284,22 @@ def _use_tracker(monkeypatch, tracker: Tracker) -> None:
     monkeypatch.setattr(SoftwareFactory, "get_tracker", classmethod(get_tracker))
 
 
+def _use_pull_request(
+    monkeypatch, *, draft: bool = False, state: str = "open", stacks: bool = True
+) -> AsyncMock:
+    """GitHub's answer about the pull request of a blocker, and whether the repo has stacked
+    pull requests."""
+    get_pull_request = AsyncMock(return_value={"state": state, "draft": draft})
+
+    async def get_client(repo):
+        return SimpleNamespace(
+            get_pull_request=get_pull_request, has_stacks=AsyncMock(return_value=stacks)
+        )
+
+    monkeypatch.setattr("druks.contrib.software_factory.workflows.Github.get_client", get_client)
+    return get_pull_request
+
+
 async def test_dispatch_waits_on_an_open_blocker(druks_db, monkeypatch, started) -> None:
     await _connect_github()
     item = await make_test_work_item(repo="o/r", title="t", ticket_key="ACME-20")
@@ -285,6 +313,138 @@ async def test_dispatch_waits_on_an_open_blocker(druks_db, monkeypatch, started)
     [event] = await druks_db.scalars(select(Event))
     assert event.type == "build.waiting"
     assert event.payload["blockers"] == ["ACME-18"]
+
+
+async def test_dispatch_starts_when_the_open_blocker_has_an_open_pr(
+    druks_db, monkeypatch, started
+) -> None:
+    await _connect_github()
+    blocker = await make_test_work_item(repo="o/r", title="t", ticket_key="ACME-40")
+    await blocker.update(pr_number=41)
+    item = await make_test_work_item(repo="o/r", title="t", ticket_key="ACME-42")
+    _use_tracker(monkeypatch, _FakeTracker(blocked_by={"ACME-40": True}))
+    _use_pull_request(monkeypatch)
+
+    await Build.dispatch(ticket=_ticket(item))
+
+    assert started == ["ACME-42"]
+
+
+async def test_dispatch_waits_for_the_merge_in_a_repo_without_stacked_pull_requests(
+    druks_db, monkeypatch, started
+) -> None:
+    """A PR that is not in a stack is never moved to the default branch, so the build would
+    fail after its first delivery. The ticket waits for the merge, as it always did."""
+    await _connect_github()
+    blocker = await make_test_work_item(repo="o/r", title="t", ticket_key="ACME-44")
+    await blocker.update(pr_number=45)
+    item = await make_test_work_item(repo="o/r", title="t", ticket_key="ACME-46")
+    _use_tracker(monkeypatch, _FakeTracker(blocked_by={"ACME-44": True}))
+    _use_pull_request(monkeypatch, stacks=False)
+
+    with pytest.raises(TicketBlocked, match="ACME-44"):
+        await Build.dispatch(ticket=_ticket(item))
+
+    assert started == []
+
+
+async def test_dispatch_waits_on_a_blocker_whose_pr_is_still_a_draft(
+    druks_db, monkeypatch, started
+) -> None:
+    await _connect_github()
+    blocker = await make_test_work_item(repo="o/r", title="t", ticket_key="ACME-36")
+    await blocker.update(pr_number=37)
+    item = await make_test_work_item(repo="o/r", title="t", ticket_key="ACME-38")
+    _use_tracker(monkeypatch, _FakeTracker(blocked_by={"ACME-36": True}))
+    _use_pull_request(monkeypatch, draft=True)
+
+    with pytest.raises(TicketBlocked):
+        await Build.dispatch(ticket=_ticket(item))
+
+    assert started == []
+
+
+async def test_dispatch_waits_on_a_blocker_whose_pr_closed_without_a_merge(
+    druks_db, monkeypatch, started
+) -> None:
+    await _connect_github()
+    blocker = await make_test_work_item(repo="o/r", title="t", ticket_key="ACME-43")
+    await blocker.update(pr_number=44)
+    await blocker.resolve(Resolution.CLOSED, at=datetime.now(UTC))
+    item = await make_test_work_item(repo="o/r", title="t", ticket_key="ACME-45")
+    _use_tracker(monkeypatch, _FakeTracker(blocked_by={"ACME-43": True}))
+
+    with pytest.raises(TicketBlocked):
+        await Build.dispatch(ticket=_ticket(item))
+
+    assert started == []
+
+
+async def test_dispatch_names_every_open_blocker_while_one_of_them_holds_the_ticket(
+    druks_db, monkeypatch, started
+) -> None:
+    await _connect_github()
+    blocker_with_pr = await make_test_work_item(repo="o/r", title="t", ticket_key="ACME-46")
+    await blocker_with_pr.update(pr_number=47)
+    await make_test_work_item(repo="o/r", title="t", ticket_key="ACME-48")
+    item = await make_test_work_item(repo="o/r", title="t", ticket_key="ACME-49")
+    _use_tracker(
+        monkeypatch, _FakeTracker(blocked_by={"ACME-46": True, "ACME-48": True, "ACME-50": True})
+    )
+
+    with pytest.raises(TicketBlocked):
+        await Build.dispatch(ticket=_ticket(item))
+
+    assert started == []
+    [event] = await druks_db.scalars(select(Event))
+    assert event.payload["blockers"] == ["ACME-46", "ACME-48", "ACME-50"]
+
+
+async def _a_blocker_with_a_dependent(monkeypatch):
+    settings = await SoftwareFactory.settings()
+    blocker = await make_test_work_item(
+        repo="o/r", title="t", ticket_key="ACME-51", source=settings.tracker
+    )
+    await blocker.update(branch="agent/ACME-51", pr_number=53)
+    dependent = await make_test_work_item(
+        repo="o/r", title="t", ticket_key="ACME-52", source=settings.tracker
+    )
+    _use_tracker(
+        monkeypatch,
+        _FakeTracker(
+            blocked_by={"ACME-51": True},
+            blocking={"ACME-52": _ticket(dependent, status=settings.trigger_status)},
+        ),
+    )
+    _use_pull_request(monkeypatch)
+    return blocker
+
+
+async def test_a_blockers_pr_leaving_draft_starts_each_ticket_it_blocks(
+    druks_db, monkeypatch, started
+) -> None:
+    await _connect_github()
+    await _a_blocker_with_a_dependent(monkeypatch)
+
+    await publish("pr.ready_for_review", repo="o/r", pr_number=53, payload={"is_fork": False})
+
+    assert started == ["ACME-52"]
+
+
+async def test_a_blockers_pr_opening_starts_no_ticket(druks_db, monkeypatch, started) -> None:
+    await _connect_github()
+    blocker = await _a_blocker_with_a_dependent(monkeypatch)
+    # The PR number is not stored yet, so the opening fills it and announces it.
+    await blocker.update(pr_number=None)
+
+    await publish(
+        "pr.opened",
+        repo="o/r",
+        pr_number=53,
+        payload={"branch": "agent/ACME-51", "base_branch": "main", "is_fork": False},
+    )
+
+    assert started == []
 
 
 async def test_a_done_ticket_starts_each_ticket_it_blocks_at_the_trigger_status(
@@ -427,3 +587,309 @@ async def test_each_blocker_gives_its_merged_pr_or_its_key(druks_db) -> None:
         {"repo": "o/api", "pr_number": 12, "title": "Add the endpoint"},
         {"ticket_key": "ACME-34", "pr_number": None},
     ]
+
+
+async def test_the_blocker_that_the_build_starts_on_carries_its_branch(druks_db) -> None:
+    same_repo = await make_test_work_item(repo="o/r", title="Same", ticket_key="ACME-60")
+    await same_repo.update(branch="agent/ACME-60", pr_number=61)
+    other_repo = await make_test_work_item(repo="o/api", title="Other", ticket_key="ACME-62")
+    await other_repo.update(branch="agent/ACME-62", pr_number=63)
+    build = Build()
+    build.input = Build._run_input_model(blockers=("ACME-60", "ACME-62"), base_ticket="ACME-60")
+    build.subject = await make_test_work_item(repo="o/r", title="t", ticket_key="ACME-64")
+
+    build._blockers = await Build._load_blockers.__wrapped__(build)
+
+    assert build._blockers == [
+        {"repo": "o/r", "pr_number": 61, "title": "Same", "branch": "agent/ACME-60"},
+        {"repo": "o/api", "pr_number": 63, "title": "Other"},
+    ]
+
+
+async def test_create_branch_starts_at_the_given_base_and_gives_the_commit_it_starts_on(
+    druks_db, monkeypatch
+) -> None:
+    item = await make_test_work_item(repo="o/r", title="t", source="linear", ticket_key="ACME-65")
+
+    async def has_branch(repo, name):
+        return False
+
+    async def create_branch(repo, name, base=None):
+        return f"tip of {base}"
+
+    async def get_client(repo):
+        return SimpleNamespace(has_branch=has_branch, create_branch=create_branch)
+
+    monkeypatch.setattr("druks.contrib.software_factory.models.Github.get_client", get_client)
+
+    assert await item.create_branch(base="agent/ACME-60") == "tip of agent/ACME-60"
+
+
+async def test_dispatch_waits_while_several_open_prs_in_its_repo_could_be_its_base(
+    druks_db, monkeypatch, started
+) -> None:
+    await _connect_github()
+    for key, number in (("ACME-66", 67), ("ACME-68", 69)):
+        blocker = await make_test_work_item(repo="o/r", title="t", ticket_key=key)
+        await blocker.update(pr_number=number)
+    item = await make_test_work_item(repo="o/r", title="t", ticket_key="ACME-70")
+    _use_tracker(monkeypatch, _FakeTracker(blocked_by={"ACME-66": True, "ACME-68": True}))
+
+    with pytest.raises(TicketBlocked, match="ACME-66, ACME-68"):
+        await Build.dispatch(ticket=_ticket(item))
+
+    assert started == []
+
+
+async def test_dispatch_waits_on_an_open_pr_in_another_repo(druks_db, monkeypatch, started) -> None:
+    await _connect_github()
+    other_repo_blocker = await make_test_work_item(repo="o/api", title="t", ticket_key="ACME-73")
+    await other_repo_blocker.update(pr_number=74)
+    item = await make_test_work_item(repo="o/r", title="t", ticket_key="ACME-75")
+    _use_tracker(monkeypatch, _FakeTracker(blocked_by={"ACME-73": True}))
+
+    with pytest.raises(TicketBlocked, match="ACME-73"):
+        await Build.dispatch(ticket=_ticket(item))
+
+    assert started == []
+
+
+async def _a_blocker_with_two_dependents(monkeypatch, *, other: dict) -> WorkItem:
+    """A blocker with an open PR, a ticket that it blocks, and the ``other`` ticket that it
+    blocks too."""
+    await _connect_github()
+    blocker = await make_test_work_item(repo="o/r", title="t", ticket_key="ACME-85")
+    await blocker.update(pr_number=86)
+    item = await make_test_work_item(repo="o/r", title="t", ticket_key="ACME-87")
+    _use_tracker(
+        monkeypatch,
+        _FakeTracker(
+            blocked_by={"ACME-85": True},
+            blocking={"ACME-87": _ticket(item), other["identifier"]: other},
+        ),
+    )
+    _use_pull_request(monkeypatch)
+    return item
+
+
+async def test_dispatch_waits_when_its_blocker_blocks_another_ticket_in_its_repo(
+    druks_db, monkeypatch, started
+) -> None:
+    other = await make_test_work_item(repo="o/r", title="t", ticket_key="ACME-88")
+    item = await _a_blocker_with_two_dependents(monkeypatch, other=_ticket(other))
+
+    with pytest.raises(TicketBlocked, match="ACME-85"):
+        await Build.dispatch(ticket=_ticket(item))
+
+    assert started == []
+
+
+async def test_dispatch_waits_when_its_blocker_blocks_a_ticket_that_routes_to_its_repo(
+    druks_db, monkeypatch, started
+) -> None:
+    await make_test_work_item(repo="o/r", title="t", ticket_key="ACME-80")
+    unrouted = {
+        **_ticket(SimpleNamespace(source="linear", ticket_key="ACME-89", title="t")),
+        "project_name": "o/r",
+    }
+    item = await _a_blocker_with_two_dependents(monkeypatch, other=unrouted)
+
+    with pytest.raises(TicketBlocked, match="ACME-85"):
+        await Build.dispatch(ticket=_ticket(item))
+
+    assert started == []
+
+
+async def test_dispatch_starts_when_the_other_ticket_that_its_blocker_blocks_is_in_another_repo(
+    druks_db, monkeypatch, started
+) -> None:
+    other = await make_test_work_item(repo="o/api", title="t", ticket_key="ACME-88")
+    item = await _a_blocker_with_two_dependents(monkeypatch, other=_ticket(other))
+
+    await Build.dispatch(ticket=_ticket(item))
+
+    assert started == ["ACME-87"]
+
+
+async def test_dispatch_waits_for_the_merges_when_two_blockers_have_work_in_its_repo(
+    druks_db, monkeypatch, started
+) -> None:
+    await _connect_github()
+    merged_blocker = await make_test_work_item(repo="o/r", title="t", ticket_key="ACME-76")
+    await merged_blocker.update(pr_number=77)
+    await merged_blocker.resolve(Resolution.MERGED, at=datetime.now(UTC))
+    open_blocker = await make_test_work_item(repo="o/r", title="t", ticket_key="ACME-78")
+    await open_blocker.update(pr_number=79)
+    item = await make_test_work_item(repo="o/r", title="t", ticket_key="ACME-84")
+    _use_tracker(monkeypatch, _FakeTracker(blocked_by={"ACME-78": True, "ACME-76": False}))
+    _use_pull_request(monkeypatch)
+
+    with pytest.raises(TicketBlocked, match="ACME-78"):
+        await Build.dispatch(ticket=_ticket(item))
+
+    assert started == []
+
+
+async def _set_up_a_stack(monkeypatch, *, base: str):
+    """A blocker and a dependent, both with open PRs, and a GitHub client whose PR of the
+    dependent targets ``base`` and is in a stack. The blocker's PR targets main."""
+    settings = await SoftwareFactory.settings()
+    blocker = await make_test_work_item(
+        repo="o/r", title="t", ticket_key="ACME-80", source=settings.tracker
+    )
+    await blocker.update(branch="agent/ACME-80", pr_number=81)
+    dependent = await make_test_work_item(
+        repo="o/r", title="t", ticket_key="ACME-82", source=settings.tracker
+    )
+    await dependent.update(branch="agent/ACME-82", pr_number=83)
+    _use_tracker(
+        monkeypatch,
+        _FakeTracker(
+            blocked_by={},
+            blocking={"ACME-82": _ticket(dependent, status=settings.in_review_status)},
+            statuses={"ACME-80": settings.in_review_status},
+        ),
+    )
+
+    async def list_open_pull_requests(repo, *, base: str) -> list[int]:
+        # GitHub lists the open PRs that target a branch. The dependent's PR targets the
+        # ``base`` of this set-up.
+        return [83] if base == dependent_base else []
+
+    dependent_base = base
+    github = SimpleNamespace(
+        list_open_pull_requests=list_open_pull_requests,
+        get_stack=AsyncMock(return_value={"number": 5}),
+        rebase_branch=AsyncMock(),
+    )
+
+    async def get_client(repo):
+        return github
+
+    monkeypatch.setattr("druks.contrib.software_factory.subscribers.Github.get_client", get_client)
+    return github
+
+
+async def _push_to_the_blocker() -> None:
+    await publish(
+        "pr.synchronized",
+        repo="o/r",
+        pr_number=81,
+        payload={"branch": "agent/ACME-80", "before": "old-tip", "is_fork": False},
+    )
+
+
+async def test_a_push_to_a_blocker_rebases_the_pr_that_targets_its_branch(
+    druks_db, monkeypatch
+) -> None:
+    github = await _set_up_a_stack(monkeypatch, base="agent/ACME-80")
+
+    await _push_to_the_blocker()
+
+    # The dependent was built on the tip that the push replaced.
+    github.rebase_branch.assert_awaited_once_with(
+        "o/r", "agent/ACME-82", onto="agent/ACME-80", since="old-tip"
+    )
+    [event] = await druks_db.scalars(select(Event).where(Event.type == "build.base_updated"))
+    assert event.payload == {"blocker": "ACME-80"}
+
+
+async def test_a_push_to_a_blocker_leaves_a_pr_that_targets_another_branch(
+    druks_db, monkeypatch
+) -> None:
+    github = await _set_up_a_stack(monkeypatch, base="main")
+
+    await _push_to_the_blocker()
+
+    github.rebase_branch.assert_not_awaited()
+
+
+async def test_a_push_to_a_blocker_leaves_a_pr_that_has_not_joined_the_stack(
+    druks_db, monkeypatch
+) -> None:
+    """Its build moves it when it joins: an earlier push can have left its branch on a tip
+    that is not the one this push replaced."""
+    github = await _set_up_a_stack(monkeypatch, base="agent/ACME-80")
+    github.get_stack.return_value = None
+
+    await _push_to_the_blocker()
+
+    github.rebase_branch.assert_not_awaited()
+
+
+async def test_a_conflicting_update_stops_the_dependent_build_with_a_reason(
+    druks_db, monkeypatch
+) -> None:
+    github = await _set_up_a_stack(monkeypatch, base="agent/ACME-80")
+    github.rebase_branch.side_effect = GitHubMergeConflictError("o/r: agent/ACME-82")
+    dependent = await WorkItem.get_for_ticket_key(source="linear", ticket_key="ACME-82")
+    run = await seed_build_run(druks_db, work_item_id=dependent.id, state="running")
+
+    await _push_to_the_blocker()
+
+    await druks_db.refresh(run)
+    assert run.failure == (
+        "merge conflict with ACME-80 (#81), whose branch agent/ACME-80 has new commits"
+    )
+
+
+async def test_an_edited_pr_wakes_the_build_that_waits_on_its_base(druks_db, monkeypatch) -> None:
+    await _set_up_a_stack(monkeypatch, base="agent/ACME-80")
+    answer = AsyncMock()
+    monkeypatch.setattr(Build, "answer", answer)
+
+    await publish("pr.edited", repo="o/r", pr_number=83, payload={"is_fork": False})
+
+    [call] = answer.await_args_list
+    item, topic = call.args
+    assert (item.ticket_key, topic, call.kwargs) == ("ACME-82", "pr.changed", {"action": "moved"})
+
+
+async def test_a_review_wakes_the_build_that_waits_for_its_blocker(druks_db, monkeypatch) -> None:
+    await _set_up_a_stack(monkeypatch, base="agent/ACME-80")
+    answer = AsyncMock()
+    monkeypatch.setattr(Build, "answer", answer)
+
+    await publish(
+        "pr.review_submitted",
+        repo="o/r",
+        pr_number=83,
+        payload={
+            "branch": "agent/ACME-82",
+            "action": "request_changes",
+            "reviewer": "paulo",
+            "author_can_write": True,
+            "body": "Rename it.",
+            "is_latest_commit": True,
+        },
+    )
+
+    [call] = answer.await_args_list
+    item, topic = call.args
+    assert (item.ticket_key, topic, call.kwargs) == (
+        "ACME-82",
+        "pr.changed",
+        {"action": "request_changes", "reviewer": "paulo", "body": "Rename it."},
+    )
+
+
+async def _blocker_pr_closes_without_a_merge() -> None:
+    await publish(
+        "pr.closed",
+        repo="o/r",
+        pr_number=81,
+        payload={"branch": "agent/ACME-80", "merged": False, "resolved_at": datetime.now(UTC)},
+    )
+
+
+async def test_a_blocker_closed_without_a_merge_stops_the_builds_of_the_tickets_it_blocks(
+    druks_db, monkeypatch
+) -> None:
+    await _set_up_a_stack(monkeypatch, base="agent/ACME-80")
+    dependent = await WorkItem.get_for_ticket_key(source="linear", ticket_key="ACME-82")
+    run = await seed_build_run(druks_db, work_item_id=dependent.id, state="running")
+
+    await _blocker_pr_closes_without_a_merge()
+
+    await druks_db.refresh(run)
+    assert run.failure == "ACME-80 (#81) closed without a merge"

@@ -13,7 +13,9 @@ from druks.contrib.software_factory.contracts import (
 )
 from druks.contrib.software_factory.enums import HumanFeedbackAction, Resolution, ReviewDecision
 from druks.contrib.software_factory.models import ProjectRepo, WorkItem
+from druks.contrib.software_factory.ticketing.base import Tracker
 from druks.contrib.software_factory.ticketing.enums import TicketStatus
+from druks.core.apis.exceptions import GitHubMergeConflictError, GitHubStackError
 from druks.core.services import Github
 from druks.db import db_session
 from druks.mcp.inbound import get_druks_mcp_server
@@ -22,15 +24,19 @@ from druks.sandbox.layout import get_related_root, get_work_root
 from druks.services.exceptions import ServiceNotConnectedError
 from druks.settings import get_settings
 from druks.skills.models import Skill
-from druks.workflows import FatalError, Workflow, step
+from druks.workflows import FatalError, WaitTimeout, Workflow, step
 from druks.workspaces import RepoWorkspace
 
 from .app import SoftwareFactory
 from .constants import (
+    BLOCKER_POLL_SECONDS,
+    BLOCKER_TTL_SECONDS,
     CI_POLL_SECONDS,
     CI_TTL_SECONDS,
     GITHUB_MCP_NAME,
     GITHUB_MCP_URL,
+    MERGE_POLL_SECONDS,
+    STACK_RETRY_SECONDS,
     TICKET_TOOLS,
 )
 from .datastructures import PullRequest
@@ -102,6 +108,12 @@ class Build(Workflow):
     workspace_class = BuildWorkspace
     journal_class = BuildJournal
     journal: BuildJournal
+    # The branch that the build starts on: its blocker's, or None for the default branch.
+    _base_branch: str | None = None
+    # The blocker's PR, and the commit that the build's branch sits on: the one it was cut
+    # from, or the tip that the build last moved it onto.
+    _base_pr_number: int | None = None
+    _base_tip: str | None = None
 
     class Settings(BaseModel):
         plan_gate: PlanGate = Field(
@@ -183,12 +195,16 @@ class Build(Workflow):
             raise
         account_id = None
         blockers = {}
+        base_blocker = None
         if tracker := await SoftwareFactory.get_tracker():
             async with tracker:
                 blockers = await tracker.get_blocked_by(ticket["identifier"])
-                if open_blockers := [key for key, is_open in blockers.items() if is_open]:
-                    await item.announce("build.waiting", blockers=open_blockers)
-                    raise TicketBlocked(ticket["identifier"], open_blockers)
+                open_blockers = [key for key, is_open in blockers.items() if is_open]
+                if open_blockers:
+                    base_blocker = await cls._get_blocker_to_build_on(item, blockers, tracker)
+                    if not base_blocker:
+                        await item.announce("build.waiting", blockers=open_blockers)
+                        raise TicketBlocked(ticket["identifier"], open_blockers)
                 account_id = await tracker.get_account_id(ticket["assignee_id"])
         return await cls.start(
             subject=item,
@@ -196,13 +212,56 @@ class Build(Workflow):
             assignee_email=ticket["assignee_email"],
             assignee_name=ticket["assignee_name"],
             blockers=list(blockers),
+            base_ticket=base_blocker.ticket_key if base_blocker else None,
         )
+
+    @classmethod
+    async def _get_blocker_to_build_on(
+        cls, item: WorkItem, blockers: dict[str, bool], tracker: Tracker
+    ) -> WorkItem | None:
+        """The blocker whose branch the ticket starts on, or None. That blocker's PR
+        is out of draft, and no other blocker has work in this repo: a branch holds the
+        change of one blocker, and a blocker that merged is not on another's branch. The
+        ticket is also the only one in this repo that the blocker blocks: a stack is a line,
+        so one dependent builds on the blocker's branch. The build takes the blocker as an input,
+        so that one decision serves every later read of the base."""
+        in_repo = []
+        for key in blockers:
+            blocker = await WorkItem.get_for_ticket_key(source=item.source, ticket_key=key)
+            if blocker and blocker.repo == item.repo:
+                in_repo.append(blocker)
+        open_keys = [key for key, is_open in blockers.items() if is_open]
+        blocker = in_repo[0] if len(in_repo) == 1 else None
+        if blocker and blocker.has_open_pr and open_keys == [blocker.ticket_key]:
+            for ticket in await tracker.get_blocking(blocker.ticket_key):
+                if ticket["identifier"] == item.ticket_key:
+                    continue
+                dependent = await WorkItem.get_for_ticket_key(
+                    source=ticket["source"], ticket_key=ticket["identifier"]
+                )
+                if dependent:
+                    dependent_repo = dependent.repo
+                else:
+                    project_repo = await ProjectRepo.lookup(
+                        project_name=ticket["project_name"], labels=ticket["labels"]
+                    )
+                    dependent_repo = project_repo.full_name if project_repo else None
+                if dependent_repo == item.repo:
+                    return
+            github = await Github.get_client(item.repo)
+            # A PR that is not in a stack is never moved to the default branch, so without
+            # stacks the ticket waits for the merge.
+            if await github.has_stacks(item.repo):
+                pull_request = await github.get_pull_request(item.repo, blocker.pr_number)
+                if pull_request["state"] == "open" and not pull_request["draft"]:
+                    return blocker
 
     async def run_multistep(
         self,
         assignee_email: str | None = None,
         assignee_name: str | None = None,
         blockers: tuple[str, ...] = (),
+        base_ticket: str | None = None,
     ) -> None:
         # Steps read the policy, the profile, the settings, and the blockers, so replay
         # reuses them.
@@ -211,6 +270,9 @@ class Build(Workflow):
         self._profile = resolved["profile"]
         self._settings = await self._load_settings()
         self._blockers = await self._load_blockers()
+        base = next((blocker for blocker in self._blockers if "branch" in blocker), None)
+        self._base_branch = base and base["branch"]
+        self._base_pr_number = base and base["pr_number"]
 
         if await self._plan_phase():
             if self.journal.plan.tickets:
@@ -237,6 +299,7 @@ class Build(Workflow):
                 db_session(), self._profile.get("recommended_skills", [])
             ),
             blockers=self._blockers,
+            base_branch=self._base_branch,
             journal=self.journal,
         )
         return {
@@ -264,15 +327,17 @@ class Build(Workflow):
 
     @step
     async def _load_blockers(self) -> list[dict]:
-        """Each blocker's ticket key, or its merged PR when Druks built it."""
-        source = (await self.subject).source
+        """Each blocker's ticket key, or its PR when Druks built it. The blocker that the
+        build starts on carries its branch."""
+        subject = await self.subject
         blockers = []
         for key in self.input.blockers:
-            item = await WorkItem.get_for_ticket_key(source=source, ticket_key=key)
-            if item and item.resolution == Resolution.MERGED:
-                blockers.append(
-                    {"repo": item.repo, "pr_number": item.pr_number, "title": item.title}
-                )
+            item = await WorkItem.get_for_ticket_key(source=subject.source, ticket_key=key)
+            if item and (item.resolution == Resolution.MERGED or item.has_open_pr):
+                blocker = {"repo": item.repo, "pr_number": item.pr_number, "title": item.title}
+                if key == self.input.base_ticket and item.has_open_pr:
+                    blocker["branch"] = item.branch
+                blockers.append(blocker)
             else:
                 blockers.append({"ticket_key": key, "pr_number": None})
         return blockers
@@ -353,17 +418,28 @@ class Build(Workflow):
         await spike.release_ticket()
 
     async def _implement_phase(self) -> None:
-        await self._create_branch()
+        # The blocker may have merged since the build was chosen, and then the branch starts
+        # on the default branch.
+        if self._base_branch and not await self._is_base_open():
+            self._base_branch = None
+        self._base_tip = await self._create_branch(self._base_branch)
         while True:
             previous_delivery = self.journal.last_implementation
             delivery = await self.implement()
+            if not previous_delivery and self._base_branch:
+                await self._join_stack()
             can_revise = (
                 self.journal.implementation_revision < self._settings.max_implementation_revisions
             )
             # The implementer pushes nothing when no red check is its diff's, and CI on
             # that head has already been read.
             if not previous_delivery or delivery.head_sha != previous_delivery.head_sha:
-                ci_report = await self._wait_for_ci(delivery.head_sha)
+                # A rebase onto the blocker gives the PR a head that the implementer did not
+                # deliver, so a build on a blocker waits for the checks of the PR's head.
+                if self._base_pr_number:
+                    ci_report = await self._wait_for_checks_of_the_head()
+                else:
+                    ci_report = await self._wait_for_ci(delivery.head_sha)
                 if ci_report.conclusion == "red" and can_revise:
                     continue
             review = await self._review_work()
@@ -446,8 +522,18 @@ class Build(Workflow):
     async def _approved_work(self) -> bool:
         # GitHub announces the merge. The pr.closed reaction stores the result.
         if self._policy.on_approval == "merge":
-            if await self.declare_merge_intent():
+            if await self._wait_for_blocker_merge():
+                return await self._triage()
+            # GitHub merges a stacked PR when the checks that its base requires pass, and a
+            # rebase after a merge below gives it a new head. Wait for the checks of the
+            # head, then ask GitHub to merge: GitHub decides. A red result that GitHub
+            # refuses goes to the implementer, as in the implement loop.
+            stacked = await self._is_stacked()
+            ci_report = await self._wait_for_checks_of_the_head() if stacked else None
+            if await self.declare_merge_intent(stacked=stacked):
                 return True
+            if ci_report and ci_report.conclusion == "red":
+                return False
             logger.warning(
                 "GitHub did not accept the merge of %s#%s. The work parks for review again.",
                 (await self.subject).repo,
@@ -456,6 +542,56 @@ class Build(Workflow):
             return await self._work_gate()
         await self._clear_draft()
         return True
+
+    async def _wait_for_checks_of_the_head(self) -> CiReport:
+        """The verdict on the PR's head. GitHub moves a stacked PR before it rebases the
+        others, so the head can be the old one while the wait ends. Read it again after the
+        wait, and wait again when it moved."""
+        head_sha = await self._read_head_sha()
+        while True:
+            ci_report = await self._wait_for_ci(head_sha)
+            current = await self._read_head_sha()
+            if current == head_sha:
+                return ci_report
+            head_sha = current
+
+    async def _wait_for_blocker_merge(self) -> bool:
+        """Wait until the PR no longer targets a blocker's branch. GitHub merges a stacked PR
+        together with every open PR below it, so a merge now would merge the blocker without
+        its own approval, or put the ticket's code on the blocker's branch and not on the
+        default branch. GitHub moves the PR to the base the blocker merged into. Return True
+        when a person asked for changes meanwhile: that review goes to triage, as at the
+        gate."""
+        if self._base_branch:
+            started_at = await self._now()
+            while await self._targets_blocker_branch():
+                if await self._now() - started_at > BLOCKER_TTL_SECONDS:
+                    raise FatalError(f"{self._base_branch} did not merge in time")
+                try:
+                    answer = await self.wait(
+                        "pr.changed",
+                        label="Waiting for its blocker to merge",
+                        ttl_seconds=BLOCKER_POLL_SECONDS,
+                    )
+                except WaitTimeout:
+                    continue
+                if answer["action"] == "request_changes":
+                    self.journal.add(
+                        ReviewWork(
+                            action="request_changes",
+                            reviewer=answer["reviewer"],
+                            body=answer["body"],
+                        )
+                    )
+                    return True
+        return False
+
+    @step(retries=3)
+    async def _targets_blocker_branch(self) -> bool:
+        repo = (await self.subject).repo
+        github = await Github.get_client(repo)
+        pull_request = await github.get_pull_request(repo, self.pr_number)
+        return pull_request["base"]["ref"] == self._base_branch
 
     async def _triage(self) -> bool:
         feedback = await SoftwareFactory.triage_human_feedback()
@@ -480,17 +616,155 @@ class Build(Workflow):
         return delivery
 
     @step
-    async def _create_branch(self) -> None:
+    async def _create_branch(self, base: str | None) -> str:
+        """Create the branch, and return the commit that it starts on."""
         # Replay keeps the branch: GitHub holds it, and a second pass would create the
         # next number.
-        await (await self.subject).create_branch()
+        return await (await self.subject).create_branch(base=base)
+
+    async def _is_base_open(self) -> bool:
+        """Whether the blocker's PR is open. When it is not, it merged: a PR that closed
+        without a merge fails the build, because the blocker's change is then on no branch
+        that the build can take."""
+        state = await self._read_base_state()
+        if state == "closed":
+            raise FatalError(
+                f"{self.input.base_ticket} (#{self._base_pr_number}) closed without a merge"
+            )
+        return state == "open"
+
+    @step(retries=3)
+    async def _read_base_state(self) -> str:
+        """``open``, ``merged``, or ``closed`` for a PR that closed without a merge."""
+        repo = (await self.subject).repo
+        github = await Github.get_client(repo)
+        pull_request = await github.get_pull_request(repo, self._base_pr_number)
+        return "merged" if pull_request["merged"] else pull_request["state"]
+
+    async def _join_stack(self) -> None:
+        """Put the build's PR in the stack of its blocker's, while the blocker's PR is open.
+        GitHub never moves a PR that is not in the stack, so a refusal fails the build with
+        GitHub's reason. When the blocker has merged, the PR moves onto the default branch
+        instead."""
+        while await self._is_base_open():
+            self._base_tip = await self._rebase_onto_blocker()
+            refusal = await self._stack_on_blocker()
+            if not refusal:
+                # A push to the blocker between the two calls moved no PR: until a PR is in
+                # the stack, only its build moves it.
+                await self._rebase_onto_blocker()
+                return
+            # GitHub answers 409 while it changes the stack, after a merge below.
+            if refusal["status_code"] == 409:
+                await self.sleep(
+                    STACK_RETRY_SECONDS, label="Waiting for GitHub to change the stack"
+                )
+            elif await self._is_base_open():
+                raise FatalError(
+                    f"the PR cannot join the stack of {self._base_branch}: {refusal['message']}"
+                )
+        await self._move_to_default_branch()
+        self._base_branch = None
 
     @step
-    async def declare_merge_intent(self) -> bool:
-        """Whether GitHub accepted ownership of the merge."""
+    async def _rebase_onto_blocker(self) -> str:
+        """Move the branch onto the tip of the blocker's branch, and return that tip. The
+        blocker can change before this build's PR is in the stack, and nothing else moves the
+        branch then. GitHub merges a stack only when its history is linear."""
+        subject = await self.subject
+        github = await Github.get_client(subject.repo)
+        try:
+            return await github.rebase_branch(
+                subject.repo, subject.branch, onto=self._base_branch, since=self._base_tip
+            )
+        except GitHubMergeConflictError as error:
+            raise FatalError(
+                f"the PR conflicts with {self._base_branch}, which has new commits: {error}"
+            ) from error
+
+    @step
+    async def _move_to_default_branch(self) -> None:
+        """Put the PR's one commit on the default branch, which holds the blocker's change
+        now, and make that branch the PR's base."""
+        subject = await self.subject
+        github = await Github.get_client(subject.repo)
+        default_branch = (await github.get_repository(subject.repo))["default_branch"]
+        try:
+            await github.rebase_branch(
+                subject.repo, subject.branch, onto=default_branch, since=self._base_tip
+            )
+        except GitHubMergeConflictError as error:
+            raise FatalError(
+                f"the PR conflicts with {default_branch}, which holds {self._base_branch}"
+                f" now: {error}"
+            ) from error
+        await github.update_pull_request_base(subject.repo, self.pr_number, base=default_branch)
+
+    @step
+    async def _stack_on_blocker(self):
+        """GitHub's refusal, or None. It comes back as data: DBOS replaces the error of a step
+        that failed its retries with its own, and the build needs GitHub's status and reason."""
+        repo = (await self.subject).repo
+        github = await Github.get_client(repo)
+        try:
+            await github.stack_on(repo, self.pr_number, below=self._base_pr_number)
+        except GitHubStackError as error:
+            return {"status_code": error.status_code, "message": str(error)}
+
+    async def declare_merge_intent(self, *, stacked: bool) -> bool:
+        """Whether GitHub accepted ownership of the merge. GitHub merges a stacked PR in the
+        background and says it may take a few minutes, so the run asks again, with a durable
+        sleep between the asks, until the merge is no longer pending."""
+        if not stacked:
+            return await self._merge_when_ready()
+        merge = await self._request_stacked_merge()
+        while merge["status"] == "pending":
+            await self.sleep(MERGE_POLL_SECONDS, label="Waiting for GitHub to merge")
+            merge = await self._read_stacked_merge(merge["details"]["uuid"])
+        if merge["status"] == "failed":
+            logger.warning(
+                "GitHub did not merge %s#%s: %s",
+                (await self.subject).repo,
+                self.pr_number,
+                merge["details"]["message"],
+            )
+            return False
+        # Merged or queued: GitHub announces the merge.
+        return True
+
+    @step
+    async def _merge_when_ready(self) -> bool:
         repo = (await self.subject).repo
         github = await Github.get_client(repo)
         return await github.merge_when_ready(repo, self.pr_number)
+
+    @step(retries=3)
+    async def _read_head_sha(self) -> str:
+        repo = (await self.subject).repo
+        github = await Github.get_client(repo)
+        return (await github.get_pull_request(repo, self.pr_number))["head"]["sha"]
+
+    @step(retries=3)
+    async def _is_stacked(self) -> bool:
+        repo = (await self.subject).repo
+        github = await Github.get_client(repo)
+        pull_request = await github.get_pull_request(repo, self.pr_number)
+        return pull_request["state"] != "closed" and bool(
+            await github.get_stack(repo, self.pr_number)
+        )
+
+    # A replay finds the merge that it asked for and does not ask for a second one.
+    @step
+    async def _request_stacked_merge(self):
+        repo = (await self.subject).repo
+        github = await Github.get_client(repo)
+        return await github.request_stacked_merge(repo, self.pr_number)
+
+    @step(retries=3)
+    async def _read_stacked_merge(self, uuid: str):
+        repo = (await self.subject).repo
+        github = await Github.get_client(repo)
+        return await github.read_stacked_merge(repo, self.pr_number, uuid)
 
     # The PR comes from the first delivery. Before it, this is None. Rework deliveries
     # reuse the PR, so a later delivery with another value must not change this read.

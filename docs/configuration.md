@@ -799,11 +799,52 @@ the ticket.
 On Jira, a blocker is an issue link of
 the Blocks type, and it is open until its status category is Done. On the
 **druks** board, a blocker is a ticket in the **Blocked by** field, and it is
-open until it is Done. When a blocker moves to the done status, Druks reads
-each ticket that it blocks. A ticket at the trigger status with no other open
-blocker starts its build. On the board, a ticket at the trigger status also
-starts its build when an edit of **Blocked by** leaves it no open blocker. No
-person starts that build, so it uses the account of the ticket assignee.
+open until it is Done. A blocker whose pull request is out of draft does not
+hold the ticket, when no other blocker holds the ticket and two more things are
+true. The blocker is the only blocker of the ticket in the ticket's repository.
+The ticket is the only ticket in that repository that the blocker blocks. A
+blocker in another repository holds the ticket until it is done. When a
+blocker's pull request comes out of draft, or when the blocker moves to the done
+status, Druks reads each ticket that it blocks. A ticket at the trigger status
+with no other open blocker starts its build. On the board, a ticket at the
+trigger status also starts its build when an edit of **Blocked by** leaves it no
+open blocker. No person starts that build, so it uses the account of the ticket
+assignee.
+
+A build that starts on a blocker's open pull request works on the branch of that
+pull request and opens its pull request against that branch. A branch holds the
+change of one blocker, so a ticket with a second blocker in its repository waits
+until the blockers have merged. A stack is a line, so a blocker that blocks two
+tickets in one repository makes both wait until it has merged. If the blocker
+has merged by the time the build creates its branch, the build starts on the
+default branch.
+
+A chain needs GitHub's stacked pull requests, which are a preview. Druks asks
+GitHub whether the repository has them. In a repository without them, a ticket
+waits until its blocker has merged. A chain merges only with
+`on_approval: merge`. With the default, the build ends at the approval, and a
+person merges.
+
+The build adds its pull request to the stack of the pull request below it. When
+the pull request below merges, GitHub moves the next one to the branch that it
+merged into. GitHub merges a stack only when its history is linear. So when a
+change reaches the pull request below, Druks force-pushes the branch of each
+pull request above it. That folds the commits of the branch into one and keeps
+the last message. If the change cannot apply, that ticket's build stops, and its
+pull request stays as it is. When a blocker's pull request closes without a
+merge, the builds of the tickets that it blocks stop.
+
+When a person approves a pull request that has another below it, Druks waits for
+the pull request below to merge, then for the checks to finish on the new head,
+and then asks GitHub to merge. GitHub decides. If it refuses and the checks are
+red, the work goes back to the implementer. A review that asks for changes in
+the meantime goes to triage, as it does at the review gate. Changes on a pull
+request below start no second agent review of the ones above: GitHub runs their
+checks again.
+
+A chain builds each ticket on code that no person has approved yet. Keep
+`gates.implementation_approval` at its default, `human`, for a repository that
+builds chains, so that a person approves each pull request.
 
 On Linear, the planner can split a ticket whose work needs more than one pull
 request. It proposes one ticket for each repository, with the "blocked by" links

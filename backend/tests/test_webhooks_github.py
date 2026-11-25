@@ -20,6 +20,8 @@ def _events(tmp_path, *, payload):
 def _pull_request(*, action):
     return {
         "action": action,
+        # A push says which head it replaced. Only a synchronize delivery has it.
+        "before": "9e8d7c6b",
         "repository": {"full_name": "acme/widget"},
         "pull_request": {
             "number": 12,
@@ -190,6 +192,7 @@ async def test_a_pull_request_action_publishes_its_fact(
                     "draft": False,
                     "author": "octocat",
                     "author_can_write": True,
+                    **({"before": "9e8d7c6b"} if action == "synchronize" else {}),
                 },
             },
         )

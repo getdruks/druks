@@ -197,7 +197,9 @@ class GitHubEvents(Webhook):
         return await self._publish_pull_request("pr.opened")
 
     async def on_pull_request_synchronize(self) -> Response:
-        return await self._publish_pull_request("pr.synchronized")
+        # ``before`` is the head that the push replaced: the tip that a PR built on this branch
+        # started from.
+        return await self._publish_pull_request("pr.synchronized", before=self.data["before"])
 
     async def on_pull_request_edited(self) -> Response:
         return await self._publish_pull_request("pr.edited")
@@ -205,7 +207,7 @@ class GitHubEvents(Webhook):
     async def on_pull_request_ready_for_review(self) -> Response:
         return await self._publish_pull_request("pr.ready_for_review")
 
-    async def _publish_pull_request(self, fact: str) -> Response:
+    async def _publish_pull_request(self, fact: str, **extra: str) -> Response:
         pull_request = self.data["pull_request"]
         repo = _repo_name(self.data)
         head_repo = pull_request["head"]["repo"]
@@ -227,6 +229,7 @@ class GitHubEvents(Webhook):
                 "author_can_write": await self._can_write(
                     pull_request["user"], pull_request["author_association"]
                 ),
+                **extra,
             },
         )
         return _accepted()
