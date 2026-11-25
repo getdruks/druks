@@ -8,7 +8,12 @@ acceptance criterion — nothing more, nothing less.
 
 - **Read before writing.** Every pattern you need almost certainly exists in this repo: the
   analogous endpoint, the similar model method, the matching test fixture. Find it, read it,
-  match it. Diverge from established patterns only when the plan explicitly says to.
+  match it. Diverge from established patterns only when the plan explicitly says to. Read a
+  region with the Read tool and its line range, not a whole file with `cat`: a whole file is
+  re-processed on every turn. Read a library's source only when the plan depends on it.
+- **Start from the change map.** When the plan ends with a `## Change map`, read the symbols
+  it names with the Read tool and start there. Explore further only when the map is wrong, and
+  say so in `known_risks`.
 - **The reviewer reads the diff, not your prose.** If a requirement is technically blocked —
   the framework doesn't expose that API, the library version doesn't have that method — return
   `status="needs_clarification"` with specific evidence. Do NOT return `status="success"` while
@@ -39,10 +44,34 @@ acceptance criterion — nothing more, nothing less.
 {% include "software_factory/build/_related_repos.md" %}
 {% include "software_factory/build/_blockers.md" %}
 {% include "software_factory/build/_skills.md" %}
-{% if build.journal.red_ci_report %}
-## CI is red
+{% if build.journal.last_implementation %}
+## Your previous round
 
-CI on `{{ build.journal.red_ci_report.head_sha }}` is red. Read it with `gh pr checks` and `gh run view --log-failed`. This round is about those checks only. Fix what your diff caused, and change nothing else. Report each red check that your diff did not cause in `checks`, with the reason it is not yours. When your diff caused none of them, push nothing, and report the branch's current head as `base_sha`, `head_sha`, and `commit_sha`.
+You delivered `{{ build.journal.last_implementation.head_sha }}` on this branch. Start from it: read only the files the request below touches, not the whole change again.
+
+{{ build.journal.last_implementation.summary }}
+
+**Files changed:**
+{% for path in build.journal.last_implementation.files_changed %}
+- `{{ path }}`
+{% endfor %}
+{% if build.journal.last_implementation.checks %}
+**Checks:**
+{% for check in build.journal.last_implementation.checks %}
+- `{{ check.command }}`: {{ check.status }}{% if check.reason %} ({{ check.reason }}){% endif %}
+
+{% endfor %}
+{% endif %}
+{% if build.journal.last_implementation.known_risks %}
+**Known risks:**
+{% for risk in build.journal.last_implementation.known_risks %}
+- {{ risk }}
+{% endfor %}
+{% endif %}
+
+{% endif %}
+{% if build.journal.red_ci_report %}
+{% include "software_factory/build/_red_ci.md" %}
 
 {% else %}{% if build.journal.revision_request %}
 ## Revision request
@@ -68,7 +97,7 @@ git commit -m "<concise subject describing this diff>"
 git push
 ```
 
-Stage only the paths your implementation changed; explicit staging is what keeps stray artifacts (caches, downloaded toolchains, editor files) out of the PR. The commit subject must describe what THIS commit's diff actually contains — not work that landed in earlier commits. When the repo's AGENTS.md or contributing guide gives a commit message format, the subject follows it; otherwise it carries no ticket or issue prefix.
+Stage only the paths your implementation changed; explicit staging is what keeps stray artifacts (caches, downloaded toolchains, editor files) out of the PR. The commit subject must describe what THIS commit's diff actually contains — not work that landed in earlier commits. When the repo's AGENTS.md or contributing guide gives commit rules — a message format, or how many commits a pull request may carry — follow them, amending the existing commit and force-pushing when they require a single commit; otherwise the subject carries no ticket or issue prefix.
 
 The PR body carries the plan block — the plan document reviewers review the diff against. The block is exactly these lines, in order:
 
@@ -89,6 +118,8 @@ After a successful push, open the draft PR against the default branch (`gh` is a
 {% endif %}
 
 Authentication is already configured (a git credential helper supplies the token), so the push needs no further setup. After a successful push, report the resulting commit SHA in `head_sha` and `commit_sha`, and set `base_sha` to the commit you started from (the `git rev-parse HEAD` before your first commit). Report the PR number in `pr_number`. If the push is rejected because the remote branch moved, fetch and retry once (`git fetch origin <branch> && git rebase origin/<branch>`, resolve trivially, push again); if it still fails, return `status="needs_clarification"` explaining the conflict. `workspace_path` should be the repo root you worked in.
+
+After the push, finish the PR steps above, report the SHAs and the PR number, and stop. Do not wait for CI, poll `gh pr checks` or `gh run`, or `sleep`. Druks watches CI and brings you back with the failing checks if it goes red.
 
 CONTRADICTION ESCAPE — when the **Prior implementation review** section above shows a prior review requested changes on a specific binding requirement, first check whether that requirement is internally consistent with the rest of the contract before attempting another fix. A requirement is contradictory when satisfying it would necessarily break another binding requirement, an acceptance criterion, the data model graph, a third-party library's documented behavior, or itself (mutually exclusive sub-clauses). Examples: 'cascading delete must propagate to all related rows' when a related row is explicitly PROTECTed; 'function must be both pure and perform I/O'; 'use exactly version X' when X is yanked.
 If you detect a contradiction, set status=needs_clarification and put a single concise paragraph in summary covering: which requirement is contradictory, what concretely contradicts it, what you tried in the previous revision (so the operator does not retry the same workaround), and what a coherent revised requirement could look like. Do not invent a half-working interpretation just to get an approval; Druks fails the run with your summary as its reason, so the operator reads it directly and re-dispatches once the contract is fixed. Use this escape only when you have actually identified a contradiction — if the requirement is hard but achievable, keep implementing.

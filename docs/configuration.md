@@ -666,9 +666,15 @@ reviewer approves the pull request:
 | `none` | Default. Druks marks the pull request ready for review and ends the build. The repository's own process merges it. Druks records the merge when GitHub announces it. |
 | `merge` | Druks squash-merges the pull request, or arms auto-merge when checks still run. |
 
-After each push, the build waits for CI on the head before the review, and red
-CI returns the work to the implementer. The pull request leaves draft when the review of
-a head with green CI requests no changes, or when a person approves it.
+After each push, the build waits for CI on the head before the review. When CI is
+red, Druks reruns each failed Actions run once and waits for CI again. CI that is
+still red goes back to the implementer, and so does a red that has no Actions run
+to rerun, such as `druks-house-rules`. When the implementer runs on Claude, the red
+round resumes its session with the red-CI rules, in the checkout as the agent left
+it. The build keeps the implementer's box while it waits for CI, so a build holds that
+box for the length of the wait. On another harness, or when the box is gone, the round
+starts a new call with the full prompt. The pull request leaves draft when the review
+of a head with green CI requests no changes, or when a person approves it.
 
 A build's agent can run one of the repository's test commands in full on a separate
 box, with the `core_run_check` tool. The commands come from the repository's
@@ -1155,6 +1161,11 @@ Pi do not read it.
 
 The default harness, model, billing, effort, and timeout live in **Settings →
 Instructions**. Each instruction can override each of them on its app's page.
+Software Factory's planner sizes each change as small, medium or large. A small or
+medium change runs its implement call at `high` effort, and a large one at the
+effort in Settings. The setting is the ceiling: a build never runs above it, so an
+instruction set to `medium` stays at `medium`.
+
 **Unattended runs use** names the default account.
 
 Shared execution settings select subscription or API key billing. Subscription

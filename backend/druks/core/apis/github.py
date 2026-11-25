@@ -13,7 +13,11 @@ from githubkit.exception import GraphQLFailed, RequestFailed
 from githubkit.retry import RETRY_SERVER_ERROR
 from githubkit.utils import UNSET
 
-from druks.core.apis.exceptions import GitHubAppNotActiveError, GitHubAppNotInstalledError
+from druks.core.apis.exceptions import (
+    GitHubAppNotActiveError,
+    GitHubAppNotInstalledError,
+    GitHubRerunRefusedError,
+)
 from druks.core.utils.time import ensure_utc
 
 logger = logging.getLogger(__name__)
@@ -618,6 +622,35 @@ class GitHubClient:
             owner, name, ref, per_page=100
         )
         return [status.model_dump() for status in response.parsed_data.statuses]
+
+    async def list_workflow_runs(self, repo: str, head_sha: str) -> list[dict[str, Any]]:
+        owner, name = repo.split("/", 1)
+        runs = self._github.rest.paginate(
+            self._github.rest.actions.async_list_workflow_runs_for_repo,
+            map_func=lambda response: response.parsed_data.workflow_runs,
+            owner=owner,
+            repo=name,
+            head_sha=head_sha,
+            per_page=100,
+        )
+        return [
+            {
+                "id": run.id,
+                "conclusion": run.conclusion,
+                "run_attempt": run.run_attempt,
+                "status": run.status,
+            }
+            async for run in runs
+        ]
+
+    async def rerun_failed_jobs(self, repo: str, run_id: int) -> None:
+        owner, name = repo.split("/", 1)
+        try:
+            await self._github.rest.actions.async_re_run_workflow_failed_jobs(owner, name, run_id)
+        except RequestFailed as error:
+            if error.response.status_code in (403, 404):
+                raise GitHubRerunRefusedError(f"{repo} run {run_id}") from error
+            raise
 
     async def get_file_content(
         self,
