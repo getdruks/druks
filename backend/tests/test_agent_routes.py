@@ -367,6 +367,7 @@ async def test_run_routes_refuse_a_member_outside_the_apps_team(client: TestClie
     await druks_db.flush()
 
     requests = [
+        client.get(f"/api/runs/{run.id}"),
         client.post(f"/api/runs/{run.id}/resume", json={"control": "approve"}),
         client.post(f"/api/runs/{run.id}/cancel", json={"reason": "stop"}),
         client.post(f"/api/runs/{run.id}/retry"),
@@ -384,7 +385,7 @@ async def test_run_routes_refuse_a_member_outside_the_apps_team(client: TestClie
         ),
     ]
 
-    assert [response.status_code for response in requests] == [403] * 6
+    assert [response.status_code for response in requests] == [403] * 7
 
 
 async def test_a_member_on_the_apps_team_sees_its_runs(client: TestClient, druks_db):
@@ -398,6 +399,7 @@ async def test_a_member_on_the_apps_team_sees_its_runs(client: TestClient, druks
     detail = client.get(f"/api/field_notes/note/{note.id}").json()
 
     assert [run["id"] for run in detail["timeline"]] == [summarize.id, build.id]
+    assert client.get(f"/api/runs/{build.id}").status_code == 200
 
 
 async def test_a_member_sees_only_the_runs_of_the_apps_they_can_use(client: TestClient, druks_db):
@@ -466,12 +468,13 @@ async def test_a_run_of_an_app_that_is_not_installed_reads_as_gone(client: TestC
     call = await seed_call(druks_db, run, "sweep")
 
     requests = [
+        client.get(f"/api/runs/{run.id}"),
         client.post(f"/api/runs/{run.id}/cancel", json={"reason": "stop"}),
         client.get(f"/api/agent-calls/{call.id}"),
         client.get(f"/api/field_notes/transcripts/{call.id}", params={"stream": "stdout"}),
     ]
 
-    assert [response.status_code for response in requests] == [404] * 3
+    assert [response.status_code for response in requests] == [404] * 4
 
 
 def test_missing_agent_call_uses_the_unified_shape(client: TestClient, druks_db):
