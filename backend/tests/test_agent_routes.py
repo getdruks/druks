@@ -649,7 +649,15 @@ async def test_get_gate_then_answer_roundtrip(client: TestClient, druks_db, resu
     )
     assert answered.status_code == 200
     assert answered.json()["result"] == "answered"
-    assert resume_spy == [{"id": run.id, "action": "approve", "answers": {}, "note": "ship it"}]
+    assert resume_spy == [
+        {
+            "id": run.id,
+            "action": "approve",
+            "answers": {},
+            "note": "ship it",
+            "answered_by": "op@example.com",
+        }
+    ]
 
 
 async def test_answer_gate_keys_empty_request_changes_on_note_required(
@@ -689,6 +697,7 @@ async def test_answer_gate_keys_empty_request_changes_on_note_required(
             "action": "request_changes",
             "answers": {},
             "note": "",
+            "answered_by": "op@example.com",
         }
     ]
 
@@ -836,7 +845,15 @@ async def test_the_resume_route_takes_only_a_valid_answer_to_an_open_gate(
         json={"control": "approve", "answers": {}, "note": "go"},
     )
     assert ok.status_code == 204
-    assert resume_spy == [{"id": run.id, "action": "approve", "answers": {}, "note": "go"}]
+    assert resume_spy == [
+        {
+            "id": run.id,
+            "action": "approve",
+            "answers": {},
+            "note": "go",
+            "answered_by": "op@example.com",
+        }
+    ]
 
     # After the answer arrives, Druks writes the receipt and clears the gate. A second
     # submit from the dashboard is then a conflict.

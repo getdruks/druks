@@ -1,42 +1,11 @@
-import { useId, useRef, useState, type ReactNode } from 'react'
+import { useId, useRef, useState } from 'react'
 
 import type { Field, Option } from '../api/types'
 import { MarkdownEditor } from './MarkdownEditor'
 import { Select } from '../components/Control'
 
-function groupedOptions(options: Option[]): { group: string; options: Option[] }[] {
-  const groups: { group: string; options: Option[] }[] = []
-  for (const option of options) {
-    const group = option.group ?? ''
-    const last = groups.at(-1)
-    if (last && last.group === group) last.options.push(option)
-    else groups.push({ group, options: [option] })
-  }
-  return groups
-}
-
-function selectOptions(options: Option[]): ReactNode {
-  return groupedOptions(options).map((entry) =>
-    entry.group ? (
-      <optgroup key={entry.group} label={entry.group}>
-        {entry.options.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </optgroup>
-    ) : (
-      entry.options.map((option) => (
-        <option key={option.value} value={option.value}>
-          {option.label}
-        </option>
-      ))
-    ),
-  )
-}
-
-/** Every input in a form, with the value the operator has given it so far and
- * whatever the server said about it. */
+/** Every input in a form, with the value that the operator gave it so far, and what
+ * the server said about it. */
 export function Fields({
   fields,
   values,
@@ -52,8 +21,8 @@ export function Fields({
   onChange: (name: string, value: unknown) => void
   onBlur?: () => void
 }) {
-  // A page can hold two forms that both take a "body", so the id a label points
-  // at belongs to this form, not to the field name alone.
+  // A page can hold two forms that both take a "body". The id that a label points
+  // at thus belongs to this form, not to the field name alone.
   const form = useId()
   return (
     <>
@@ -62,8 +31,8 @@ export function Fields({
         const help = field.helpText ? `${id}-help` : ''
         const error = errors[field.name] ? `${id}-error` : ''
         const describedBy = [help, error].filter(Boolean).join(' ') || undefined
-        // Radio and multi-select are a group of inputs rather than one, so the
-        // label names the group instead of pointing at an id no element has.
+        // Radio and multi-select are a group of inputs, not one input. The label then
+        // names the group. It does not point at an id that no element has.
         const isGroup = field.field === 'radio' || field.field === 'multi_select'
         const name = (
           <>
@@ -133,17 +102,17 @@ function Input({
   const picker = useRef<HTMLInputElement>(null)
   const shared = {
     id,
-    // Scoped like the id: two radio groups sharing a name would become one, and
-    // choosing in the second form would clear the first. The submitted payload
-    // is keyed by the field's own name, not by this one.
+    // The name has the scope of the id. Two radio groups with one name become one
+    // group, and a choice in the second form then clears the first. The form keys the
+    // payload that it submits by the field's own name, not by this one.
     name: id,
     autoComplete: 'off',
     required: field.isRequired,
     'aria-describedby': describedBy,
     'aria-invalid': isInvalid || undefined,
   }
-  // A group is described and labelled as a whole; invalidity belongs to an
-  // input, not to the box around several.
+  // The label and the description belong to the group as a whole. Invalidity
+  // belongs to an input, not to the box around several inputs.
   const group = { 'aria-labelledby': `${id}-label`, 'aria-describedby': describedBy }
   switch (field.field) {
     case 'text':
@@ -159,7 +128,7 @@ function Input({
         />
       )
     case 'text_area':
-      if (field.markdown) {
+      if (field.isMarkdown) {
         return (
           <MarkdownEditor
             key={resets}
@@ -200,7 +169,15 @@ function Input({
           onBlur={onBlur}
         />
       )
-    case 'select':
+    case 'select': {
+      // Options that share a group, one after another, go in one <optgroup>.
+      const groups: { group: string; options: Option[] }[] = []
+      for (const option of field.options) {
+        const group = option.group ?? ''
+        const last = groups.at(-1)
+        if (last && last.group === group) last.options.push(option)
+        else groups.push({ group, options: [option] })
+      }
       return (
         <Select
           {...shared}
@@ -210,9 +187,26 @@ function Input({
           {field.options.every((option) => option.value !== value) ? (
             <option value="">—</option>
           ) : null}
-          {selectOptions(field.options)}
+          {groups.map((entry) =>
+            entry.group ? (
+              <optgroup key={entry.group} label={entry.group}>
+                {entry.options.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </optgroup>
+            ) : (
+              entry.options.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))
+            ),
+          )}
         </Select>
       )
+    }
     case 'multi_select':
       return (
         <MultiSelect
@@ -256,8 +250,8 @@ function Input({
         <input
           {...shared}
           className="dui-input"
-          // The set the settings page uses for its bearer token. Keep them
-          // together.
+          // The same attributes that the settings page gives its bearer token
+          // input. The two inputs must stay alike.
           type="password"
           autoComplete="new-password"
           data-1p-ignore=""
@@ -271,13 +265,13 @@ function Input({
       return (
         <input
           {...shared}
-          // A reset gives this a fresh identity, so the browser drops the file
-          // it still holds; clearing React state alone would not.
+          // A reset gives this input a new identity, so the browser drops the file
+          // that it holds. A reset of the React state alone does not drop it.
           key={resets}
           className="dui-input dui-upload"
           type="file"
-          // The picked file itself. The form stores it and submits its id, so
-          // this input never carries a value of its own to put back.
+          // onChange sends the picked file itself. The form stores it and submits its
+          // id, so this input never carries a value of its own to put back.
           accept={field.accept || undefined}
           onChange={(event) => onChange(field.name, event.target.files?.[0] ?? null)}
         />
@@ -312,7 +306,7 @@ function Input({
                     aria-label={`Remove ${file.name}`}
                     onClick={() => {
                       const remaining = files.filter((_, one) => one !== index)
-                      // Keep the native file count aligned with the list.
+                      // The native list of files then matches the list on the page.
                       const selection = new DataTransfer()
                       for (const file of remaining) selection.items.add(file)
                       picker.current!.files = selection.files
@@ -338,9 +332,9 @@ function Input({
   }
 }
 
-/** The checkboxes of a multi-select. A searchable one hides the options whose
- * label does not hold the search, in the browser: a hidden option keeps its
- * check, and the form still sends it. */
+/** The checkboxes of a multi-select. A searchable one hides, in the browser, each
+ * option whose label does not hold the search. A hidden option keeps its check,
+ * and the form still sends it. */
 function MultiSelect({
   field,
   id,
@@ -397,7 +391,7 @@ function MultiSelect({
         placeholder="Search"
         autoComplete="off"
         value={search}
-        // Enter in the search narrows the list; it must not submit the form.
+        // Enter in the search narrows the list. It must not submit the form.
         onKeyDown={(event) => {
           if (event.key === 'Enter') event.preventDefault()
         }}

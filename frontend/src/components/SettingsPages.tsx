@@ -240,7 +240,13 @@ export function SettingsPages({
     ...Object.entries(appEdits)
       .filter(
         ([, edits]) =>
-          ['agentHarnesses', 'agentModels', 'agentBillings', 'agentEfforts', 'agentTimeouts'].some(
+          [
+            'instructionHarnesses',
+            'instructionModels',
+            'instructionBillings',
+            'instructionEfforts',
+            'instructionTimeouts',
+          ].some(
             (key) => Object.keys(edits[key as keyof UpdateAppsSettingsRequest] ?? {}).length > 0,
           ) ||
           Object.values(edits.workflowSettings ?? {}).some(
@@ -893,31 +899,31 @@ export function SettingsPages({
                       onAgentHarness={(name, value) =>
                         editApp(entry.name, (current) => ({
                           ...current,
-                          agentHarnesses: { ...current.agentHarnesses, [name]: value },
+                          instructionHarnesses: { ...current.instructionHarnesses, [name]: value },
                         }))
                       }
                       onAgentModel={(name, value) =>
                         editApp(entry.name, (current) => ({
                           ...current,
-                          agentModels: { ...current.agentModels, [name]: value },
+                          instructionModels: { ...current.instructionModels, [name]: value },
                         }))
                       }
                       onAgentBilling={(name, value) =>
                         editApp(entry.name, (current) => ({
                           ...current,
-                          agentBillings: { ...current.agentBillings, [name]: value },
+                          instructionBillings: { ...current.instructionBillings, [name]: value },
                         }))
                       }
                       onAgentEffort={(name, value) =>
                         editApp(entry.name, (current) => ({
                           ...current,
-                          agentEfforts: { ...current.agentEfforts, [name]: value },
+                          instructionEfforts: { ...current.instructionEfforts, [name]: value },
                         }))
                       }
                       onAgentTimeout={(name, value) =>
                         editApp(entry.name, (current) => ({
                           ...current,
-                          agentTimeouts: { ...current.agentTimeouts, [name]: value },
+                          instructionTimeouts: { ...current.instructionTimeouts, [name]: value },
                         }))
                       }
                       onWorkflowField={(kind, field, value) =>

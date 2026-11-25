@@ -234,7 +234,9 @@ async def test_signed_click_routes_through_respond(
 
     assert response.status_code == 200
     assert response.json() == {"accepted": True}
-    assert resume_spy == [{"id": run.id, "action": "approve", "answers": {}, "note": ""}]
+    assert resume_spy == [
+        {"id": run.id, "action": "approve", "answers": {}, "note": "", "answered_by": ""}
+    ]
     started.assert_awaited_once_with(
         replace_buttons,
         notification.id,
@@ -278,11 +280,17 @@ async def test_dead_round_click_is_acknowledged_without_resume(
     ]
 
 
+# A card or a section with more than one link numbers each of its buttons after the first.
+@pytest.mark.parametrize(
+    "action_id",
+    [LINK_BUTTON_ACTION_ID, f"{LINK_BUTTON_ACTION_ID}:1", f"{LINK_BUTTON_ACTION_ID}:2"],
+    ids=["first", "second", "third"],
+)
 async def test_a_click_on_a_link_button_answers_nothing(
-    tmp_path, druks_db, resume_spy, slack_card, started
+    tmp_path, druks_db, resume_spy, slack_card, started, action_id
 ):
     _, notification = await _parked_notification(druks_db)
-    body = _interactivity_body(LINK_BUTTON_ACTION_ID)
+    body = _interactivity_body(action_id)
     with _client(tmp_path) as client:
         response = client.post(
             "/_external/slack/interactivity/", content=body, headers=_signed_headers(body)
@@ -578,7 +586,9 @@ async def test_a_click_answers_the_run_with_the_inputs_and_shows_them_in_their_p
         )
 
     assert response.json() == {"accepted": True}
-    assert resume_spy == [{"id": run.id, "note": "", **reply}]
+    # U7 has no linked account, and the person of a chat answers as the chat's account.
+    answered_by = "op@example.com" if is_in_a_chat else ""
+    assert resume_spy == [{"id": run.id, "note": "", "answered_by": answered_by, **reply}]
     # Druks does not ask the chat's agent.
     assert started.await_args_list == [
         call(replace_buttons, approval.id, channel="C1", message_ts=_MESSAGE_TS, outcome=outcome)
@@ -698,7 +708,15 @@ async def test_a_team_s_app_takes_a_click_only_from_its_team(
 
     assert refused.json() == {"accepted": False}
     assert answered.json() == {"accepted": True}
-    assert resume_spy == [{"id": run.id, "action": "approve", "answers": {}, "note": ""}]
+    assert resume_spy == [
+        {
+            "id": run.id,
+            "action": "approve",
+            "answers": {},
+            "note": "",
+            "answered_by": "member@example.com",
+        }
+    ]
     explained = started.await_args_list[0]
     assert (explained.args[0], explained.kwargs["user"]) == (explain_reason, "U7")
 

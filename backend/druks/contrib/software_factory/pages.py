@@ -19,7 +19,7 @@ UNASSIGNED = "Unassigned"
 # An account that is gone, or Druks itself. The row still reads.
 UNATTRIBUTED = "Unattributed"
 FILTER_ANY = "Any"
-# The assignee filter's value for unassigned. Empty already means any.
+# The assignee filter's value for unassigned. An empty value means any.
 UNASSIGNED_FILTER = "none"
 
 
@@ -52,45 +52,6 @@ def _filter_select(name: str, label: str, options: list[ui.Option], value: str) 
     )
 
 
-def _create_actions(repos: list[ProjectRepo], accounts: list[Account]) -> list[ui.Action]:
-    return [
-        ui.Action(
-            label="New ticket",
-            operation="create_ticket",
-            tone="primary",
-            fields=[
-                ui.TextField(name="title", label="Title", is_required=True),
-                ui.SelectField(
-                    name="repo_id",
-                    label="Repo",
-                    options=_repo_options(repos),
-                    is_required=True,
-                    help_text="The GitHub repo this ticket's pull request will target.",
-                ),
-                ui.TextAreaField(name="description", label="Description", markdown=True, rows=3),
-                ui.SelectField(
-                    name="status",
-                    label="Status",
-                    options=_status_options(),
-                    value=Status.BACKLOG.value,
-                ),
-                ui.SelectField(
-                    name="priority",
-                    label="Priority",
-                    options=_priority_options(),
-                    value=Priority.NONE.value,
-                ),
-                ui.SelectField(
-                    name="assignee_id",
-                    label="Assignee",
-                    options=_assignee_options(accounts),
-                    value=current_account_id.get() or "",
-                ),
-            ],
-        ),
-    ]
-
-
 def _live_form(ticket: Ticket, field: ui.Field, *, operation: str) -> ui.Form:
     return ui.Form(
         fields=[field],
@@ -102,21 +63,6 @@ def _live_form(ticket: Ticket, field: ui.Field, *, operation: str) -> ui.Form:
         ),
         submit="change",
         layout="row",
-    )
-
-
-def _ticket_card(ticket: Ticket, account_names: dict[str, str]) -> ui.Card:
-    description = [ticket.identifier]
-    priority = Priority(ticket.priority)
-    if priority is not Priority.NONE:
-        description.append(PRIORITY_LABELS[priority])
-    if ticket.assignee_id:
-        description.append(account_names.get(ticket.assignee_id, UNATTRIBUTED))
-    return ui.Card(
-        title=ticket.title,
-        description=" · ".join(description),
-        link=ui.Link(ticket.title, page="ticket", arguments={"identifier": ticket.identifier}),
-        drag={"identifier": ticket.identifier},
     )
 
 
@@ -151,9 +97,63 @@ async def board(
         updated_since=updated_since,
     )
     repo_choices = [item for item in repos if not project or item.project_id == project]
+    cards: dict[Status, list[ui.Card]] = {item: [] for item in Status}
+    for ticket in tickets:
+        description = [ticket.identifier]
+        if ticket.priority != Priority.NONE:
+            description.append(PRIORITY_LABELS[Priority(ticket.priority)])
+        if ticket.assignee_id:
+            description.append(account_names.get(ticket.assignee_id, UNATTRIBUTED))
+        cards[Status(ticket.status)].append(
+            ui.Card(
+                title=ticket.title,
+                description=" · ".join(description),
+                link=ui.Link(
+                    ticket.title, page="ticket", arguments={"identifier": ticket.identifier}
+                ),
+                drag={"identifier": ticket.identifier},
+            )
+        )
     return ui.Page(
         "Board",
-        controls=_create_actions(repos, accounts),
+        controls=[
+            ui.Action(
+                label="New ticket",
+                operation="create_ticket",
+                tone="primary",
+                fields=[
+                    ui.TextField(name="title", label="Title", is_required=True),
+                    ui.SelectField(
+                        name="repo_id",
+                        label="Repo",
+                        options=_repo_options(repos),
+                        is_required=True,
+                        help_text="The GitHub repo that this ticket's pull request will target.",
+                    ),
+                    ui.TextAreaField(
+                        name="description", label="Description", is_markdown=True, rows=3
+                    ),
+                    ui.SelectField(
+                        name="status",
+                        label="Status",
+                        options=_status_options(),
+                        value=Status.BACKLOG.value,
+                    ),
+                    ui.SelectField(
+                        name="priority",
+                        label="Priority",
+                        options=_priority_options(),
+                        value=Priority.NONE.value,
+                    ),
+                    ui.SelectField(
+                        name="assignee_id",
+                        label="Assignee",
+                        options=_assignee_options(accounts),
+                        value=current_account_id.get() or "",
+                    ),
+                ],
+            ),
+        ],
         filters=[
             _filter_select("status", "Status", _status_options(), status or ""),
             _filter_select("priority", "Priority", _priority_options(), priority or ""),
@@ -205,11 +205,7 @@ async def board(
                                     arguments={"status": item.value},
                                     refresh="page",
                                 ),
-                                cards=[
-                                    _ticket_card(ticket, account_names)
-                                    for ticket in tickets
-                                    if ticket.status == item
-                                ],
+                                cards=cards[item],
                                 empty=ui.EmptyState(
                                     "Nothing here",
                                     description=f"No ticket is in {item.label}.",
@@ -233,7 +229,7 @@ async def ticket(identifier: str):
             blocks=[
                 ui.EmptyState(
                     "No such ticket",
-                    description=f"Nothing on this board is named {identifier}.",
+                    description=f"No ticket on this board has the identifier {identifier}.",
                     controls=[ui.Link("Board", page="board")],
                 )
             ],
@@ -277,7 +273,7 @@ async def ticket(identifier: str):
                                         value=found.description,
                                         placeholder="Add a description…",
                                         rows=12,
-                                        markdown=True,
+                                        is_markdown=True,
                                     ),
                                 ],
                                 action=ui.Action(
@@ -291,7 +287,7 @@ async def ticket(identifier: str):
                             ),
                             ui.Section(
                                 title="Comments",
-                                # Named, so a new comment replaces this section alone.
+                                # The name lets a new comment replace this section alone.
                                 name="comments",
                                 blocks=[
                                     *thread,
@@ -302,7 +298,7 @@ async def ticket(identifier: str):
                                                 name="body",
                                                 label="Comment",
                                                 is_required=True,
-                                                markdown=True,
+                                                is_markdown=True,
                                                 rows=3,
                                             )
                                         ],

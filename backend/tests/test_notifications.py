@@ -364,7 +364,9 @@ async def test_respond_resumes_and_marks_acknowledged(druks_db, resume_spy):
         account_id=None,
     )
 
-    assert resume_spy == [{"id": run.id, "action": "approve", "answers": {"q1": "a"}, "note": ""}]
+    assert resume_spy == [
+        {"id": run.id, "action": "approve", "answers": {"q1": "a"}, "note": "", "answered_by": ""}
+    ]
     assert (await druks_db.get(Notification, notification.id)).state == "acknowledged"
 
 
@@ -395,13 +397,21 @@ async def test_a_click_that_answers_in_a_thread_tells_the_chat(druks_db, resume_
         account_id=None,
     )
 
-    assert resume_spy == [{"id": run.id, "action": "approve", "answers": {}, "note": ""}]
+    assert resume_spy == [
+        {
+            "id": run.id,
+            "action": "approve",
+            "answers": {},
+            "note": "",
+            "answered_by": "op@example.com",
+        }
+    ]
     internal = await druks_db.scalars(
         select(Message.body).where(
             Message.conversation_id == run.conversation_id, Message.is_internal
         )
     )
-    answer = '{"action":"approve","answers":{},"note":""}'
+    answer = '{"action":"approve","answers":{},"note":"","answered_by":"op@example.com"}'
     assert list(internal) == [CLICK_ANSWER_MESSAGE.format(run=run.id, answer=answer)]
 
 
@@ -433,12 +443,13 @@ async def test_a_click_with_inputs_in_a_thread_answers_the_run_without_the_agent
             "action": "request_changes",
             "answers": {"note": "mysql", "why": "Because."},
             "note": "Use a queue.",
+            "answered_by": "op@example.com",
         }
     ]
     assert notification.is_acknowledged
     answer = (
         '{"action":"request_changes","answers":{"note":"mysql","why":"Because."},'
-        '"note":"Use a queue."}'
+        '"note":"Use a queue.","answered_by":"op@example.com"}'
     )
     click = CLICK_ANSWER_MESSAGE.format(run=run.id, answer=answer)
     assert await _list_messages(druks_db, notification) == [(click, True, "pending")]
@@ -481,7 +492,13 @@ async def test_a_control_that_needs_a_note_takes_an_answer_when_the_review_takes
     )
 
     assert resume_spy == [
-        {"id": run.id, "action": "request_changes", "answers": {"q1": "a"}, "note": ""}
+        {
+            "id": run.id,
+            "action": "request_changes",
+            "answers": {"q1": "a"},
+            "note": "",
+            "answered_by": "",
+        }
     ]
 
 
@@ -819,7 +836,13 @@ async def test_the_respond_route_takes_answers_without_a_note(tmp_path, druks_db
 
     assert response.status_code == 204
     assert resume_spy == [
-        {"id": run.id, "action": "request_changes", "answers": {"q1": "a"}, "note": ""}
+        {
+            "id": run.id,
+            "action": "request_changes",
+            "answers": {"q1": "a"},
+            "note": "",
+            "answered_by": "",
+        }
     ]
 
 

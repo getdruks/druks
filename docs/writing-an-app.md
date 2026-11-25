@@ -737,7 +737,9 @@ hooked call.
 
 `RepoWorkspace.get_diff()` returns the change of the checkout since it left the
 default branch: commits, uncommitted edits, and untracked files. It reads the
-checkout as it is, without a clone.
+checkout as it is, without a clone. A changed binary file reads "Binary files
+differ". `get_diff(binary=True)` includes its content, so that `git apply` can
+apply the diff to another checkout.
 
 Each harness gives the agent the text in its own way:
 
@@ -1264,9 +1266,9 @@ reply = await self.review(
 ```
 
 The dashboard draws the blocks as a page draws them. Slack draws the facts,
-metrics, dividers, links, tables, charts, images, and image galleries of an
-approval with its own blocks. It shows the other blocks as their
-[text forms](druks-ui.md#text-forms). See
+metrics, dividers, links, tables, charts, images, image galleries, cards,
+sections, columns, and stacks of an approval with its own blocks. It shows the
+other blocks as their [text forms](druks-ui.md#text-forms). See
 [Approvals in Slack](druks-ui.md#approvals-in-slack).
 
 An `Action` or a `Form` in the blocks names the app's own writes. At the top of
@@ -1300,6 +1302,37 @@ A subjectless workflow cannot use in-app review. A subjectless custom gate must
 override `on_wait()` to show the wait. Without this override, nobody sees the
 wait. Druks then raises an error and does not park the run.
 
+Every gate's reply, a review's and `YesNo`'s included, carries `answered_by`: the
+username of the account that answered in Druks. The admin of a
+[public number](chat.md#link-a-number) answers as the number's bot admin account,
+whose username names no person. `answered_by` is empty when no account answered:
+
+- an answer from outside Druks
+- a link in a notification
+- a click in Slack by a person whose Slack account is not linked
+
+Only Druks sets it. `answer()` refuses `answered_by`.
+
+To make one person decide, name the username of their account as `approver`. An
+app usually reads it from its [settings](#app-settings-and-checks), in a step:
+
+```python
+@step
+async def get_approver(self) -> str:
+    return (await Deploys.settings()).approver
+```
+
+```python
+reply = await self.review(context=plan, approver=await self.get_approver())
+```
+
+Only that account can answer. Druks sends it the
+[Run waits for an answer](configuration.md#notifications) notification, and
+refuses an answer from every other account, admins included. A chat of another
+account that started the workflow gets no buttons. See
+[Agent access](chat.md#agent-access). The workflow fails before it waits when no
+account has the username, or when the account cannot use the app.
+
 For a yes or no decision, wait on the built-in `YesNo` gate:
 
 ```python
@@ -1309,6 +1342,8 @@ reply = await YesNo.wait(input_request={"presentation": "in_app", "label": "Keep
 if reply.action == "yes":
     ...
 ```
+
+The in-app ask of a gate names an approver with its `approver` key.
 
 Raise `FatalError` for a deliberate domain stop. If readers need a stable
 machine failure code, subclass it. Set `code` on the subclass. Unexpected
@@ -1414,9 +1449,9 @@ post the message a second time.
   reads the status again every two seconds. A workflow that does not report shows
   only a line below the messages while it is active. See
   [Read replies and tool calls](chat.md#read-replies-and-tool-calls).
-- A workflow that no chat started shows its status where its approvals go: the
-  Slack channel that its account chose, else the account's direct message. See
-  [Notifications](configuration.md#notifications).
+- A workflow that no chat started shows its status where its account's
+  notifications go: the Slack channel that its account chose, else the
+  account's direct message. See [Notifications](configuration.md#notifications).
 - A web chat keeps the status in Druks. So does a chat on a channel that cannot
   edit a message, such as WhatsApp. So does an account with no Slack channel and
   no linked Slack account. Druks sends no message. It does not send the status of

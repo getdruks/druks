@@ -7,7 +7,12 @@ from pydantic_core import to_json
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from druks.accounts.enums import AccountKind
-from druks.chat.constants import PARKED_BUTTONS_MESSAGE, PARKED_MESSAGE
+from druks.chat.constants import (
+    PARKED_BUTTONS_MESSAGE,
+    PARKED_FOR_APPROVER_MESSAGE,
+    PARKED_FOR_REVIEW_MESSAGE,
+    PARKED_MESSAGE,
+)
 from druks.chat.enums import BotAccess, MessageState, PauseSignal
 from druks.chat.models import Conversation
 from druks.chat.service import deliver, get_refused_notice, report_outcome
@@ -251,13 +256,33 @@ async def resume(session: AsyncSession, conversation: Conversation) -> bool:
 
 
 async def ask_for_answer(session: AsyncSession, run: Run) -> str | None:
-    """Ask for the answer a parked run that a chat started waits on. A number's admin
-    decides for the number's chats. Any other chat hears the ask itself. Returns the
-    conversation to deliver."""
+    """Ask for the answer a parked run that a chat started waits on. When only another
+    account may answer, an operator's chat hears whom the run waits for, and a Bot's chat
+    hears only that it waits for a review. Otherwise a number's admin decides for the
+    number's chats, and any other chat hears the ask itself. Returns the conversation to
+    deliver."""
     if not run.input_request:
         return
     conversation = await session.get(Conversation, run.conversation_id)
     request = to_json(await read_ask(session, run)).decode()
+    if not run.is_answerable_by(conversation.account):
+        if conversation.account.kind == AccountKind.OPERATOR:
+            approver = run.input_request["approver"]
+            body = PARKED_FOR_APPROVER_MESSAGE.format(
+                run=run.id, approver=approver, request=request
+            )
+            outcome = f"waits for an answer from {approver}"
+        else:
+            # A Bot serves people outside Druks. They read neither the ask nor the
+            # approver, whose username can be an email address.
+            body = PARKED_FOR_REVIEW_MESSAGE.format(run=run.id)
+            outcome = "waits for a review"
+        return await report_outcome(
+            session,
+            run.conversation_id,
+            body,
+            get_notice=partial(get_refused_notice, run, outcome),
+        )
     if not conversation.admin_account_id:
         return await report_outcome(
             session,

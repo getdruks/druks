@@ -17,6 +17,7 @@ from druks.chat import Bot, service
 from druks.chat.bots import service as bot_service
 from druks.chat.channels.calls import webhooks
 from druks.chat.channels.calls.channel import CallsChannel
+from druks.chat.constants import PARKED_FOR_REVIEW_MESSAGE
 from druks.chat.enums import MessageState
 from druks.chat.models import Conversation
 from druks.core.apis.twilio import TwilioClient
@@ -395,3 +396,24 @@ async def test_an_operator_answers_a_run_that_a_call_parked(druks_db, twilio):
     assert not await bot_service.ask_for_answer(druks_db, run)
     [ask] = await conversation.list_pending_messages(druks_db)
     assert run.id in ask.body
+
+
+async def test_a_caller_hears_only_that_a_run_waits_for_its_approver_s_review(druks_db, twilio):
+    conversation = await call(druks_db, await link(druks_db))
+    run = await seed_run(
+        druks_db,
+        kind=Summarize.kind,
+        state="parked",
+        input_gate="review",
+        input_request={
+            "presentation": "in_app",
+            "controls": [{"id": "approve", "note_required": False}],
+            "questions": [],
+            "approver": "paulo@example.com",
+        },
+    )
+    run.conversation_id = conversation.id
+
+    assert not await bot_service.ask_for_answer(druks_db, run)
+    [told] = await conversation.list_pending_messages(druks_db)
+    assert told.body == PARKED_FOR_REVIEW_MESSAGE.format(run=run.id)

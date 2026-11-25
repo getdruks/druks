@@ -815,8 +815,8 @@ async def test_duplicate_replies_to_one_round_collapse(runtime):
     assert [event.payload["input_requested_at"] for event in requests] == rounds
     assert [event.payload["input_requested_at"] for event in receipts] == rounds
     assert [event.payload["result"] for event in receipts] == [
-        {"action": "first"},
-        {"action": "second"},
+        {"answered_by": "", "action": "first"},
+        {"answered_by": "", "action": "second"},
     ]
     assert "round2:second" in SINK
     assert "round2:duplicate" not in SINK

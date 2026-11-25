@@ -74,3 +74,6 @@ ACTION_RUNNING_MESSAGE = "An action of this message runs now. Click again when i
 
 # One action or one edit of a notification's message at a time, keyed by run.
 NOTIFICATION_LOCK = "notifications:{run}:{notification}"
+
+# What a person reads when an ask names another account as its approver.
+APPROVER_ONLY_MESSAGE = "Only {approver} can answer this run."

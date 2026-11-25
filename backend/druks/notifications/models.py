@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
 from druks import ui
+from druks.accounts.models import Account
 from druks.core.models import Uuid7Pk
 from druks.models import Base
 from druks.notifications import constants
@@ -204,8 +205,8 @@ class Notification(Base, Uuid7Pk):
         cls, session: AsyncSession, conversation_id: str
     ) -> "list[Row[Notification, Run]]":
         """The status of each run that the conversation started, with the run that has it
-        now. The list holds the status of a run that ended, and a status that Druks could
-        not send."""
+        now. The list holds the status of a run that ended, and a status whose delivery
+        failed."""
         # druks.durable loads the chat models, which import this module.
         from druks.durable.models import Run  # noqa: PLC0415
 
@@ -257,6 +258,18 @@ class Notification(Base, Uuid7Pk):
     @property
     def is_acknowledged(self) -> bool:
         return self.state == NotificationState.ACKNOWLEDGED
+
+    async def get_account(self, session: AsyncSession) -> Account:
+        """The account that the notification is for: its own, or the account of its
+        conversation. The outbox sends a notification that it read in another session, so
+        the read goes through ``session``."""
+        # The chat models import this module. Thus this import cannot be at the top.
+        from druks.chat.models import Conversation  # noqa: PLC0415
+
+        if self.conversation_id:
+            conversation = await session.get(Conversation, self.conversation_id)
+            return await session.get(Account, conversation.account_id)
+        return await session.get(Account, self.account_id)
 
     def get_action(self, action_id: str) -> dict:
         """The offered choice that a click on ``action_id`` picks."""

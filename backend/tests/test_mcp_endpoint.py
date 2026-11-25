@@ -598,7 +598,15 @@ async def test_gate_cycle_reads_answers_and_reports_stale_rounds(
             )
         ).structured_content
         assert answered["result"] == "answered"
-        assert resume_spy == [{"id": run.id, "action": "approve", "answers": {}, "note": ""}]
+        assert resume_spy == [
+            {
+                "id": run.id,
+                "action": "approve",
+                "answers": {},
+                "note": "",
+                "answered_by": "op@example.com",
+            }
+        ]
 
         run.answer_parked_at = run.input_requested_at
         await druks_db.flush()

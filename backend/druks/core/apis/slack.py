@@ -1,18 +1,21 @@
 from collections import deque
 
 import aiohttp
+from slack_sdk.http_retry import HttpResponse
+from slack_sdk.http_retry.async_handler import AsyncRetryHandler
 from slack_sdk.web.async_client import AsyncWebClient
 from slack_sdk.web.async_slack_response import AsyncSlackResponse
 
 from druks.redis import get_client
 
-# Slack's app creation page. With new_app=1 and manifest_json, it opens with the app filled in.
+# Slack's app creation page. With new_app=1 and manifest_json, it shows the app of that
+# manifest, ready to create.
 SLACK_CREATE_APP_URL = "https://api.slack.com/apps"
 # The authority of a Slack grant: the workspace that a Slack user id belongs to.
 SLACK_AUTHORITY = "https://slack.com/{team_id}"
-# What the bot does in the workspace. The manifest asks for these.
 # With this scope, a reply carries its agent's own name and picture.
 SLACK_CUSTOMIZE_SCOPE = "chat:write.customize"
+# What the bot does in the workspace. The manifest asks for these.
 SLACK_BOT_SCOPES = (
     "chat:write",
     SLACK_CUSTOMIZE_SCOPE,
@@ -24,15 +27,37 @@ SLACK_BOT_SCOPES = (
     "mpim:history",
     "users:read",
     "files:read",
+    "files:write",
     "reactions:write",
 )
 USER_NAME_TTL_SECONDS = 24 * 60 * 60
 
 
+class NewFileRetryHandler(AsyncRetryHandler):
+    """Sends a message again when Slack refuses a file that the message names. Slack scans a
+    file after its upload ends. Until the scan ends, Slack answers invalid_blocks with
+    "invalid slack file" for an image block that names the file, and with "invalid file type"
+    for the image of a card. The handler keeps the defaults of the SDK: one more post, 0.5 to
+    1.5 seconds after the refusal."""
+
+    async def _can_retry_async(self, *, response: HttpResponse | None = None, **_: object) -> bool:
+        # The SDK gives no response for a failed connection, and no body for one that is not JSON.
+        body = (response and response.body) or {}
+        return body.get("error") == "invalid_blocks" and any(
+            refusal.startswith(("invalid slack file", "invalid file type"))
+            for refusal in body.get("errors", [])
+        )
+
+
 class SlackClient(AsyncWebClient):
-    """Slack's Web API under one token, the bot's or a person's, plus what Druks adds
-    on top: the Markdown message it sends, a thread's tail, the names it keeps, and a
-    file's bytes."""
+    """Slack's Web API under one token, the bot's or a person's. Druks adds its markdown
+    message, a thread's tail, the channels of the token's user, the names it keeps, and a
+    file's bytes. The client also sends a message again when Slack still scans a file that
+    the message names."""
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.retry_handlers.append(NewFileRetryHandler())
 
     async def post_markdown(
         self,
@@ -46,7 +71,7 @@ class SlackClient(AsyncWebClient):
         """Post ``text`` as one markdown block, with the same text as the fallback, in a
         thread when ``thread_ts`` names one. A user id as the channel opens the bot's DM
         with that person. ``username`` and ``icon_url`` replace the app's name and
-        picture; Slack accepts them only with the ``chat:write.customize`` scope."""
+        picture. Slack takes them only with the ``chat:write.customize`` scope."""
         return await self.chat_postMessage(
             channel=channel,
             text=text,
@@ -58,7 +83,7 @@ class SlackClient(AsyncWebClient):
 
     async def list_replies(self, channel: str, thread_ts: str, *, limit: int) -> list[dict]:
         """The thread's newest ``limit`` messages, oldest first. Slack pages a thread from
-        its oldest message, so this walks to the end and keeps the tail."""
+        its oldest message, so the method reads every page and keeps the tail."""
         messages: deque[dict] = deque(maxlen=limit)
         async for page in await self.conversations_replies(
             channel=channel, ts=thread_ts, limit=limit

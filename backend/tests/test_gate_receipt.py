@@ -4,11 +4,14 @@ import pytest
 from dbos import DBOS
 from dbos import error as dbos_error
 from druks import ui
+from druks.accounts.models import Account
 from druks.contrib.software_factory.workflows import PullRequestReview
-from druks.durable.exceptions import GateTimeout
+from druks.durable.exceptions import GateTimeout, WorkflowError
 from druks.durable.models import Run
 from druks.durable.reads import read_ask
 from druks.events.models import Event
+from druks.exceptions import ObjectNotFound, PermissionDenied
+from druks.teams.models import Team
 from druks.testing import seed_run
 from druks.ui.blocks import iter_parts
 from druks.ui.exceptions import NoTextFormError
@@ -69,7 +72,12 @@ async def test_valid_reply_records_the_request_round_before_current_fields_clear
         assert event.payload["gate"] == "review"
         assert event.payload["input_requested_at"] == run.input_requested_at.isoformat()
     assert request.payload["input_request"] == _STORED_ASK
-    assert receipt.payload["result"] == {"action": "approve", "answers": {}, "note": ""}
+    assert receipt.payload["result"] == {
+        "action": "approve",
+        "answers": {},
+        "note": "",
+        "answered_by": "",
+    }
 
 
 async def test_yes_no_parks_with_its_own_controls(druks_db, direct_steps, monkeypatch):
@@ -98,6 +106,42 @@ async def test_yes_no_parks_with_its_own_controls(druks_db, direct_steps, monkey
         ],
         "reply_fields": ["action", "note"],
     }
+
+
+async def test_an_in_app_ask_checks_its_approver(druks_db, direct_steps, monkeypatch):
+    paulo = await Account.get_or_create(druks_db, "paulo@example.com")
+    await Account.get_or_create(druks_db, "outsider@example.com")
+    await Team.create(druks_db, name="Notes", member_ids=[paulo.id], apps=[Summarize.app])
+    note = await Note.create(body="A quote")
+    run = await seed_run(druks_db, kind=Summarize.kind, subject=note)
+    workflow = Summarize()
+    workflow._workflow_id = run.id
+    workflow._subject = note.identity
+    token = current_workflow.set(workflow)
+    monkeypatch.setattr(DBOS, "recv_async", AsyncMock(return_value={"action": "yes"}))
+    ask = {"presentation": "in_app", "label": "Keep it?"}
+    try:
+        with pytest.raises(ObjectNotFound):
+            await YesNo.wait(input_request={**ask, "approver": "nobody@example.com"})
+        with pytest.raises(PermissionDenied):
+            await YesNo.wait(input_request={**ask, "approver": "outsider@example.com"})
+        await YesNo.wait(input_request={**ask, "approver": "Paulo@Example.com"})
+    finally:
+        current_workflow.reset(token)
+
+    druks_db.expunge_all()
+    parked = await druks_db.scalar(select(Event).where(Event.type == "workflow.parked"))
+    # The ask keeps the name as the account spells it.
+    assert parked.payload["input_request"]["approver"] == "paulo@example.com"
+
+
+async def test_an_app_cannot_name_who_answered_a_gate(druks_db):
+    note = await Note.create(body="A quote")
+
+    with pytest.raises(WorkflowError, match="sets answered_by, and only Druks"):
+        await OperatorReply.answer(
+            note, workflow=Summarize, action="approve", answered_by="paulo@example.com"
+        )
 
 
 @pytest.mark.parametrize(

@@ -29,10 +29,10 @@ vi.mock('../lib/useScreenWakeLock', () => ({
 }))
 
 const harnesses = [
-  { name: 'claude', provider: 'anthropic', billingOptions: ['api_key', 'subscription'] },
-  { name: 'codex', provider: 'openai', billingOptions: ['api_key', 'subscription'] },
-  { name: 'opencode', provider: null, billingOptions: ['api_key'] },
-  { name: 'pi', provider: null, billingOptions: ['api_key'] },
+  { name: 'claude', provider: 'anthropic', billingOptions: ['api_key', 'subscription'], hasChat: true },
+  { name: 'codex', provider: 'openai', billingOptions: ['api_key', 'subscription'], hasChat: true },
+  { name: 'opencode', provider: null, billingOptions: ['api_key'], hasChat: true },
+  { name: 'pi', provider: null, billingOptions: ['api_key'], hasChat: false },
 ]
 
 const userSettings = {
@@ -51,9 +51,9 @@ const coder: InstructionSetting = {
   label: 'coder',
   description: 'writes the change',
   harness: 'codex',
-  harnessSource: 'agent',
+  harnessSource: 'override',
   model: 'openai/gpt-5.5',
-  source: 'agent',
+  source: 'override',
   billing: 'subscription',
   billingSource: 'default',
   effort: 'high',
@@ -67,11 +67,11 @@ const critic: InstructionSetting = {
   label: 'critic',
   description: 'reviews the change',
   harness: 'opencode',
-  harnessSource: 'agent',
+  harnessSource: 'override',
   model: 'anthropic/claude-sonnet-5',
-  source: 'agent',
+  source: 'override',
   billing: 'api_key',
-  billingSource: 'agent',
+  billingSource: 'override',
   effort: 'high',
   effortSource: 'default',
   timeout: 1800,
@@ -311,10 +311,10 @@ function stubFetch(
               }
             }
             for (const agent of app.instructions) {
-              const effort = edits.agentEfforts?.[agent.name]
+              const effort = edits.instructionEfforts?.[agent.name]
               if (effort !== undefined) {
                 agent.effort = effort ?? savedSettings.defaultEffort
-                agent.effortSource = effort === null ? 'default' : 'agent'
+                agent.effortSource = effort === null ? 'default' : 'override'
               }
             }
           }
@@ -1386,7 +1386,7 @@ describe('canonical app settings', () => {
         ([path, init]) => String(path) === '/api/settings/apps' && init?.method === 'PATCH',
       )
     expect(JSON.parse(String(patch?.[1]?.body))).toEqual({
-      agentEfforts: { 'software_factory.coder': 'low', 'software_factory.bot': 'medium' },
+      instructionEfforts: { 'software_factory.coder': 'low', 'software_factory.bot': 'medium' },
       appSettings: { software_factory: { trigger_status: 'Agent Queue' } },
       workflowSettings: {},
     })

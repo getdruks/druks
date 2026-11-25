@@ -640,7 +640,7 @@ describe('submitting a form', () => {
     expect(screen.getByText('No match.')).toBeTruthy()
   })
 
-  it('clears a multi-select search when its dialog is cancelled', () => {
+  it('clears a multi-select search when its dialog is canceled', () => {
     renderBlocks([action({ label: 'Choose', fields: [REPOS] })])
 
     fireEvent.click(screen.getByRole('button', { name: 'Choose' }))
@@ -666,7 +666,7 @@ describe('submitting a form', () => {
             helpText: '',
             isRequired: false,
             rows: 8,
-            markdown: true,
+            isMarkdown: true,
           },
         ],
         action({ refresh: 'none' }),
@@ -1169,7 +1169,7 @@ describe('a secret field', () => {
 
   it('redacts a string-detail refusal to a fixed form message when a secret is present', async () => {
     // The repo's normal app-route failure is HTTPException(status, "detail"): a
-    // plain string, not the array Pydantic ships. It must be redacted too.
+    // plain string, not the array that Pydantic ships. The form must redact it too.
     const said = 'token sk-live-abc123 was rejected by the provider'
     callOperation.mockRejectedValueOnce(new ApiError(said, 400, said))
     renderBlocks([form([SECRET], action({ refresh: 'none' }))])
@@ -1185,8 +1185,8 @@ describe('a secret field', () => {
   })
 
   it('says what went wrong when a secret form never reached the server', async () => {
-    // No response, so no server words to echo the secret back. Redacting here
-    // would send the operator to revoke a credential that is fine.
+    // No response came, so no server words can echo the secret back. A redaction
+    // here sends the operator to revoke a credential that is fine.
     callOperation.mockRejectedValueOnce(new TypeError('Failed to fetch'))
     renderBlocks([form([SECRET], action({ refresh: 'none' }))])
     fireEvent.change(screen.getByLabelText(/Access token/), { target: { value: 'sk-live-abc123' } })

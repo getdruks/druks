@@ -815,8 +815,8 @@ async def test_the_bot_row_saves_and_resolves_like_an_agent_row(druks_db, druks_
     response = await druks_client.patch(
         "/api/settings/apps",
         json={
-            "agentEfforts": {"helpdesk.bot": "low"},
-            "agentTimeouts": {"helpdesk.bot": 120},
+            "instructionEfforts": {"helpdesk.bot": "low"},
+            "instructionTimeouts": {"helpdesk.bot": 120},
         },
     )
 
@@ -828,8 +828,8 @@ async def test_the_bot_row_saves_and_resolves_like_an_agent_row(druks_db, druks_
         settings=settings,
         overrides=await SettingsOverride.list_by_key(druks_db),
     )
-    assert (row.effort, row.effort_source) == ("low", "agent")
-    assert (row.timeout, row.timeout_source) == (120, "agent")
+    assert (row.effort, row.effort_source) == ("low", "override")
+    assert (row.timeout, row.timeout_source) == (120, "override")
 
 
 async def test_the_one_time_code_makes_its_sender_the_number_admin(druks_db, helpdesk):
@@ -1226,6 +1226,38 @@ async def test_only_the_number_admin_answers_its_questions_or_resumes_its_chats(
         druks_db, conversation.id, account=await druks_db.get(Account, admin.account_id)
     )
     assert resumed.result == "not_paused"
+
+
+async def test_a_review_s_approver_answers_in_place_of_the_number_s_admin(druks_db, helpdesk):
+    owner = await bot_account(druks_db)
+    connection = await link(druks_db, owner)
+    admin = await bot_service.add_admin(druks_db, connection, user(ANA, "Ana"))
+    conversation = await Conversation.get_or_create_for_user(
+        druks_db, connection, owner.id, **user(BEN, "Ben")
+    )
+    approver = await Account.get_or_create(druks_db, "paulo@example.com")
+    run = await seed_run(
+        druks_db,
+        kind=Summarize.kind,
+        state="parked",
+        input_gate="review",
+        input_request={
+            "presentation": "in_app",
+            "controls": [{"id": "approve", "note_required": False}],
+            "questions": [],
+            "approver": approver.username,
+        },
+    )
+    run.conversation_id = conversation.id
+
+    with pytest.raises(AnswerNotAllowedError, match="Only paulo@example.com can answer"):
+        await validate_in_app_answer(
+            druks_db, run, account_id=admin.account_id, control="approve", answers={}, note=""
+        )
+    answer = await validate_in_app_answer(
+        druks_db, run, account_id=approver.id, control="approve", answers={}, note=""
+    )
+    assert answer["action"] == "approve"
 
 
 async def test_a_phone_message_pauses_its_chat_and_the_next_one_restarts_the_clock(

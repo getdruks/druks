@@ -8,10 +8,10 @@ ALLOWED_EFFORTS: tuple[str, ...] = get_args(Effort)
 
 class ResolvedChoice(NamedTuple):
     value: str
-    source: Literal["agent", "default"]
+    source: Literal["override", "default"]
 
 
 class ResolvedTimeout(NamedTuple):
     value: int
-    # declared: the agent's own timeout field.
-    source: Literal["agent", "declared", "default"]
+    # declared: the instruction's own timeout field.
+    source: Literal["override", "declared", "default"]

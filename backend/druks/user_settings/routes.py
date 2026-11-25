@@ -156,29 +156,29 @@ async def update_app_settings(
     body: AppsSettingsUpdate,
     account: Account = Depends(current_admin_account),
 ) -> AppsSettingsResponse:
-    for name, harness in body.agent_harnesses.items():
+    for name, harness in body.instruction_harnesses.items():
         await SettingsOverride.set_agent_harness(session, name, harness)
-    for name, model in body.agent_models.items():
+    for name, model in body.instruction_models.items():
         await SettingsOverride.set_agent_model(session, name, model)
-    for name, billing in body.agent_billings.items():
+    for name, billing in body.instruction_billings.items():
         await SettingsOverride.set_agent_billing(session, name, billing)
     # A cell set alone must still fit the two that it inherits. The check thus reads the
     # stored triple. A rejection rolls the writes back.
-    for name in {*body.agent_harnesses, *body.agent_models, *body.agent_billings}:
+    for name in {*body.instruction_harnesses, *body.instruction_models, *body.instruction_billings}:
         if not get_instruction(name) and not get_bot(name):
             raise HTTPException(
                 status_code=422,
                 detail=f"Druks has no instruction or bot {name!r}. Select one that an installed "
                 "app declares.",
             )
-    if body.agent_harnesses or body.agent_models or body.agent_billings:
+    if body.instruction_harnesses or body.instruction_models or body.instruction_billings:
         installation = await InstallationSettings.get_or_create(session)
         await check_agent_configs(session, installation)
 
-    for name, effort in body.agent_efforts.items():
+    for name, effort in body.instruction_efforts.items():
         await SettingsOverride.set_agent_effort(session, name, effort)
 
-    for name, timeout in body.agent_timeouts.items():
+    for name, timeout in body.instruction_timeouts.items():
         await SettingsOverride.set_agent_timeout(session, name, timeout)
 
     changed_apps = []
@@ -224,7 +224,7 @@ async def update_app_settings(
         # overrides that the session of this request wrote.
         await apply_schedules(session)
 
-    if body.agent_models or body.agent_billings:
+    if body.instruction_models or body.instruction_billings:
         await Instruction.wake_runs_waiting_for_quota(session)
 
     return await get_app_settings(session, account)

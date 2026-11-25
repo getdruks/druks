@@ -13,7 +13,7 @@ from druks.accounts.models import Account
 from druks.api.client import call_route
 from druks.api.exceptions import get_refusal
 from druks.chat.channels.slack.constants import INPUT_ID_PREFIX, LINK_BUTTON_ACTION_ID
-from druks.chat.channels.slack.delivery import deliver
+from druks.chat.channels.slack.delivery import deliver, escape_mrkdwn
 from druks.chat.forms import get_answer
 from druks.core.services import Slack
 from druks.db import db_session
@@ -187,11 +187,12 @@ class SlackInteractivity(SlackWebhook):
                 "Druks cannot read the Slack payload. Send a block_actions payload with its "
                 "actions, channel, message and user, as Slack does.",
             ) from error
-        if action_id == LINK_BUTTON_ACTION_ID:
+        # A block numbers each button that opens a link after its first: link:1, link:2.
+        if isinstance(action_id, str) and action_id.partition(":")[0] == LINK_BUTTON_ACTION_ID:
             # Slack opened the link of the button. It still sends the click to Druks. A link
             # answers nothing.
             return JSONResponse({"accepted": True})
-        # The clicker's account, found in the workspace that Druks answers in, as in chat.
+        # Druks finds the clicker's account in the workspace that it answers in, as chat does.
         account_id = await VaultSecret.get_owner_id(
             db_session(),
             Slack.Authentication.get_authority((await Slack.get()).identity["team_id"]),
@@ -263,8 +264,7 @@ class SlackInteractivity(SlackWebhook):
             return JSONResponse({"accepted": False})
         # Druks escapes the person's words. They thus cannot mention anyone or link anywhere
         # in the message.
-        answers = get_answer(notification.fields or [], values)
-        answers = answers.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        answers = escape_mrkdwn(get_answer(notification.fields or [], values))
         if notification.fields and not notification.run_id:
             outcome = ANSWER_MESSAGE.format(user=user, answers=answers)
         else:
@@ -407,17 +407,19 @@ async def replace_buttons(
     message stored."""
     async with step_session() as session:
         notification = await session.get(Notification, notification_id)
-    async with lock(
-        NOTIFICATION_LOCK.format(run=notification.run_id, notification=notification.id)
+    async with (
+        lock(NOTIFICATION_LOCK.format(run=notification.run_id, notification=notification.id)),
+        step_session() as session,
     ):
-        async with step_session() as session:
-            notification = await session.get(Notification, notification_id)
-            client = await Slack.get_client()
+        notification = await session.get(Notification, notification_id)
+        client = await Slack.get_client()
         edit = partial(
             deliver,
             client,
             channel,
             notification.body,
+            session=session,
+            account=await notification.get_account(session),
             blocks=notification.blocks,
             message_ts=message_ts,
             deep_link=notification.deep_link,
@@ -436,9 +438,11 @@ async def replace_buttons(
 @DBOS.step(name="slack.explain_reason", retries_allowed=True, max_attempts=5)
 async def explain_reason(channel: str, *, user: str, reason: str, thread_ts: str) -> None:
     """Show ``reason`` to the person who clicked, and to nobody else."""
-    async with step_session():
+    async with step_session() as session:
         client = await Slack.get_client()
-    await deliver(client, channel, reason, user=user, thread_ts=thread_ts)
+        await deliver(
+            client, channel, reason, session=session, account=None, user=user, thread_ts=thread_ts
+        )
 
 
 class SlackEvents(SlackWebhook):

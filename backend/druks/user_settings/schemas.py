@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, PositiveInt
+from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field, PositiveInt
 from pydantic.fields import FieldInfo
 
 from druks.accounts.enums import Theme
@@ -28,6 +28,8 @@ class HarnessResponse(Schema):
     name: str
     provider: str | None
     billing_options: SortedNames
+    # Chat runs on a harness that has an ACP adapter.
+    has_chat: Annotated[bool, BeforeValidator(bool)] = Field(validation_alias="adapter_command")
 
 
 class PersonalSettingsResponse(Schema):
@@ -76,7 +78,7 @@ class UpdateSettingsRequest(BaseModel):
     default_timeout: PositiveInt | None = Field(default=None, validation_alias="defaultTimeout")
 
 
-Source = Literal["agent", "default"]
+Source = Literal["override", "default"]
 
 
 class InstructionSettingResponse(Schema):
@@ -92,7 +94,7 @@ class InstructionSettingResponse(Schema):
     effort: str
     effort_source: Source
     timeout: int
-    timeout_source: Literal["agent", "declared", "default"]
+    timeout_source: Literal["override", "declared", "default"]
 
 
 class SettingsFieldResponse(Schema):
@@ -169,26 +171,28 @@ class AppsSettingsResponse(Schema):
 
 
 class AppsSettingsUpdate(BaseModel):
-    # Each map is agent name to value. Null inherits the operator default.
-    agent_harnesses: dict[str, str | None] = Field(
+    model_config = ConfigDict(extra="forbid")
+
+    # Each map is instruction or bot id to value. Null inherits the operator default.
+    instruction_harnesses: dict[str, str | None] = Field(
         default_factory=dict,
-        validation_alias="agentHarnesses",
+        validation_alias="instructionHarnesses",
     )
-    agent_models: dict[str, str | None] = Field(
+    instruction_models: dict[str, str | None] = Field(
         default_factory=dict,
-        validation_alias="agentModels",
+        validation_alias="instructionModels",
     )
-    agent_billings: dict[str, Billing | None] = Field(
+    instruction_billings: dict[str, Billing | None] = Field(
         default_factory=dict,
-        validation_alias="agentBillings",
+        validation_alias="instructionBillings",
     )
-    agent_efforts: dict[str, Effort | None] = Field(
+    instruction_efforts: dict[str, Effort | None] = Field(
         default_factory=dict,
-        validation_alias="agentEfforts",
+        validation_alias="instructionEfforts",
     )
-    agent_timeouts: dict[str, PositiveInt | None] = Field(
+    instruction_timeouts: dict[str, PositiveInt | None] = Field(
         default_factory=dict,
-        validation_alias="agentTimeouts",
+        validation_alias="instructionTimeouts",
     )
     # workflow kind -> {field -> value} (null clears).
     workflow_settings: dict[str, dict[str, Any]] = Field(

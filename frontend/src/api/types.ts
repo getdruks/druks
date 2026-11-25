@@ -77,7 +77,7 @@ export interface SubjectSummary {
 }
 
 export interface SubjectStatus {
-  // Null when no run drives the subject. Druks has not run it.
+  // Null when no run drives the subject. Druks never ran it.
   state: RunState | null
   // The driving run's id.
   run: string | null
@@ -92,8 +92,8 @@ export interface SubjectStatus {
   // the stop for code. "gate_timeout" is an unanswered gate, not a crash.
   failure: string | null
   reason: string | null
-  // When Druks last took up this subject, and whose work it is. A subject with a row
-  // of its own would keep these facts in its columns.
+  // When Druks last took up this subject, and whose work it is. A subject that has a row
+  // of its own keeps these facts in its columns.
   triggeredAt: string | null
   accountUsername: string | null
 }
@@ -129,8 +129,8 @@ export interface AskQuestion {
   options: { id: string; label: string; recommended: boolean }[]
 }
 
-// A choice the ask offers. An answer with a control that requires a note must carry a
-// note or an answer to a question.
+// A choice that the ask offers. An answer with a control that requires a note must carry
+// a note or an answer to a question.
 export interface AskControl {
   id: string
   note_required: boolean
@@ -148,7 +148,7 @@ export interface InputRequest {
   artifact_id?: string | null
   /** The prose or blocks of the workflow. The shell shows them beside the document. */
   context?: string | Block[]
-  /** The reply fields the gate declares. */
+  /** The reply fields that the gate declares. */
   reply_fields?: string[]
 }
 
@@ -212,8 +212,8 @@ export interface ArtifactFile {
 }
 
 // The output of a call that the shell shows by its kind, apart from the raw files.
-// ``name`` is its file in the call folder. The transcript files route downloads it
-// like any other file.
+// ``name`` is its file in the call folder. The transcript files route downloads it as
+// it downloads the other files.
 export interface ArtifactDescriptor {
   kind: string
   title: string
@@ -421,7 +421,7 @@ export type Field =
       value: string
       placeholder: string
       rows: number
-      markdown?: boolean
+      isMarkdown?: boolean
     })
   | (FieldBase & {
       field: 'number'
@@ -592,6 +592,8 @@ export interface Harness {
   /** Null for a key-only CLI. */
   provider: string | null
   billingOptions: string[]
+  /** Whether Chat runs on this harness. */
+  hasChat: boolean
 }
 
 /** One model provider, which answers and bills a request. An account holds at
@@ -687,7 +689,8 @@ export interface Agent extends Omit<AgentInput, 'picture'> {
   picture: FileSummary | null
 }
 
-// A schedule set in a conversation of the agent. ``lastRun`` is the run of its newest due time.
+// A schedule that the agent set in one of its conversations. ``lastRun`` is the run of its
+// newest due time.
 export interface AgentSchedule {
   id: string
   accountId: string
@@ -892,12 +895,12 @@ export interface BrowserSession {
   lastUsedAt: string | null
 }
 
-export type Source = 'agent' | 'default'
-/** A timeout can also be the declared value of the agent. */
-export type TimeoutSource = 'agent' | 'declared' | 'default'
+export type Source = 'override' | 'default'
+/** A timeout can also be the declared value of the instruction. */
+export type TimeoutSource = 'override' | 'declared' | 'default'
 
 export interface InstructionSetting {
-  /** The durable id of the agent, `<app>.<attribute>`. It is the key in the agent maps of an update. */
+  /** The durable id of the instruction, `<app>.<attribute>`. It is the key in the instruction maps of an update. */
   name: string
   /** The declared display name, else the attribute name. */
   label: string
@@ -977,11 +980,11 @@ export interface AppsSettingsResponse {
 export type AppSettingsProblems = Record<string, Record<string, string>>
 
 export interface UpdateAppsSettingsRequest {
-  agentHarnesses?: Record<string, string | null>
-  agentModels?: Record<string, string | null>
-  agentBillings?: Record<string, Billing | null>
-  agentEfforts?: Record<string, string | null>
-  agentTimeouts?: Record<string, number | null>
+  instructionHarnesses?: Record<string, string | null>
+  instructionModels?: Record<string, string | null>
+  instructionBillings?: Record<string, Billing | null>
+  instructionEfforts?: Record<string, string | null>
+  instructionTimeouts?: Record<string, number | null>
   /** Keyed by workflow kind. */
   workflowSettings?: Record<string, Record<string, unknown>>
   /** Keyed by app name. */
@@ -1030,7 +1033,7 @@ export interface FeedItem {
 
 export interface FeedResponse {
   items: FeedItem[]
-  // The snapshot the live stream continues from.
+  // The snapshot that the live stream continues from.
   cursor: string
   nextCursor: string | null
 }

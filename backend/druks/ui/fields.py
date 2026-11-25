@@ -16,16 +16,16 @@ class Option(Schema):
 
 
 class PageField(Schema):
-    """What every field shares. ``field`` names its kind on the wire, and
-    ``name`` is the key the shell sends the operator's answer under."""
+    """What every field shares. ``field`` names its kind on the wire. The shell sends the
+    operator's answer under the key ``name``."""
 
     field: str
     name: str
     label: str
     help_text: str = ""
     is_required: bool = False
-    # No ``value`` here: an upload and a secret have none, and a field with
-    # nowhere to hold one cannot send a stored secret to the browser.
+    # No ``value`` here: an upload and a secret have none. A field with nowhere to hold a
+    # value cannot send a stored secret to the browser.
 
 
 class TextField(PageField):
@@ -40,7 +40,7 @@ class TextAreaField(PageField):
     placeholder: str = ""
     rows: int = 4
     # The value is markdown source. The shell renders it as formatted text.
-    markdown: bool = False
+    is_markdown: bool = False
 
 
 class NumberField(PageField):
@@ -77,29 +77,28 @@ class CheckboxField(PageField):
 
 
 class UploadField(PageField):
-    """One file the operator picks. The shell stores it through the platform and
+    """One file that the operator picks. The shell stores it through the platform and
     submits its id, so the operation takes a plain string."""
 
     field: Literal["upload"] = "upload"
-    # Straight into the file dialog's own filter, in its own syntax:
-    # "image/*", ".csv,.tsv". It narrows what the operator sees. It is not a
-    # promise about the bytes.
+    # The file dialog uses this filter, for example "image/*" or ".csv,.tsv". It narrows
+    # the choices. It does not validate the bytes.
     accept: str = ""
 
 
 class MultiUploadField(PageField):
-    """Several files the operator picks. The shell stores each file and
+    """Several files that the operator picks. The shell stores each file and
     submits their ids, so the operation takes a plain list of strings."""
 
     field: Literal["multi_upload"] = "multi_upload"
-    # The file dialog uses this filter, for example "image/*" or ".csv,.tsv".
-    # It narrows the choices, but does not validate the bytes.
+    # The file dialog uses this filter, for example "image/*" or ".csv,.tsv". It narrows
+    # the choices. It does not validate the bytes.
     accept: str = ""
 
 
 class SecretField(PageField):
-    """One secret the operator hands over: a token, a key. It has no ``value``,
-    so a page cannot send a stored secret back to the browser."""
+    """One secret that the operator gives: a token or a key. It has no ``value``, so a
+    page cannot send a stored secret back to the browser."""
 
     field: Literal["secret"] = "secret"
 

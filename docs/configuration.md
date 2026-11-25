@@ -22,10 +22,9 @@ Do not edit `.env`, with one exception. Its last section holds the
 [secrets](#secrets), and the installer keeps that section.
 
 The file location determines its format. Repository files such as
-`.druks/software_factory/config.yml` use YAML. Other repository dotfiles use
-the same format. Operator files on the host use TOML because the installer must
-create the environment without value changes. These files share no keys or
-readers.
+`.druks/software_factory/config.yml` use YAML. Operator files on the host use
+TOML because the installer must create the environment without value changes.
+These files share no keys or readers.
 
 `druks.toml` is the authority for authored process configuration. Druks reserves
 environment variables for infrastructure that Compose injects, such as database,
@@ -40,7 +39,7 @@ host-run development template for that environment plane.
 | Table | Purpose |
 | --- | --- |
 | `[identity]` | Browser identity mode and header or JWT verification inputs |
-| `[urls]` | Dashboard callback base URL, public webhook hostname, and the base URL at which a box reaches Druks |
+| `[urls]` | Dashboard callback base URL, public webhook hostname, and the URL of `/mcp` that a box dials |
 | `[apps.<name>]` | An app switched off in this installation |
 | `[services.<slug>]` | Service credentials managed by deployment configuration, or a service switched off |
 | `[paths]` | Host data and harness configuration paths |
@@ -51,16 +50,15 @@ host-run development template for that environment plane.
 | `[providers.anthropic]` | The Claude sign-in method the installation offers |
 | `[env]` | Additional deployment environment settings rendered verbatim |
 
-A blank string means unset, and the renderer omits it from `.env`. Use `[env]` for settings
-without another `druks.toml` home, including additional `DRUKS_*` settings. The
-renderer reports a key that it already owns as a configuration gap instead
-of overriding its canonical value.
+A blank string means unset, and the installer omits it from `.env`. Use `[env]`
+for settings without another `druks.toml` home, including additional `DRUKS_*`
+settings. The installer reports a key that it already owns as a configuration
+gap, and it keeps the canonical value.
 
-On a remote shape,
-`[sandbox.<provider>]` accepts the variables documented by
-[Drukbox](https://github.com/czpython/drukbox). Druks does not enumerate
-providers. `docker` and `exe` select shape-specific first-write templates.
-Every other provider name selects the generic remote shape. Drukbox validates it.
+On a remote shape, `[sandbox.<provider>]` accepts the variables that
+[Drukbox](https://github.com/czpython/drukbox) documents. Druks does not enumerate
+providers. `docker` and `exe` select shape-specific first-write templates. Every
+other provider name selects the generic remote shape. Drukbox validates it.
 
 The local `docker` shape does not render `[sandbox.<provider>]`. Its Drukbox
 service gets its environment from the defaults in `deploy/compose.yaml`.
@@ -72,9 +70,8 @@ scripted writes.
 
 `druks.toml` holds no secret. The secrets of Druks are `secrets_key`,
 `database_url`, `redis_url`, `sandbox.service_token`, `browser.proxy`, and
-`traces.headers`.
-Druks takes each one from an environment variable. The name is `DRUKS_` and the
-key path, with `_` for each dot: `DRUKS_SECRETS_KEY`,
+`traces.headers`. Druks takes each one from an environment variable. The name is
+`DRUKS_` and the key path, with `_` for each dot: `DRUKS_SECRETS_KEY`,
 `DRUKS_SANDBOX_SERVICE_TOKEN`. Druks does not start when `druks.toml` holds a
 secret.
 
@@ -121,38 +118,41 @@ environment and in a file. The installer does not use files.
 
 A file can also set a `Secret` field of an app's settings. Name the file
 `apps.<app>.<field>`, for example `apps.field_notes.sync_token`. When the file
-exists, its content is the value. The app settings form shows the field as
-**Managed by configuration**, and nobody can change or clear it there. When the
-file is absent, the field keeps the value that an admin saved, or stays unset.
-Plain fields of app settings stay on the dashboard. Druks reads the files at
-startup, so restart Druks after a change.
+exists, its content is the value.
+
+The app settings form shows the field as **Managed by configuration**, and nobody
+can change or clear it there. When the file is absent, the field keeps the value
+that an admin saved, or stays unset. Plain fields of app settings stay on the
+dashboard. Druks reads the files at startup, so restart Druks after a change.
 
 Druks does not start when a file `apps.<app>.<field>` names one of these:
 
-- an app that is not installed or not enabled
-- a field that the app does not declare
-- a field that is not a `Secret`
-- `enabled`: only `[apps.<name>] enabled` in `druks.toml` switches an app on or off
+- An app that is not installed or not enabled.
+- A field that the app does not declare.
+- A field that is not a `Secret`.
+- `enabled`: only `[apps.<name>] enabled` in `druks.toml` switches an app on or
+  off.
 
-The error names the file. When the app's settings refuse a value, reading them
-fails with an error that does not show the value.
+The error names the file. When the app's settings refuse a value, the read of the
+settings fails with an error that does not show the value.
 
 ## Managed services
 
 A `[services.<slug>]` table makes that service managed. `druks.toml` and the
 secret files own its card, and the Services page cannot change or disconnect it.
-The table is for a platform that writes `druks.toml` itself: the installer
-refuses it. The table holds the plain fields of the card. Each secret field of
-the card is a file in `DRUKS_SECRETS_DIR`:
+The table is for a platform that writes `druks.toml` itself. The installer
+renders nothing from it and writes it back as it is. The table holds the plain
+fields of the card. Each secret field of the card is a file in
+`DRUKS_SECRETS_DIR`:
 
 ```toml
 [services.waha]
 url = "http://control.example/_instance/<uuid>/waha"
 ```
 
-Here the key is the file `services.waha.key`. Druks does not start when a table
-names an unknown service or holds an invalid field. Each managed card shows
-**Managed by configuration**.
+Here the key is the file `services.waha.api_key`. Druks logs and skips a table
+for a service that no installed app declares. Druks does not start when a table
+holds an invalid field. Each managed card shows **Managed by configuration**.
 
 Druks reads the tables at startup, so restart Druks after a change. When you
 remove a table, the card keeps its credentials, and you can change it on the
@@ -162,9 +162,9 @@ Services page again.
 
 One Druks image serves installations with different purposes. A platform that
 writes `druks.toml` itself switches an app or a service off for one
-installation. The installer renders nothing from these tables and writes them
-back as they are, as it does with `[services.<slug>]`, so `druks setup` still
-renders `.env` from a file that holds them.
+installation. The installer renders nothing from these tables. It writes them
+back as they are, as it does with `[services.<slug>]`. `druks setup` then renders
+`.env` from a file that holds them.
 
 ```toml
 [apps.software_factory]
@@ -176,11 +176,12 @@ enabled = false
 
 `enabled` defaults to true. A disabled app or service does not exist in this
 installation. Druks does not load a disabled app, so its pages, its settings,
-and the services it declares are absent. A disabled service is absent from the
-Services page and from `druks doctor`. An app that uses it fails as it fails
-when nobody connected the service. Nothing changes stored data: the card and
-the sign-ins of a disabled service stay in the vault, and the runs of a disabled
-app stay as they are.
+and the services that it declares are absent. A disabled service is absent from
+the Services page and from `druks doctor`.
+
+An app that uses a disabled service fails as it fails when nobody connected the
+service. Nothing changes stored data. The card and the sign-ins of a disabled
+service stay in the vault. The runs of a disabled app stay as they are.
 
 Druks does not start when:
 
@@ -195,26 +196,26 @@ Generate migrations with every app enabled. With an app disabled,
 ## Personal and installation settings
 
 One Druks installation serves one organization. Separate organizations use
-separate installations. **Settings → Instructions** owns the shared harness, model,
-billing, effort, fast mode, and timeout defaults. Every account uses these
-defaults. Shared instruction overrides take priority. A declared instruction timeout also
-takes priority over the installation default.
+separate installations. **Settings → Instructions** owns the shared harness,
+model, billing, effort, fast mode, and timeout defaults. Every account uses
+these defaults. Shared instruction overrides take priority. A declared
+instruction timeout also takes priority over the installation default.
 
 Effort is one of `low`, `medium`, `high`, `xhigh`, and `max`. Claude and Pi
 take the level as it is. Codex's scale ends at `xhigh`, so it runs `max` as
 `xhigh`. OpenCode ignores the level: see [Chat](chat.md).
 
 **Include apps** is off by default. When it is on, a run loads the apps of the
-subscription it runs on in its sandbox: claude.ai connectors or ChatGPT apps.
+subscription that it runs on in its sandbox: claude.ai connectors or ChatGPT apps.
 For an agent, see [Talk to an agent](chat.md#talk-to-an-agent).
 See [Harnesses](#harnesses) for what the switch changes in a sandbox.
 
-**Settings → Preferences** edits the timezone, the theme, and where your
-notifications go on your `Account`. Druks copies the installation timezone when it
+**Settings → Preferences** edits, on your `Account`, the timezone, the theme, and where
+your notifications go. Druks copies the installation timezone when it
 creates an account. Later installation changes do not change existing account
 preferences. Each page saves its own draft. See [Notifications](#notifications).
 
-Set the installation timezone at the top level of `druks.toml`, before any table:
+Set the installation timezone at the top level of `druks.toml`, before the first table:
 
 ```toml
 timezone = "Europe/Madrid"
@@ -224,9 +225,12 @@ Use an IANA timezone. The default is `UTC`. Restart Druks after a change to
 apply it to all schedules.
 
 The first account becomes the default account, including in header and JWT modes.
-Unattended calls use its subscriptions. The flag grants no extra
-permissions. Calls with an explicit account use that account's subscriptions.
-Missing subscriptions fail the call. API keys belong to the installation.
+Unattended calls use its subscriptions. The default account has no extra
+permissions.
+
+Calls with an explicit account use that account's subscriptions. Missing
+subscriptions fail the call. API keys belong to the installation.
+
 The unattended account must be able to use each app that runs on a schedule.
 If it is a member, an admin adds it to a team that lists each scheduled app.
 
@@ -235,8 +239,8 @@ Druks first resolves their identity. An admin changes a person's role in
 **Settings → People**. Only an admin can change shared settings, app settings,
 installation connections, provider keys, browser profiles, MCP servers, and
 notification destinations. A member can change personal preferences,
-subscriptions, API tokens, and per-person connections and keys, and can pair
-a phone with a private Bot's number in **Settings → Phones**.
+subscriptions, API tokens, and per-person connections and keys. A member can
+also pair a phone with a private Bot's number in **Settings → Phones**.
 
 The installation timezone controls schedules and operational day boundaries.
 Your personal timezone controls timestamp display. Gate notifications use the
@@ -247,7 +251,7 @@ Druks refuses to start a run before account setup.
 change cadence, pause, or resume each schedule. Preset and pause changes save
 automatically. Custom cron input saves when you press Enter or leave the field.
 **Use defaults** removes both overrides and restores the declared cadence and
-enabled state. The same fields remain in app settings.
+enabled state. App settings show the same fields.
 
 The page shows the installation timezone. Account timezone preferences do not
 change schedule timing. A failed save keeps your edits. A read refresh also
@@ -265,8 +269,9 @@ and default account as its scheduled ticks.
 
 The API exposes installation settings at `GET/PATCH /api/settings` and your
 preferences at `GET/PATCH /api/settings/personal`. The personal route uses the
-authenticated account. It returns `timezone`, `theme`, `notificationChannelId`, and
-`isTagRequired`. It rejects execution settings. The installation API rejects timezone changes.
+authenticated account. It returns `timezone`, `theme`, `notificationChannelId`,
+and `isTagRequired`. It rejects execution settings. The installation API rejects
+timezone changes.
 
 ## Core process settings
 
@@ -279,26 +284,27 @@ authenticated account. It returns `timezone`, `theme`, `notificationChannelId`, 
 | `DRUKS_TEST_DATABASE_URL` | local `druks_test` Postgres | What the shipped pytest fixtures use — never the runtime's |
 | `DRUKS_TEST_REDIS_URL` | `redis://127.0.0.1:6379/15` | What the shipped pytest fixtures flush |
 | `DRUKS_REDIS_URL` | `redis://127.0.0.1:6379/0` | Short-lived coordination and caches. A [secret](#secrets) |
-| `DRUKS_DATA_DIR` | `/var/lib/druks` | Logs, artifacts, installed skills |
+| `DRUKS_DATA_DIR` | `/var/lib/druks` | Logs, artifacts, Druks files, installed skills |
 | `DRUKS_HARNESS_CONFIG_ROOT` | `~/.config/druks/harnesses` | Optional harness configuration copied into sandboxes |
 | `DRUKS_LOG_LEVEL` | `INFO` | Python and DBOS log level |
 
 `log_format` sets the format of the log. It is a top-level key of `druks.toml`,
-before any table, and it has no environment variable:
+before the first table, and it has no environment variable:
 
 ```toml
 log_format = "json"
 ```
 
 With the default `text`, each record is one line of text:
-`<time> <level> <logger> <message>`, and a traceback continues on the lines
-below. DBOS, FastMCP, and uvicorn write in their own text formats. With
-`json`, each record is one JSON object on one line, with `time` in UTC,
-`level`, `logger`, `message`, and `exception`. `exception` holds the
-traceback, or `null` when the record has none. A record written inside a span
-that Druks sends also holds `trace_id` and `span_id` in hex. The records of
-DBOS, FastMCP, and uvicorn, and the migration lines of `druks init-db`, take the
-same form, on standard error. Restart Druks after a change.
+`<time> <level> <logger> <message>`, and a traceback continues on the next
+lines. DBOS, FastMCP, and uvicorn write in their own text formats.
+
+With `json`, each record is one JSON object on one line, with `time` in UTC,
+`level`, `logger`, `message`, and `exception`. `exception` holds the traceback,
+or `null` when the record has none. Inside a span that Druks sends, a record also
+holds `trace_id` and `span_id` in hex. The records of DBOS, FastMCP,
+and uvicorn, and the migration lines of `druks init-db`, take the same form, on
+standard error. Restart Druks after a change.
 
 Each Druks process can open up to `DRUKS_DATABASE_POOL_SIZE` +
 `DRUKS_DATABASE_MAX_OVERFLOW` + `DRUKS_DBOS_POOL_SIZE` + 1 Postgres connections.
@@ -320,8 +326,8 @@ endpoint = "https://collector.example.com/v1/traces"
 ```
 
 `traces.endpoint` is the full URL of the traces endpoint of your collector,
-with its path. Any collector that takes OTLP works. Only this key turns traces
-on: the `OTEL_EXPORTER_OTLP_ENDPOINT` variable of OpenTelemetry does not. The
+with its path. Every collector that takes OTLP works. Only this key enables traces:
+the `OTEL_EXPORTER_OTLP_ENDPOINT` variable of OpenTelemetry does not. The
 headers that the collector requires, such as an API key, are the secret
 `traces.headers`. Set `DRUKS_TRACES_HEADERS` in the
 [secrets](#secrets-of-an-installation) section of `.env`, as `name=value` pairs
@@ -339,14 +345,13 @@ A trace shows:
 
 - A span for each execution of a run, named after the workflow. It carries
   `druks.app` and `druks.run_id`. A run about a subject also carries
-  `druks.subject_type` and `druks.subject_id`, so one query adds up the runs of
-  a work item.
+  `druks.subject_type` and `druks.subject_id`.
 - A span for each durable step of the run, under the span of the run. DBOS
   makes these spans.
 - A `gate_wait <gate>` span for each wait at a gate, from the park to the
   answer. It carries `druks.gate` and `druks.run_id`. A wait that a timeout or a
-  cancel ends shows as an error. A person spends the time at a gate, so subtract
-  it from a run to get the run's working time.
+  cancel ends shows as an error. A person spends the time at a gate. The working
+  time of a run is its span minus its gate waits.
 - An `agent_call <agent>` span for each agent call, also for a call inside a
   `@step`. It carries `druks.agent`, `druks.run_id`, `druks.harness`, and
   `druks.model`. When the harness reports usage, the span also carries the
@@ -356,9 +361,9 @@ A trace shows:
   that Druks makes through httpx. The work in a sandbox has no spans: the span
   of the step that waits for it covers it.
 
-Each span names its service, `druks`, as `service.name`, and the host of the
-webhook URL as `druks.host`, so a collector can tell one installation from
-another. Druks keeps the trace of every run. A
+Each span names its service, `druks`, as `service.name`. It also names the host
+of the webhook URL as `druks.host`, so a collector can tell one installation
+from another. Druks keeps the trace of every run. A
 [recovered run](concepts.md#durability-and-recovery) shows in a second trace.
 
 Three kinds of repeated work send no span, so that they do not hide the
@@ -367,20 +372,20 @@ traces of the runs:
 - The health check, `GET /health`.
 - A read that the dashboard repeats. The dashboard sends the first read of a
   URL as usual. It marks each later read of the same URL with a `traceparent`
-  header whose sampled flag is off, and Druks drops that request with its
+  header whose sampled flag is off. Druks drops that request with its
   statements and calls.
 - The database polls of an open stream. The request that opens the stream
   sends one span.
 
-Any caller can mark its own request this way, and Druks then sends no span
+Every caller can mark its own request this way, and Druks then sends no span
 for that request. A run always keeps its trace.
 
-With [`log_format = "json"`](#core-process-settings), a log record written
-inside a span that Druks sends carries the `trace_id` of the span's trace, so a
-JSON line opens its trace in the collector.
+With [`log_format = "json"`](#core-process-settings), inside a span that Druks
+sends, a log record carries the `trace_id` of the span's trace. A JSON line then
+opens its trace in the collector.
 
-A span leaves the process with identifiers, route templates, and the attributes
-above only. Druks removes the rest before the export:
+A span leaves the process with only its identifiers, its route template, and the
+attributes that this section names. Druks removes the rest before the export:
 
 - A request shows its method, its route template, and its status code. Its
   path and its query do not leave.
@@ -403,7 +408,7 @@ A call through httpx sends only `traceparent`, never the `tracestate` or the
 | --- | --- |
 | `urls.endpoint` | Browser-visible dashboard URL and MCP OAuth callback base. It is also the `/mcp` base of a box when `urls.mcp_url` and `urls.webhook_host` are empty. WebSocket upgrades must come from its host. When it is empty, they must come from the request's `Host` |
 | `urls.webhook_host` | Public webhook hostname and the HTTPS host for this installation's `/mcp` endpoint. A box reaches `/mcp` there when `urls.mcp_url` is empty |
-| `urls.mcp_url` | The URL of this installation's `/mcp` endpoint that a box, the calls server, and Druks' own schedule calls dial, for the Druks tools and the agent browser. When it is empty, the default, they use `/mcp` on the webhook address: `urls.webhook_host`, else `urls.endpoint`. Druks does not start when it is set and is not an absolute `http` or `https` URL |
+| `urls.mcp_url` | The URL of this installation's `/mcp` endpoint. A box, the calls server, and Druks's own schedule calls dial it, for the Druks tools and the agent browser. When it is empty, the default, they use `/mcp` on the webhook address: `urls.webhook_host`, else `urls.endpoint`. Druks does not start when it is set and is not an absolute `http` or `https` URL |
 | `identity.mode` | `none` (default, no authentication, single operator), `header` (edge-asserted identity), or `jwt` (validated edge-signed assertion) |
 | `identity.header` | The trusted identity header. The shipped Caddy edge also uses it. Header and JWT modes have no default and require it |
 | `identity.jwks_url` | `jwt` mode: where the edge publishes its signing keys |
@@ -422,15 +427,16 @@ and the IPv6 addresses.
 operator's browser reaches Druks. The second is the public ingress host for
 webhook senders. They can share a hostname on exe.dev.
 
-Set `urls.mcp_url` when a box reaches Druks' `/mcp` at an address that the
+Set `urls.mcp_url` when a box reaches Druks's `/mcp` at an address that the
 providers do not reach, such as a private network. Slack, GitHub, Twilio, and
-WhatsApp keep the webhook address. The key that a box holds for `/mcp` goes
-only to the host of `urls.mcp_url`. The
-[calls server](deployment.md#the-calls-server), and Druks itself when it makes a
+WhatsApp keep the webhook address. The key that a box holds for `/mcp` goes only
+to the host of `urls.mcp_url`. The [calls
+server](deployment.md#the-calls-server), and Druks itself when it makes a
 schedule's tool call, must also reach this address.
-The listener at this address must serve only `/mcp`, like the webhook
-listener. It must not be the `:8000` dashboard listener or the web port. A box
-that reaches either one can send the identity header and act as an operator.
+
+The listener at this address must serve only `/mcp`, like the webhook listener.
+It must not be the `:8000` dashboard listener or the web port. A box that reaches
+either one can send the identity header and act as an operator.
 
 Druks does not authenticate browsers. Identity resolves per request, in this
 order:
@@ -438,30 +444,28 @@ order:
 1. **Personal access token.** If an `Authorization` header is present, it must
    authenticate. A malformed or inactive bearer returns a 401. Druks does not
    continue to another mode.
-2. **Header mode (`header`).** The edge authenticates the operator. The edge can be
-   exe.dev, Teleport, or Cloudflare Access. It supplies exactly one nonblank
+2. **Header mode (`header`).** The edge authenticates the operator. The edge can
+   be exe.dev, Teleport, or Cloudflare Access. It supplies exactly one nonblank
    `identity.header` value. Druks removes outer whitespace and maps the value to
    an account. Druks creates the account at first access.
 
-   The edge controls who
-   can access Druks. Account values are case-insensitive.
-3. **JWT mode (`jwt`).** This mode uses the assertion channel from `header` mode, but
-   its value is a signed JWT. Druks validates the RS256 signature against
-   `identity.jwks_url`. It caches keys for one hour. A token signed with an
-   unknown key ID makes Druks fetch the keys again at once.
+   The edge controls who can access Druks. Account values are case-insensitive.
+3. **JWT mode (`jwt`).** This mode uses the assertion channel from `header`
+   mode, but its value is a signed JWT. Druks validates the RS256 signature
+   against `identity.jwks_url`. It caches keys for one hour. A token signed with
+   an unknown key ID makes Druks fetch the keys again at once.
 
-   The `exp`, `iss`, and `aud` claims must match the configuration.
-   Druks resolves `identity.jwt_identity_claim` in the verified payload and maps
-   the selected value to an account. A validation error
-   returns a 401 without token material. Druks uses a fixed RS256
-   configuration and does not negotiate it.
-4. **No-authentication mode (`none`).** This mode has no authentication or identity edge. Druks
-   resolves the only account. Zero accounts is the setup state. The
-   first completed provider connection creates the operator account from the
-   provider-validated email.
+   The `exp`, `iss`, and `aud` claims must match the configuration. Druks
+   resolves `identity.jwt_identity_claim` in the verified payload and maps the
+   selected value to an account. A validation error returns a 401 without token
+   material. Druks uses a fixed RS256 configuration and does not negotiate it.
+4. **No-authentication mode (`none`).** This mode has no authentication or
+   identity edge. Druks resolves the only account. Zero accounts is the setup
+   state. The first completed provider connection creates the operator account
+   from the provider-validated email.
 
-   More than one account is configuration
-   drift. Druks refuses requests and startup in this state.
+   More than one account is configuration drift. Druks refuses requests and
+   startup in this state.
 
 In JWT mode, `identity.jwt_identity_claim` uses
 [JSON Pointer (RFC 6901)](https://www.rfc-editor.org/rfc/rfc6901.html).
@@ -473,19 +477,22 @@ jwt_identity_claim = "/traits/email"
 ```
 
 `/email` selects a top-level claim. `/traits/email` selects a nested claim.
-`/people/0/email` selects a claim from the first object in an array. Dots are
-literal key characters. Within a key, encode `/` as `~1` and `~` as `~0`.
-For example, `/https:~1~1id.example~1email` selects the key
-`https://id.example/email`. Druks refuses invalid pointer syntax at startup
-in JWT mode. Bare claim names and dot paths are not accepted.
+`/people/0/email` selects a claim from the first object in an array.
+
+Dots are literal key characters. Within a key, encode `/` as `~1` and `~` as
+`~0`. For example, `/https:~1~1id.example~1email` selects the key
+`https://id.example/email`.
+
+Druks refuses invalid pointer syntax at startup in JWT mode. Druks does not
+accept bare claim names or dot paths.
 
 The selected value must be a nonblank string. Druks removes its outer
 whitespace. A missing path, invalid traversal, or another result shape
-returns a 401 without creating an account. The extraction has no
+returns a 401, and Druks creates no account. The extraction has no
 provider-specific behavior.
 
 A subscription is always one person's. An API key is the installation's:
-one per provider, owned by no account, and visible to every account in
+one per provider, owned by no account. Every account sees it in
 **Settings → Providers** with the name of the person who last pasted it. A
 paste from an admin replaces it. Disconnect clears the secret and retains
 the credential identity for historical agent-call billing references.
@@ -518,7 +525,7 @@ Public `POST /_external/*` routes bypass the identity gate and use their own
 authentication. Webhooks use signature validation. The notification response
 route uses its correlation token. `GET /media/<file-id>` serves
 a file only while it is an agent's picture. `GET /api/auth/me` answers without a
-resolved account so the dashboard can render onboarding in the `none`-mode
+resolved account, so that the dashboard can show onboarding in the `none`-mode
 setup state.
 
 ## Personal access tokens
@@ -538,9 +545,8 @@ If someone compromises a token, mint a replacement. Then revoke the old token in
 Settings → API tokens. Revocation is immediate. The list shows the prefix and last
 use of each token.
 
-Druks updates last use each hour. Agents consume the API
-through the MCP endpoint. See
-[Connect your agent](connect-your-agent.md).
+Druks updates last use each hour. Agents consume the API through the MCP
+endpoint. See [Connect your agent](connect-your-agent.md).
 
 ## GitHub
 
@@ -552,10 +558,10 @@ in Postgres.
 Until an operator connects GitHub, agent runs stop with a direct message.
 `druks doctor` reports that no GitHub connection exists.
 
-Connect it from **Settings → Connections → Services**. **Create App**
-starts the GitHub manifest flow. Enter a GitHub organization, or leave the field empty for a
-personal account. Accept the request on GitHub. Druks stores the credentials and
-opens the installation page. Install the GitHub App on the applicable
+Connect it from **Settings → Connections → Services**. **Create App** starts the
+GitHub manifest flow. Enter a GitHub organization, or leave the field empty for
+a personal account. Accept the request on GitHub. Druks stores the credentials
+and opens the installation page. Install the GitHub App on the applicable
 repositories.
 
 Before you create the app, set `urls.endpoint` to the dashboard base URL. If
@@ -568,11 +574,11 @@ not reach Druks, and work starts in the dashboard.
 You can paste the credentials of an existing GitHub App into the same card.
 Enter the GitHub App ID, client ID, client secret, original PEM private key, and
 the webhook secret if the App has a webhook. Druks validates the App ID and the
-key against GitHub and stores the app slug. Each operator client then uses this service-identity row.
-Webhook deliveries use its stored secret for validation. On a connected card, a
-secret you leave blank stays as it is.
+key against GitHub and stores the app slug. Each operator client then uses this
+service-identity row. Webhook deliveries use its stored secret for validation.
+On a connected card, a secret that you leave blank stays as it is.
 
-The App's slug is the handle people tag in an issue or pull request comment,
+The App's slug is the handle that people tag in an issue or pull request comment,
 for example `@druks-acme`. A person signs in to Druks through the same App, and
 their sign-in links their GitHub account to their Druks account: see
 [Chat](chat.md#github). The client ID and secret are the App's OAuth client.
@@ -589,9 +595,9 @@ Callback URL:
 
 Subscribe to check run, check suite, issue comment, issues, pull request, pull
 request review, pull request review comment, push, repository, status, and
-workflow run events. Keep **Expire user authorization tokens** on: Druks
-refreshes a person's sign-in with the refresh token that comes with it, and
-refuses a sign-in that has none.
+workflow run events. Keep **Expire user authorization tokens** on. Druks
+refreshes a person's sign-in with the refresh token that comes with it. Druks
+refuses a sign-in that has no refresh token.
 
 | Repository permission | Access |
 | --- | --- |
@@ -621,31 +627,33 @@ Install the GitHub App on the repositories that Druks will use. This
 installation set defines where `software_factory` can act. Personal access
 tokens are not a supported substitute.
 
-To change a permission on an existing App, open it on GitHub under
-**Developer settings → GitHub Apps → Permissions & events**, set it, and save.
-Each account that installed the App then accepts the change. `druks doctor`
-names each permission in these tables that the App lacks.
+To change a permission on an existing App, open the App on GitHub under
+**Developer settings → GitHub Apps → Permissions & events**. Set the permission,
+then save. Each account that installed the App then accepts the change.
+`druks doctor` names each permission in these tables that the App lacks.
 
 A sandbox never holds an installation token. It holds a placeholder in
 `GH_TOKEN`, and git and `gh` read it through Drukbox's setup. The Drukbox
 secrets proxy swaps the placeholder for a token that Druks mints for the
-sandbox's repo, with the expiry GitHub gives it, and fetches a new one before
-it expires. The token reaches that repo and the project's other repos that the
-same installation covers, and no other repo. The `software_factory` build
-clones and pushes as the operator App. A review clones as the reviewer App when
-one is connected. Builds and reviews also get the GitHub MCP server for
-`api.githubcopilot.com`. The build's server acts as the operator App. The
-review's acts as the review identity.
+sandbox's repo, with the expiry that GitHub gives it. The proxy fetches a new
+token before that token expires. The token reaches that repo and the project's
+other repos that the same installation covers, and no other repo.
 
-**To upgrade an existing installation**, paste the credentials one time on each
-active host. Open **Settings → Connections → Services**. Connect GitHub with the
-existing operator GitHub App ID, client ID, client secret, private key, and
-webhook secret. Do not create a replacement GitHub App. The current webhook and
-installations continue to use the pasted credentials. An App created before
-Druks answered on GitHub has no client ID on its card. Until it has one,
-**Connect GitHub** fails. Open the card and select **Replace connection**. Enter the client ID from the App's settings page and a client
-secret you generate there. Leave the other fields blank, and save. Then add the
-callback URL to the App on GitHub.
+The `software_factory` build clones and pushes as the operator App. A review
+clones as the reviewer App when one is connected. Builds and reviews also get the
+GitHub MCP server for `api.githubcopilot.com`. The build's server acts as the
+operator App. The review's acts as the review identity.
+
+On each active host, the GitHub card holds the credentials of the operator
+GitHub App. Open **Settings → Connections → Services**. Connect GitHub with the
+App ID, client ID, client secret, private key, and webhook secret of that App.
+Do not create a replacement GitHub App. Its webhook and installations use the
+pasted credentials.
+
+When the card has no client ID, **Connect GitHub** fails. Open the card and
+select **Replace connection**. Enter the client ID from the App's settings page
+and a client secret that you generate there. Leave the other fields blank, and
+save. Then add the callback URL to the App on GitHub.
 
 ### Repository configuration
 
@@ -656,17 +664,17 @@ reviewer approves the pull request:
 | Value | Behavior |
 | --- | --- |
 | `none` | Default. Druks marks the pull request ready for review and ends the build. The repository's own process merges it. Druks records the merge when GitHub announces it. |
-| `merge` | Druks squash-merges the pull request, or arms auto-merge when checks are still running. |
+| `merge` | Druks squash-merges the pull request, or arms auto-merge when checks still run. |
 
 After each push, the build waits for CI on the head before the review, and red
-CI goes back to the implementer. The pull request leaves draft when the review of
+CI returns the work to the implementer. The pull request leaves draft when the review of
 a head with green CI requests no changes, or when a person approves it.
 
 When Druks receives a push to the default branch that changes `config.yml`, the
 next build uses the new file. When a team lists Software Factory, this happens
 only for a push by a person who can use Software Factory. Druks refuses a push by
-anyone else, a merge by the operator App included, and the next build keeps the
-old file.
+every other author, a merge by the operator App included, and the next build keeps
+the old file.
 
 The same folder holds `review.md`, the repository's rules for the implementer
 and the reviewer. The build and review prompts read it when the checkout has
@@ -683,9 +691,9 @@ Connect a second App to let reviews approve pull requests and request changes.
 
 Open **Settings → Connections → Services → Github Reviewer** and select
 **Create App**. The flow is the same as for the operator App. Install the
-reviewer App on every repository that has the operator App, because a build
-hands its pull request to a review that runs as the reviewer App. When that
-review fails, the build fails with the review's reason.
+reviewer App on every repository that has the operator App. A build hands its
+pull request to a review that runs as the reviewer App. When that review fails,
+the build fails with the review's reason.
 
 To register the reviewer App manually:
 
@@ -712,27 +720,30 @@ for account and organization registration details.
 Select the tracker in **Software Factory → Settings**. The default is Linear.
 **none** leaves Software Factory without a ticket tracker.
 
-**Linear** and **Jira** are service identities. Connect them from
-**Settings → Connections → Services**. The Linear identity uses an API key
-and webhook secret. The Jira identity uses a base URL, email, API key, and
-webhook secret. For an Atlassian service account, the email is its address at
-`serviceaccount.atlassian.com`. Druks validates the credentials before it
-stores them. Linear, Jira, and GitHub share five status settings: trigger, in
-progress, in review, done, and resting. When the selected tracker is connected
-and lists its statuses, the settings page offers them as choices. After you
-change the tracker, save the settings to list the statuses of the new tracker.
-An empty in review or resting status leaves the ticket where it is.
-An operator cancel or a pull request closed without merge moves the ticket to
-the resting status only if it is still in progress or in review. The settings
-refuse a resting status equal to the trigger status, because that move would
-start a new build.
+**Linear** and **Jira** are service identities. Connect them from **Settings →
+Connections → Services**. The Linear identity uses an API key and webhook
+secret. The Jira identity uses a base URL, email, API key, and webhook secret.
+For an Atlassian service account, the email is its address at
+`serviceaccount.atlassian.com`.
+
+Druks validates the credentials before it stores them. Linear, Jira, and GitHub
+share five status settings: trigger, in progress, in review, done, and resting.
+When the selected tracker is connected and lists its statuses, the settings page
+offers them as choices. After you change the tracker, save the settings to list
+the statuses of the new tracker.
+
+An empty in review or resting status leaves the ticket where it is. An operator
+cancel moves the ticket to the resting status only if the ticket is in progress
+or in review. A pull request that closes without a merge does the same. The
+settings refuse a resting status equal to the trigger status, because that move
+starts a new build.
 
 Select **druks** to use the ticket board on this appliance. That choice needs no
 credentials. The status settings stay hidden. The trigger status is
 Ready for Agent and the done status is Done. Neither is a setting.
 
-Select **GitHub** to take work from GitHub Issues in the repositories the
-operator GitHub App is already installed on. That choice needs no second
+Select **GitHub** to take work from GitHub Issues in the repositories that the
+operator GitHub App is installed on. That choice needs no second
 credential. See [GitHub Issues as the tracker](#github-issues-as-the-tracker).
 
 The dashboard shows the board and the ticket pages only for **druks**. Each
@@ -749,31 +760,33 @@ ticket, Software Factory does not start another.
 An agent's `start` tool does not move the ticket to the trigger status. The
 build moves the ticket to the in-progress status when it runs.
 
-An agent reads and answers a board ticket through this appliance's own `/mcp`. The
-server lists the five ticket tools only while the tracker is **druks**. A
+An agent reads and answers a board ticket through this appliance's own `/mcp`.
+The server lists the five ticket tools only while the tracker is **druks**. A
 build whose tracker is **druks** asks for that server. You paste nothing and
-connect nothing. Druks mints the token of the account the run belongs to, and it
-allows only the five ticket tools. A comment the agent writes then carries that
-person's name. The token appears in that person's API tokens. Druks mints another
-once they retire it. The server uses this installation's
-[/mcp address](#public-urls-and-access-control). The box must reach that address.
-The agent reads a ticket with
-`software_factory_get_ticket` and posts with `software_factory_add_comment`.
+connect nothing. Druks mints the token of the account that the run belongs to,
+and it allows only the five ticket tools.
 
-Webhook URLs remain `/_external/linear/events/` and
-`/_external/jira/events/`. The Jira webhook uses a Jira Automation
-**Send web request** action.
+A comment that the agent writes then carries that person's name. The token
+appears in that person's API tokens. Druks mints another once they retire it.
 
-Select **Issue data (Jira format)** as its body.
-Druks accepts the REST issue JSON under `issue`. Put the shared token in the
-`x-druks-webhook-token` header. Put `{{initiator.accountId}}` in the
-`x-jira-initiator` header, so Druks knows who moved the ticket. See
-[Jira's user smart values](https://support.atlassian.com/cloud-automation/docs/jira-smart-values-users/).
+The server uses this installation's [/mcp
+address](#public-urls-and-access-control). The box must reach that address. The
+agent reads a ticket with `software_factory_get_ticket` and posts with
+`software_factory_add_comment`.
+
+The webhook URLs are `/_external/linear/events/` and `/_external/jira/events/`.
+The Jira webhook uses a Jira Automation **Send web request** action.
+
+Select **Issue data (Jira format)** as its body. Druks accepts the REST issue
+JSON under `issue`. Put the shared token in the `x-druks-webhook-token` header.
+Put `{{initiator.accountId}}` in the `x-jira-initiator` header, so Druks knows
+who moved the ticket. See [Jira's user smart
+values](https://support.atlassian.com/cloud-automation/docs/jira-smart-values-users/).
+
 Druks refuses a delivery without that header with a 400, which the audit log of
-the rule shows.
-`druks doctor` treats a disconnected tracker identity as optional when that
-tracker is not selected. It reports pending setup if the selected tracker is
-Linear, Jira, or GitHub and its identity is missing.
+the rule shows. `druks doctor` treats a disconnected tracker identity as
+optional when that tracker is not selected. It reports pending setup if the
+selected tracker is Linear, Jira, or GitHub and its identity is missing.
 
 A ticket at the trigger status opens no build while a ticket that blocks it is
 open. On Linear, a blocker is a "blocked by" issue, and it is open until its
@@ -781,7 +794,9 @@ state is completed or canceled. On GitHub, a blocker is a "blocked by" issue
 dependency, and it is open until the issue gets the done label or closes.
 GitHub lists only the dependencies that the installation of the ticket's repo
 can read. A blocker in a private repo outside that installation does not hold
-the ticket. On Jira, a blocker is an issue link of
+the ticket.
+
+On Jira, a blocker is an issue link of
 the Blocks type, and it is open until its status category is Done. On the
 **druks** board, a blocker is a ticket in the **Blocked by** field, and it is
 open until it is Done. When a blocker moves to the done status, Druks reads
@@ -794,31 +809,37 @@ On Linear, the planner can split a ticket whose work needs more than one pull
 request. It proposes one ticket for each repository, with the "blocked by" links
 between them, and a person approves the proposal whatever the plan gate. Druks
 then creates each ticket as a sub-issue of the split ticket, at the resting
-status with the label of its repository, and adds the links. The split ticket
-opens no pull request and goes back to the resting status. When the same ticket
-splits again, Druks reuses the tickets that it created for it and adds the links
-that are missing. Druks removes no ticket and no link. A ticket that the new
-proposal leaves out still blocks the tickets that it blocked, until you cancel
-it.
+status and with the label of its repository. It also adds the links. The split
+ticket opens no pull request and returns to the resting status.
+
+When the same ticket splits again, Druks reuses the tickets that it created for
+it and adds the links that are missing. Druks removes no ticket and no link. A
+ticket that the new proposal leaves out still blocks the tickets that it blocked,
+until you cancel it.
 
 Software Factory starts a Linear, Jira, or GitHub build under the Druks account
 of the person who moved the ticket. If that person has no account and no team
-lists Software Factory, the build uses the account of the ticket assignee, and
-then the default account. If a team lists Software Factory, a move by a person
-with no Druks account opens no build.
+lists Software Factory, the build uses the account of the ticket assignee. If
+the ticket has no assignee with an account, the build uses the default account.
+If a team lists Software Factory, a move by a person with no Druks account opens
+no build.
 
-Linear sends that person in its webhook. If Linear names no person, which its
-documentation says happens only for a deleted person or integration, the build
-uses the account of the ticket assignee, and then the default account. Jira
-sends that person in the `x-jira-initiator` header. GitHub sends the person who
-added the label. A label that the operator App adds counts as a person with no
-Druks account. A Linear
-person has the account of their Linear sign-in. A Jira person has an account
-when their Jira ID matches the [provider account](#oauth-grant-identity) of an
-MCP connection that they made with **Connect your account**. A connection for
-everyone has no account, so it does not match. A GitHub person has the account
-that their [GitHub sign-in](#github) links. Two matching accounts do not match.
-A **druks** ticket build uses the account of the ticket assignee.
+Linear sends that person in its webhook. Its documentation says that it names no
+person only for a deleted person or integration. A build with no person uses the
+account of the assignee or the default account, in that order. Jira sends that
+person in the `x-jira-initiator` header. GitHub sends the person who added the
+label.
+
+A label that the operator App adds counts as a person with no Druks account. A
+Linear person has the account of their Linear sign-in. A Jira person has an
+account when their Jira ID matches the [provider account](#oauth-grant-identity)
+of an MCP connection that they made. A person makes such a connection with
+**Connect your account**.
+
+A connection for everyone has no account, so it does not match. A GitHub person
+has the account that their [GitHub sign-in](#github) links. When two accounts
+match, neither one counts. A **druks** ticket build uses the account of the
+ticket assignee.
 
 When a team lists Software Factory, a move by a person who cannot use it opens no
 build. Druks logs the refusal and acknowledges the delivery, so the tracker does
@@ -830,13 +851,14 @@ GitHub has no status field, so the GitHub tracker reads the five status settings
 as **label names**. An issue that gets the trigger label opens a build. The label
 arrives through the operator App's webhook, so the App must subscribe to the
 **issues** event. An App made with **Create App** subscribes to it. Add the event
-to an older App or to an App that you registered by hand.
+to an App that does not subscribe to it, such as one that you registered by hand.
 
 The status settings default to Linear status names, so name them for GitHub, for
 example `ready-for-agent` and `agent:in-progress`. The settings page lists no
-labels, so you type them. GitHub creates a missing label with a default colour
-the first time Druks sets it. The labels act as one status: setting one removes
-the others, the trigger label too. The done label also closes the issue.
+labels, so you type them. GitHub creates a missing label with a default color
+the first time Druks sets it. The labels act as one status: a label that Druks
+sets removes the others, the trigger label too. The done label also closes the
+issue.
 
 A label from a person opens a build, and so does a label that Druks sets through
 the agent `start` route. A label from another App does nothing. The issue's
@@ -848,12 +870,13 @@ across repositories. In a URL path, encode its `#` as `%23`.
 
 **Waha** is the service identity that Druks reaches WhatsApp through.
 [WAHA](https://github.com/devlikeapro/waha) is an open source WhatsApp HTTP API
-that you run beside Druks. Connect it
-from **Settings → Connections → Services** with WAHA's address and a key. Druks
-uses this key only to create and delete a linked number's session and its
-session key. That is WAHA's admin key when you run WAHA yourself. Every other
-call uses the session key of the number. Druks checks neither value when you
-save the card, so a wrong key shows up when you link a number.
+that you run beside Druks. Connect it from **Settings → Connections → Services**
+with WAHA's address and a key.
+
+Druks uses this key only to create and delete a linked number's session and its
+session key. When you run WAHA yourself, the key is WAHA's admin key. Every other
+call uses the session key of the number. Druks checks neither value when you save
+the card, so you find a wrong key when you link a number.
 
 For deployment-managed WAHA, use [managed services](#managed-services).
 
@@ -866,9 +889,9 @@ Webhook URL:
 
 Set `urls.webhook_host`, or `urls.endpoint`, before you link a number. Druks
 writes the URL, the session's webhook secret, and the chats to ignore (status
-updates, groups, channels, and broadcasts) into each session's config. Each
-event carries an HMAC SHA-512 signature, and Druks refuses an event without a
-valid one. See [Chat](chat.md#whatsapp) for linking numbers.
+updates, channels, and broadcasts) into each session's config. Each event
+carries an HMAC SHA-512 signature, and Druks refuses an event without a valid
+one. See [Chat](chat.md#whatsapp) for how to link a number.
 
 ## Slack
 
@@ -879,7 +902,7 @@ install it from Druks.
 1. Set `urls.endpoint`. Set `urls.webhook_host` when Slack must reach Druks at
    another host.
 2. Open **Settings → Connections → Services → Slack** and select **Create Slack
-   App**. Slack opens its app creation page with Druks's manifest filled in.
+   App**. Slack opens its app creation page, which shows the app of Druks's manifest.
 3. Select the workspace, review the app, and create it.
 4. On the Slack card, select **Connect Slack** and paste the fields that it
    shows: the signing secret, the client ID, and the client secret. Slack shows
@@ -891,10 +914,13 @@ install it from Druks.
    refused it.
 
 The manifest asks for the bot scopes `chat:write`, `chat:write.customize`,
-`channels:history`, `channels:read`, `groups:history`, `groups:read`,
-`im:history`, `mpim:history`, `users:read`, `files:read`, and `reactions:write`.
-It subscribes the bot to direct messages, to the rooms it is invited to, and to
-joins in those rooms. It leaves token rotation off and names these URLs:
+`channels:history`, `channels:read`, `groups:history`, and `groups:read`. It
+also asks for `im:history`, `mpim:history`, `users:read`, `files:read`,
+`files:write`, and `reactions:write`. With `files:write`, Druks uploads the
+image of a Druks file to Slack: see [Approvals in
+Slack](druks-ui.md#approvals-in-slack). The manifest subscribes the bot to
+direct messages, to the rooms that it is invited to, and to joins in those rooms.
+It leaves token rotation off and names these URLs:
 
 Events URL:
 `https://<webhook-host>/_external/slack/events/`
@@ -910,24 +936,35 @@ event older than five minutes. With rotation off, the bot token from the install
 and each person's Slack token live until someone revokes them. A person connects
 their own Slack account through the same app: see [Chat](chat.md#slack).
 
-An app created from an earlier manifest needs `reactions:write`,
-`chat:write.customize`, and the Interactivity URL. Add the scopes under
-**OAuth & Permissions**, then select **Install** on the Slack card again. Druks
-reads the scopes from that install. Until then, an agent's replies show the
-app's name, not the agent's name and picture. Under
-**Interactivity & Shortcuts**, turn on Interactivity and set the Request URL to
-the Interactivity URL.
+The Slack app needs each bot scope and each event of the manifest, and the
+Interactivity URL. To give an app what it lacks:
+
+1. Under **OAuth & Permissions**, add each bot scope that it lacks.
+2. Under **Event Subscriptions**, subscribe the bot to each event that it lacks.
+3. Under **Interactivity & Shortcuts**, set **Interactivity** to on, and set the
+   Request URL to the Interactivity URL.
+4. Select **Install** on the Slack card again. The workspace then approves the
+   app again, with the new scopes.
+
+Druks reads `chat:write.customize` from that install. Until then, an agent's
+replies show the Slack app's name, not the agent's name and picture.
+
+While the bot token lacks `files:write`, Slack refuses the upload, and the images
+of the message go out as links. After the workspace approves the app again, the
+next message or edit shows the images.
 
 ## Speech to text
 
-**Speech To Text** is the service that Druks sends voice notes to: any server
-that speaks the OpenAI audio API, such as OpenAI, Groq, or a local server.
+**Speech To Text** is the service that Druks sends voice notes to. It can be a
+server that speaks the OpenAI audio API, such as OpenAI, Groq, or a local server.
 Connect it from **Settings → Connections → Services** with the server's base
 URL, for example `https://api.openai.com/v1`, a key, and a model, for example
-`whisper-1`. Druks checks none of the values when you save the card, so a wrong
-key shows up on the first voice note. Druks sends a note of at most 25 MiB and
-refuses a bigger one without a call. Without the card, the agent tells the
-person to write instead. See [Chat](chat.md#whatsapp) for what the agent gets.
+`whisper-1`.
+
+Druks checks none of the values when you save the card, so you find a wrong key
+on the first voice note. Druks sends a note of at most 25 MiB and refuses a
+bigger one without a call. Without the card, the agent tells the person to write
+instead. See [Chat](chat.md#whatsapp) for what the agent gets.
 
 ## Calls
 
@@ -940,10 +977,12 @@ Druks answers phone calls on your Twilio numbers. Calls need two cards in
   one. Write the model with its vendor, for example `openai/gpt-realtime-mini`
   or `google/gemini-2.5-flash-native-audio`. A voice name is the vendor's name
   for a voice, such as `marin` or `Kore`. Leave it empty to use the vendor's
-  default. With an OpenAI model you can also name the transcription model,
-  which writes the caller's words as text. Leave it empty to use
-  `gpt-4o-mini-transcribe`. Druks checks only that the model's vendor is
-  `openai` or `google`, the two that the calls server runs.
+  default.
+
+On the **Voice** card, an OpenAI model can also name the transcription model,
+which writes the caller's words as text. Leave it empty to use
+`gpt-4o-mini-transcribe`. Druks checks only that the model's vendor is `openai`
+or `google`, the two that the calls server runs.
 
 When you link a number, Druks sets the number's voice URL in Twilio:
 
@@ -961,28 +1000,34 @@ see [the calls server](deployment.md#the-calls-server).
 Druks registers two subscription providers, `anthropic` and `openai`. Each
 also accepts an API key. Both connect from **Settings → Providers**. The
 connection flow stores each credential in Postgres. Druks refreshes a
-subscription token on a schedule. A sandbox holds a placeholder for the
-subscription token and never the token. Drukbox fetches the token from the
-Druks issuer through the sandbox's identity, and the secrets proxy swaps the
-placeholder on each request to the entry's host. See
+subscription token on a schedule.
+
+A sandbox holds a placeholder for the subscription token and never the token.
+Drukbox fetches the token from the Druks issuer through the sandbox's identity.
+The secrets proxy swaps the placeholder on each request to the entry's host. See
 [sandbox identities and the issuer](concepts.md#instructions-harnesses-workspaces-and-sandboxes).
-Druks does not copy a host login. This is a capability connection for the
-requesting account. In a fresh `none`-mode install, the first completed
+
+Druks does not copy a host login. Each connection is a capability connection for
+the requesting account. In a fresh `none`-mode install, the first completed
 subscription connection also creates the operator account. See
 [access control](#public-urls-and-access-control).
 
 Anthropic signs in with `oauth`, the login on the Connect page, or with
-`setup_token`, a token that `claude setup-token` prints and you paste on the
-Providers page. A setup token lasts one year, has no refresh token, and carries
-the `user:inference` scope only: Druks does not refresh it, shows no quota for
-it, and asks for a new token when it expires. An `oauth` login expires on a date
-that Anthropic sets at each sign-in, about four weeks later. A token refresh
-does not move it. The Providers page shows the date: reconnect before it to
-start a new login. Three days before the date, Druks sends the account a
-notification. The `[providers.anthropic]` table in `druks.toml` selects the method,
-`oauth` by default. An installation on
-`setup_token` in `none` identity mode gets its first account from another
-provider's login, because the paste needs a signed-in account.
+`setup_token`. A setup token is a token that `claude setup-token` prints, and
+you paste it on the Providers page. A setup token lasts one year. It has no
+refresh token and carries only the `user:inference` scope. Druks does not
+refresh it and shows no quota for it. Druks asks for a new token when it
+expires.
+
+An `oauth` login expires on a date that Anthropic sets at each sign-in, about
+four weeks later. A token refresh does not move it. The Providers page shows the
+date: reconnect before it to start a new login. Three days before the date,
+Druks sends the account a notification.
+
+The `[providers.anthropic]` table in `druks.toml` selects the method, `oauth` by
+default. An installation on `setup_token` in `none` identity mode gets its first
+account from another provider's login, because the paste needs a signed-in
+account.
 
 ```toml
 [providers.anthropic]
@@ -995,22 +1040,24 @@ Codex**. In a managed workspace, an administrator must allow it.
 
 A `claude` sandbox reads its placeholder from `ANTHROPIC_AUTH_TOKEN`. With
 include apps on, the run starts `claude` with the placeholder in
-`CLAUDE_CODE_OAUTH_TOKEN`, the grant's scopes in `CLAUDE_CODE_OAUTH_SCOPES`,
-and `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_API_KEY` unset, so Claude Code runs
-as a subscription login and loads the subscription's connectors. The Chat adapter
-starts with the same variables. A `codex` sandbox reads its placeholder from
-`CODEX_SUBSCRIPTION_TOKEN`. The Codex run wrapper writes `~/.codex/auth.json`
-from that variable before the command. The file carries the account id, the
-sentinel refresh token
-`druks-placeholder`, and an unsigned id token with the account id, the plan,
-and the email. Codex sends the placeholder to `chatgpt.com` on every request.
-Codex never refreshes it: the one refresh it attempts after a 401 fails on
+`CLAUDE_CODE_OAUTH_TOKEN` and the grant's scopes in `CLAUDE_CODE_OAUTH_SCOPES`.
+It unsets `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_API_KEY`. Claude Code then runs
+as a subscription login and loads the subscription's connectors. The Chat
+adapter starts with the same variables.
+
+A `codex` sandbox reads its placeholder from `CODEX_SUBSCRIPTION_TOKEN`. The
+Codex run wrapper writes `~/.codex/auth.json` from that variable before the
+command. The file carries the account id, the sentinel refresh token
+`druks-placeholder`, and an unsigned id token with the account id, the plan, and
+the email. Codex sends the placeholder to `chatgpt.com` on every request.
+
+Codex never refreshes it: the one refresh that it attempts after a 401 fails on
 the sentinel, and the turn ends. The real refresh token and id token stay in
 Postgres. With include apps off, a Codex run gets `features.apps = false`.
 
 An API key never enters the sandbox. Druks gives the key to Drukbox as a
 secret entry when it creates the sandbox. The sandbox holds a placeholder in
-the variable the entry names, and the CLI reads it from the environment. The
+the variable that the entry names, and the CLI reads it from the environment. The
 Drukbox secrets proxy swaps the placeholder for the key in the entry's header
 on each request to the entry's host.
 
@@ -1040,10 +1087,10 @@ When an agent runs, OpenCode selects the endpoint.
 
 Before you save a key, check the provider documentation and domain.
 
-Provider rows show access state and weekly quota when available. Open
-**Manage** for credential controls, the last subscription token refresh, the
-5-hour quota when available, and the model catalog timestamp. The weekly quota
-stays in the provider row.
+Provider rows show the access state, and the weekly quota when Druks has it. Open
+**Manage** for the credential controls and the last refresh of the subscription token.
+**Manage** also shows the 5-hour quota when Druks has it, and the timestamp of the
+model catalog. The weekly quota stays in the provider row.
 Anthropic and OpenAI fetch separate model lists.
 Added providers use the cached Models.dev directory.
 
@@ -1054,17 +1101,19 @@ minimum between polls.
 
 An agent call that hits a usage limit waits for the window's reset, up to six
 hours, and then retries once. If you sign in to another account for the agent's
-provider, or change the agent's model or billing during the wait, the call retries
-at once. If the new account is also limited, the call waits once more, for that
-account's reset.
+provider during the wait, the call retries at once. A change to the agent's
+model or billing during the wait does the same. If the new account is also
+limited, the call waits once more, for that account's reset.
 
 The `claude` and `codex` CLIs run on their own vendor's subscription or key.
-`opencode` and `pi` run on an API key only, for Anthropic or OpenAI. OpenCode uses
-only the provider of the agent's model. A key for
-a Models.dev provider stores, but an agent on that provider refuses to run: no
-proven transport carries its placeholder through the secrets proxy. A model ID
-is `provider/model` for each harness, for example `openai/gpt-5.5`.
-The harness menus disable `opencode` and `pi` until a provider API key is configured.
+`opencode` and `pi` run on an API key only, for Anthropic or OpenAI. OpenCode
+uses only the provider of the agent's model.
+
+Druks stores a key for a Models.dev provider, but an agent on that provider
+refuses to run. No proven transport carries its placeholder through the secrets
+proxy. A model ID is `provider/model` for each harness, for example
+`openai/gpt-5.5`. The harness menus disable `opencode` and `pi` until an admin
+saves a provider API key.
 
 `paths.harness_config_root` points at optional CLI configuration that Druks
 carries into sandboxes. The installer creates the root. Compose mounts it
@@ -1082,16 +1131,19 @@ read-only at `/harnesses`. Claude and Codex each read their named directory:
     └── config.toml
 ```
 
-Missing files are optional. Druks copies no credentials file, and it removes
-the `mcpServers` block from `.claude.json` before the copy. MCP credentials
-are sandbox entries. Provider credentials do not belong in this root. OpenCode
-and Pi do not read it.
-The default harness, model, billing, effort, and timeout live in
-**Settings → Instructions**. Each instruction can override any of them on its app's page.
-**Unattended runs use** names the default account. Shared execution settings
-select subscription or API key billing. Subscription billing uses the run
-account's subscription. API key billing uses the installation key. A call refuses
-before provisioning a VM if its selected credential is missing.
+Missing files are optional. Druks copies no credentials file, and it removes the
+`mcpServers` block from `.claude.json` before the copy. MCP credentials are
+sandbox entries. Provider credentials do not belong in this root. OpenCode and
+Pi do not read it.
+
+The default harness, model, billing, effort, and timeout live in **Settings →
+Instructions**. Each instruction can override each of them on its app's page.
+**Unattended runs use** names the default account.
+
+Shared execution settings select subscription or API key billing. Subscription
+billing uses the run account's subscription. API key billing uses the
+installation key. If its selected credential is missing, a call refuses before
+Druks provisions a VM.
 
 ## Sandboxes
 
@@ -1104,13 +1156,13 @@ before provisioning a VM if its selected credential is missing.
 | `sandbox.registry_host`, `sandbox.registry_username`, `sandbox.registry_password` | Access to private sandbox images on one registry host, for example `ghcr.io`. Set the three together. The password is the secret [`REGISTRY_PASSWORD`](#secrets-of-an-installation). See [Drukbox](https://github.com/czpython/drukbox/blob/main/docs/deploy.md#private-image-registry) |
 | `sandbox.template_repository` | The repository path on that host where Drukbox publishes sandbox templates. The exe provider requires it |
 | `[sandbox.host_limits]` | Hosts per provider, one `<provider> = <count>` line each, for example `exe = 28`. A provider not named has no limit. At the limit Drukbox refuses a create, and the run waits for a slot in the phase `queued_for_vm`, up to one host lease |
-| `sandbox.proxy_url` | The secrets proxy, at the address a sandbox dials. The docker shape sets `http://172.17.0.1:8880`. docker-sbx leaves it empty |
-| `sandbox.issuer_url` | The issuer base URL the secrets exchange dials. The default is `http://127.0.0.1:8001`. For a Drukbox on another server, set the address of the Druks host that Drukbox reaches. The installer then serves the issuer route there ([the issuer listener](deployment.md#the-issuer-listener)) |
+| `sandbox.proxy_url` | The secrets proxy, at the address that a sandbox dials. The docker shape sets `http://172.17.0.1:8880`. docker-sbx leaves it empty |
+| `sandbox.issuer_url` | The issuer base URL that the secrets exchange dials. The default is `http://127.0.0.1:8001`. For a Drukbox on another server, set the address of the Druks host that Drukbox reaches. The installer then serves the issuer route there ([the issuer listener](deployment.md#the-issuer-listener)) |
 
-`DRUKS_SANDBOX_KEYS_DIR` remains a process environment override for the
-per-host SSH private-key directory.
+`DRUKS_SANDBOX_KEYS_DIR` sets the per-host SSH private-key directory. It has
+no `druks.toml` key.
 
-`[sandbox].provider` accepts any Drukbox provider name. `docker` selects the
+`[sandbox].provider` accepts each Drukbox provider name. `docker` selects the
 local install shape, `exe` selects the exe.dev + tailnet shape, and every other
 name selects the generic remote shape. Provider-specific credentials and host
 options live in `[sandbox.<provider>]`, and Drukbox interprets them. See
@@ -1138,7 +1190,7 @@ selects the launches that use the proxy. There are three modes:
   that must see one IP for the login and for each later visit.
 
 If you set the proxy and the exit is not available, the browser fails. It does
-not fall back to the box IP.
+not use the box IP in its place.
 
 The value can include a user name and password (`http://user:pass@host:port`).
 The browser authenticates the proxy. You do not need an external relay.
@@ -1159,7 +1211,7 @@ are two common types.
 
 The browser then leaves from your home connection. The box keeps its own IP for
 all other traffic. This exit needs no user name or password. With scope `all`,
-scheduled borrows need the exit device to stay on.
+scheduled borrows need a running exit device.
 
 **A rented static-residential (ISP) proxy.** First make sure that a detection
 service does not already know the IP as a proxy. Then set the secret to the proxy
@@ -1182,8 +1234,7 @@ container default timezone.
 Druks sends each notification to one account. The bot of the
 [Slack card](#slack) posts it, so connect Slack first. A message that asks for an
 answer has buttons. The card's signing secret authenticates the button clicks
-that Slack sends back. Under a manager, the manager's signature authenticates
-them.
+that Slack sends back.
 
 Druks sends these notifications:
 
@@ -1195,18 +1246,21 @@ Druks sends these notifications:
   run's page. A run that a chat started reports its failure in that chat.
 - **Run waits for an answer.** A run with a subject, which no chat started, parked
   on a gate. For a gate that you answer in Druks, the notification has buttons
-  and a link to the run. A run that a chat started asks in that chat. Failure to
-  deliver the notification does not unpark or fail the run.
+  and a link to the run. A run that a chat started asks in that chat. A question
+  that names an [approver](writing-an-app.md#wait-for-input) notifies the approver
+  instead, also when another account's chat started the run. A notification that
+  Druks cannot deliver does not end the wait or fail the run.
 - **Status.** A workflow that no chat started, and that reports its status, keeps
-  it in one message that Druks edits as the work goes on. See
+  it in one message that Druks edits as the work continues. See
   [Report status](writing-an-app.md#report-status).
 
-**Settings → Preferences → Notifications** chooses where the bot sends your notifications:
+**Settings → Preferences → Notifications** chooses where the bot sends your
+notifications:
 
 - **A Slack channel.** The bot must be a member of the channel. If the bot
   leaves the channel later, or the channel is archived or deleted, the bot sends
   the notification to your direct message instead.
-- **A Slack direct message.** This is the default. The bot needs your linked
+- **A Slack direct message.** The direct message is the default. The bot needs your linked
   Slack account. See [Link your account](chat.md#link-your-account).
 
 A run without an account, such as a scheduled run, belongs to the default
@@ -1225,8 +1279,9 @@ Druks always loads a catalog. A missing catalog stops startup. Catalogs
 contain definitions, not tokens.
 
 `DRUKS_MCP_DIRECTORY` points to the directory of MCP servers that the dashboard
-offers to add: a JSON file that maps each server name to the server's `title`,
-`description`, and `url`. The packaged directory lists vendor-hosted servers:
+offers to add. The directory is a JSON file that maps each server name to the
+server's `title`, `description`, and `url`. The packaged directory lists
+vendor-hosted servers:
 
 ```json
 {"grafana": {"title": "Grafana Cloud", "description": "Dashboards and alerts.", "url": "https://mcp.grafana.com/mcp"}}
@@ -1240,26 +1295,29 @@ The dashboard can enable catalog entries and add custom servers. Authentication
 is one of:
 
 - Secret headers, which Druks keeps in the vault. A bearer token is the
-  `Authorization` header spelled out; the form's Bearer field composes it.
+  `Authorization` header in full. The form's Bearer field composes it.
   **Set key** on the server's row replaces them. A catalog entry with
   `"auth": {"type": "static"}` gets its key the same way. While an enabled
   server has no key, every run fails.
 - Secret headers that each person sets. Add the server with **Each person uses
   their own key**. Each account then pastes its own key on the server's row,
   and its runs send that key. A run with no person uses the default account's
-  key. An account that has set no key gets the server left out of its sandbox.
+  key. Druks does not put the server in the sandbox of an account that set no key.
 - An OAuth connection, which requires `urls.endpoint`. The provider redirects
   to `<endpoint>/api/mcp-servers/oauth/callback`. A provider that allow-lists
   redirect hosts, such as Atlassian, must list that URL. **Connect for
   everyone** makes one connection that every run uses. While such an enabled
-  server has no connection, every run fails. **Connect your account** makes
-  each account connect its own. An account that has not connected the server
-  gets it left out of its sandbox. The run's agent call manifest records the
-  server as declared but not delivered.
+  server has no connection, every run fails.
+- An OAuth connection for each account. **Connect your account** makes each
+  account connect its own. Druks does not put the server in the sandbox of an
+  account that did not connect it. The run's agent call manifest records the server as
+  declared but not delivered.
 
 A connect requests every scope that the server advertises. A provider can
-refuse consent for a scope that the organization has not enabled; Atlassian
-then shows an empty consent page. **Scopes** on the server's row reads the
+refuse consent for a scope that the organization did not enable. Atlassian
+then shows an empty consent page.
+
+**Scopes** on the server's row reads the
 advertised list from the server. Untick the scopes that no agent needs and
 save. Druks then requests the ticked scopes at each connect, and the row
 shows their count. **Use advertised** returns to the full list. If the ticked
@@ -1277,7 +1335,7 @@ A service can own the host of an OAuth server: GitHub owns
   default account, so scheduled runs act as the service's login. Every other
   Jira account connects its own OAuth grant. Every other Linear account uses its
   own Linear sign-in, and **Connect** opens it. Atlassian accepts the Jira login
-  only after an organization admin turns on API token authentication for its MCP
+  only after an organization admin enables API token authentication for its MCP
   server.
 
 Druks gives OAuth discovery and client registration 30 seconds in total.
@@ -1288,9 +1346,10 @@ workspace declares a server with the same name. Each OAuth bearer and
 each secret header is a Drukbox entry behind a vault row. The sandbox holds a
 placeholder under a derived variable, and the harness configuration names that
 variable. The secrets proxy swaps the placeholder only for the server's host.
-The Druks issuer answers the value from the row that was bound when the
-sandbox was created. A pasted token reaches a running sandbox within five
-minutes. A server enabled after that gets no entry in a running sandbox. The
+
+The Druks issuer answers the value from the row that Druks bound when it
+created the sandbox. A pasted token reaches a running sandbox within five
+minutes. A server that someone enables after that gets no entry in a running sandbox. The
 API never returns a token.
 
 ### OAuth grant identity
@@ -1306,8 +1365,10 @@ grant. It tries these sources in order:
 
 Druks stores the issuer, the `sub` claim, the source, and the name and email
 if they are present. It stores `email_verified` only if the provider sends a
-Boolean. `identity_status` is `resolved`, `unavailable` if the provider has
-no source, or `failed`. A failed lookup does not change the connection.
+Boolean.
+
+`identity_status` is `resolved`, `unavailable` if the provider has no source, or
+`failed`. A failed lookup does not change the connection.
 `identity_error` records the reason for a failed lookup, such as an HTTP
 status or an invalid identity response. It contains no provider response
 body or token. The log carries the underlying error. A reconnect records a
@@ -1317,8 +1378,7 @@ The identity comes from the authorization server itself if it offers `openid`.
 It comes from the OpenID provider at the origin root if that provider has the
 same authorization and token endpoints. If a provider offers `openid`, Druks
 adds `openid`, `email`, and `profile` to the requested scopes, and registers
-its client with the same scopes. An existing grant gets an identity at its
-next reconnect.
+its client with the same scopes.
 
 Druks stores the `scope` field of the token response as the granted scopes.
 If the field is missing, the provider granted the requested scopes. If the
@@ -1333,41 +1393,45 @@ a Jira assignee. See
 The dashboard installs skill collections from GitHub repositories. A private
 repository needs the GitHub App installed on it.
 `DRUKS_SKILLS_DIR` selects the shared writable directory. Its default is
-`<DRUKS_DATA_DIR>/skills`. A call receives the enabled skills that it requests.
-If it requests none, it receives each enabled skill. A Software Factory build
-requests the recommended set from the repository profile. A call or a chat
-turn that runs as an agent, such as a [task run](chat.md#tasks), receives only
-the enabled skills picked on the agent, and none when the agent picked none.
+`<DRUKS_DATA_DIR>/skills`.
 
-Druks uploads no other
-installed skill. The capability manifest records the delivered
-set for each agent call.
+A call receives the enabled skills that it requests. If it requests none, it
+receives each enabled skill. A Software Factory build requests the recommended
+set from the repository profile. A call or a chat turn that runs as an agent,
+such as a [task run](chat.md#tasks), receives only the enabled skills that its
+agent picks. It receives none when the agent picks none.
 
-Before each turn of a conversation with an agent, Druks copies those skills
-into the agent's sandbox. An agent on OpenCode gets none. Druks
-removes from the sandbox each skill it copied earlier that the agent no longer
-gets, including a skill removed from Druks. A chat without an agent gets no
+Druks uploads no other installed skill. The capability manifest records the
+delivered set for each agent call.
+
+Before each turn of a conversation with an agent, Druks copies those skills into
+the agent's sandbox. An agent on OpenCode gets none. Druks removes from the
+sandbox each skill that it copied earlier and that the agent no longer gets. A skill
+that an admin removed from Druks is one of them. A chat without an agent gets no
 skills.
 
 ## Credential custody and secrets at rest
 
-Druks keeps every secret it holds in one table, the vault. A vault row has a
-kind, an audience, and an encrypted mapping of secrets:
+Druks keeps the credentials of providers, services, and MCP servers in one
+table, the vault. A vault row has a kind, an audience, and an encrypted mapping
+of secrets:
 
 | Kind | Audience | What the row keeps |
 | --- | --- | --- |
-| `static` | `provider:<id>`, `mcp:<name>` | A pasted API key, or one secret header of an MCP server |
+| `static` | `provider:<id>`, `mcp:<name>`, `service:<slug>` | A pasted API key, one secret header of an MCP server, or the key of a service |
+| `static` | `oauth:<…>`, `resource:<…>` | A token that Druks minted, until it expires |
 | `app_key` | `service:<slug>` | A GitHub App private key and webhook secret |
 | `oauth` | `service:<slug>`, `mcp:<name>` | A refresh token and the client that refreshes it |
 | `subscription` | `provider:<id>` | The token payload of a provider subscription |
+| `session` | `service:<slug>` | A linked WhatsApp or Twilio number and the secrets of its session |
 
 A revoked row keeps its facts and loses its secrets. An agent call keeps its
-reference to the row it billed. A reconnect revives the row.
+reference to the row that it billed. A reconnect revives the row.
 
-The secret `secrets_key` encrypts the vault and the browser-session payloads with
-AES-256-GCM. Each database column supplies authenticated associated data, and
-each value gets a derived encryption key. The setting is one or more
-comma-separated, base64-encoded 32-byte master keys:
+The secret `secrets_key` encrypts the vault, the browser-session payloads, and
+the secret settings of apps with AES-256-GCM. Each database column supplies
+authenticated associated data, and each value gets a derived encryption key. The
+setting is one or more comma-separated, base64-encoded 32-byte master keys:
 
 ```bash
 python3 -c 'import base64, os; print(base64.b64encode(os.urandom(32)).decode())'

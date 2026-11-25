@@ -10,8 +10,8 @@ from `pages.py`. The shared dashboard renders them. It also resolves
 navigation, runs actions, and refreshes followed regions.
 
 Most apps write no JavaScript. An app that needs full control of its interface
-still ships an ESM frontend. See
-[frontends](writing-an-app.md#frontends) for that path.
+ships an ESM frontend. See [frontends](writing-an-app.md#frontends) for that
+path.
 
 This page is the V1 contract. It gives the exact Python fields and the exact
 JSON for every public model. The backend, the renderer, and
@@ -300,14 +300,14 @@ one of the two by registration order.
 
 A page function is a pure read-side projection.
 
-A page function can:
+A page function can do these things:
 
 - Read Druks state
 - Read the app's own data
 - Read a projection
 - Read a read-only external source.
 
-A page function cannot:
+A page function cannot do these things:
 
 - Write data
 - Start or enqueue work
@@ -358,13 +358,11 @@ subject to render the page.
 A `Section` that follows a subject must have a `name`. The shell replaces the
 region by name. It can never replace an unnamed one.
 
-Druks reuses the per-subject event stream that every app already gets:
+Druks reuses the per-subject event stream that every app gets:
 
 ```text
 GET /api/<app>/<subject type>/<subject id>/stream
 ```
-
-There is no second streaming system.
 
 `follows=` also takes the subject class. The page or the region then watches
 every subject of that type. `subject_id` is empty. The shell reads the board
@@ -468,7 +466,7 @@ its own blocks. See [Approvals in Slack](#approvals-in-slack).
 | `List` | A list. |
 | `Table` | A markdown table. The row detail stays on the dashboard. |
 | `Chart` | A markdown table of its numbers: a row for each category and a column for each series. |
-| `Progress` | A list of its steps with the status of each, or the share as text. |
+| `Progress` | A list of its steps with the status of each. Without steps: the share as text, or that it still runs. |
 | `Timeline` | A list of its items, oldest first, with the time of each. |
 | `Link` | A link to the page on the dashboard, or to the outside address. |
 | `Image`, `ImageGallery`, `Files` | A link to each image or file. |
@@ -522,7 +520,9 @@ an `Action`, a `Form`, or a `GateControls`, before it saves the status.
 
 ## Approvals in Slack
 
-Slack draws these blocks of an approval with its own blocks:
+Slack draws these blocks of an approval's context with its own blocks.
+[Cards and groups in Slack](#cards-and-groups-in-slack) says which of them Slack
+draws inside another block:
 
 | Block | In Slack |
 | --- | --- |
@@ -531,8 +531,13 @@ Slack draws these blocks of an approval with its own blocks:
 | `Link` | A button that opens the address of the link. |
 | `Table` | A data table that the person can sort and read page by page. The title is its caption, or the first column label when the table has no title. A `NumberValue` is a number cell. Slack sorts a column of number cells as numbers. A value with a link is a link. A cell that holds only an `Action` with no fields is a button. See [Actions in Slack](#actions-in-slack). Any other value shows its text form. An empty value or column label shows a dash. The row detail stays on the dashboard. A table that selects rows shows its text form. |
 | `Chart` | A chart of the same kind: line, bar, area, or pie. A line, bar, or area chart has the categories along the axis, in their order. Each series has a point for each category. The category label and the value label are the titles of the axes. A pie has no axes. It has a segment for each category, in their order, with the label of the category and its value. A chart with no title takes its value label as its title. An empty category or series label shows a dash. |
-| `Image` | An image that Slack fetches from the address of the image. The alternative text is its alt text. The caption is its title. An image with no caption has no title. |
+| `Image` | An image. Slack fetches an image at an outside address. Druks uploads the image of a Druks file to Slack. The alternative text is its alt text. The caption is its title. An image with no caption has no title. |
 | `ImageGallery` | An image for each image of the gallery, in their order. The title of the gallery is a heading above them, as in its text form. A gallery with no title has no heading. |
+| `Card` | A card with its title, its description, its image, and a button for each link. A card that holds other blocks is a container. |
+| `Cards` | A carousel of cards that the person can scroll, under the title of the list. |
+| `Section` | A container under its title. A section with no title shows its blocks in order. |
+| `Columns` | A layout with the columns side by side. |
+| `Stack` | Its blocks, in order. |
 | `Action` | At the top of the context, an input for each of its fields. Under them, a button runs the action as the person who clicks it. See [Actions in Slack](#actions-in-slack). |
 | `Form` | At the top of the context, a form that sends on a button has an input for each of its fields. Under them, it has a button for its action and one for each of its extra actions. See [Actions in Slack](#actions-in-slack). |
 
@@ -594,18 +599,46 @@ characters. Druks cuts no label of a pie. A cut label can hide the category of a
 share. A pie shows its text form when it has no categories, more than 12
 categories, or a category label of more than 20 characters.
 
-Slack fetches an image from its address. Druks does not fetch it. Slack draws a
-png, a jpg, or a gif. Druks finds the format only from the address.
+Slack draws a png, a jpg, or a gif. Slack fetches an image at an outside
+address. Druks does not fetch it. Druks knows its format only from the address.
 
-An image shows as an image when its `url` is an outside `http(s)` address. The
-path of the address must end in `.png`, `.jpg`, `.jpeg`, or `.gif`, in capitals
-or not. The query and the fragment do not count. Any other image shows its text
-form. This is true for an svg, an address with no extension, a path on the
-dashboard, and a `data:` address.
+Such an image shows as an image when its `url` is an outside `http(s)` address.
+The path of the address must end in `.png`, `.jpg`, `.jpeg`, or `.gif`, in
+capitals or not. The query and the fragment do not count. Slack fetches the
+address that the text form links. Druks encodes a space or a parenthesis in it,
+as in text.
 
-A Druks file shows its text form too. Slack cannot read a Druks file by its
-address. Slack fetches the address that the text form links. Druks encodes a
-space or a parenthesis in it, as in text.
+Slack cannot read a Druks file by its address. Druks uploads the file to Slack
+instead. An image is a Druks file when its `url` is the `url` of a `File`,
+`/api/files/{id}`, alone or after `urls.endpoint`. The same path on another host
+is an outside address.
+
+Druks reads the format from the content type of the file: `image/png`,
+`image/jpeg`, or `image/gif`. It uploads a file of at most 10 MiB, and only when
+the message has room for the image. Druks uploads the file again for each message
+and for each edit of a message. It deletes no file that it uploads.
+
+Slack keeps the uploaded file private: Druks shares it in no channel. The image
+block shows it to each person who sees the message. Druks uploads a file only
+when the account that the message is for can use the app of the file. A download
+from Druks requires the same. Druks does not check each person in the channel.
+
+The upload needs the bot scope `files:write`: see [Slack](configuration.md#slack).
+
+Every other image shows its text form:
+
+- An svg, or an address with no extension.
+- Every other path on the dashboard, and a `data:` address.
+- A Druks file of another type, or of more than 10 MiB.
+- A Druks file of an app that the account of the message cannot use.
+- An id that names no file, and a deleted file.
+
+A Druks file whose upload fails shows its text form too. The message still goes
+out. When Slack answers that the app lacks `files:write`, Druks uploads no other
+image of that message. The next message tries again.
+
+A `Files` block shows its text form: a link to each file. Druks uploads none of
+its files. Each download then stays behind the sign-in of Druks.
 
 Slack draws each image of a gallery that it can draw. Each other image keeps its
 line of the text form, in its place among the images. A gallery with no image
@@ -616,13 +649,102 @@ heading and the lines of a gallery count in the 12,000 characters of markdown.
 
 When Slack refuses the blocks, Druks sends the text of the approval in the same
 place, with the same buttons. Slack refuses them, for example, when it cannot
-download an image, or when the channel takes no images. A table or a chart then
-shows as a markdown table, and an image as a link. An action or a form shows its
-text form.
+download an image, or when the channel takes no images. Slack also refuses a
+file for a moment after its upload. When Slack refuses a file, Druks posts the
+blocks once more, about a second later, before it sends the text. A table or a
+chart then shows as a markdown table, and an image as a link. An action or a
+form shows its text form.
 
 Druks edits the message when the approval gets an answer or closes. The edit
 draws the blocks again, with the outcome in place of the buttons. An action and a
 form then show their text forms.
+
+### Cards and groups in Slack
+
+A `Card` that holds only `Link` blocks and one `Image` at most is a card of
+Slack. The card shows the title, the description as its body, and the image as
+its hero image. It has a button for each link: the `link` of the card, each
+`Link` among its blocks, then each `Link` of its controls. The button for the
+`link` of the card shows the title, as in its text form. A card with no title
+shows no button for its `link`.
+
+Any other `Card` is a container. The container shows the title, the
+description as its subtitle, and the blocks of the card. The buttons for the
+`link` of the card and for each `Link` of its controls follow the blocks. A
+`Section` with a title is a container too, under its title. The buttons for the
+`Link` controls of a section come before its blocks.
+
+Slack runs no action of the controls of a card or a section. An `Action` of the
+controls does not show in Slack. The drag of a card and the `drop` action of a
+`Cards` list stay in the dashboard.
+
+A `Cards` list is a carousel when each of its cards is a card of Slack. A
+carousel holds 1 to 10 cards. Otherwise each card of the list shows on its own,
+in order. The card is then a card of Slack, a container, or its text form. The
+title of the list is a heading above the cards. An empty list shows its text
+form: its title and its `empty` state. Each `layout` of a list follows these
+rules: `wrap`, `stack`, and `tiles` show alike.
+
+`Columns` of 3 blocks or fewer are a layout of Slack, with the columns side by
+side, in order. More than 3 columns show one under the other, as a `Stack`
+does. The columns of a layout have the same width for each `layout`: `even`,
+`sidebar`, and `split`. A carousel, a data table, and a chart each take a row
+of the layout. The other columns share a row. A layout holds 3 items in a row
+and 5 rows. Slack requires a label for a layout. Druks gives it the label
+`Columns`, which Slack does not show.
+
+A `Stack` and a `Section` with no title show their blocks in order, in their
+place. The buttons for the `Link` controls of the section come first.
+
+Slack holds only some blocks inside a container or a layout:
+
+- A container holds `Text`, `Facts`, `Metrics`, a `Divider`, a `Link`, an
+  `Image`, and `Columns`. Text is a section of Slack's mrkdwn. Druks escapes
+  `&`, `<`, and `>` in it.
+- An item of a layout holds the same blocks, except `Columns`. It also holds a
+  `Card`, a `Cards` list with no title that is a carousel, a `Section` with a
+  title, a `Table` that selects no rows, and a `Chart`.
+- A `Stack` and a `Section` with no title hold the blocks that their place
+  holds. They add no level.
+- Slack puts a container or a layout in another one 2 levels deep at most.
+- Each column of a layout is one block. A column that shows more than one block
+  makes the columns show their text form. Examples are a stack of two blocks,
+  and `Facts` of more than 10 facts.
+
+A group that holds any other block shows its text form. So does a group with a
+block past a limit of Slack, or a block that Slack cannot draw. The text form is
+a markdown block at the top of the message, in place of the whole group. Slack
+takes no markdown inside a container or a layout. Druks thus shows no part of
+such a group with Slack's blocks.
+
+A group shows its text form past one of these limits of Slack:
+
+- The title of a card of more than 150 characters, a description of more than
+  200 characters, or more than 3 links
+- The title or the subtitle of a container of more than 150 characters, no
+  title, or more than 10 blocks inside
+- Text inside a container or a layout of more than 3,000 characters
+- A table in a layout whose rows do not all fit. Only the top of the message
+  holds the line that says how many rows Druks did not send.
+
+Under a `Card`, a `Cards` list, a `Section`, `Columns`, or a `Stack`, an action
+and a form show their text forms. A cell of a table there shows the text of its
+action. See [Actions in Slack](#actions-in-slack).
+
+Each block inside a container, a carousel, or a layout takes one of the 50
+blocks of a message. When the message has no room for a whole group, the group
+shows its text form in the last block, as other blocks do. A table and a chart
+inside a layout use the room of the message for its data tables and charts. A
+group that shows its text form takes none of that room. Its text counts in the
+12,000 characters of markdown.
+
+The image of a card is its hero image. Slack shows no caption on a hero image.
+Druks uploads the image of a Druks file to Slack for a card, a container, and a
+layout too, with the same checks as for an `Image` block. Each file goes up once
+for a message, however many times the message shows it. Druks uploads no image
+of a group that shows its text form. When Slack cannot show the image of a
+card, the card shows its text form, with the link to the image. A list of cards
+then shows each of its cards on its own.
 
 ### Actions in Slack
 
@@ -644,7 +766,9 @@ reply = await self.review(
 ```
 
 An action with no fields that is alone in a cell of a table is a button too. The
-table must be at the top of the context and select no rows.
+table must be at the top of the context and select no rows. A block inside a
+`Card`, a `Cards` list, a `Section`, `Columns`, or a `Stack` is not at the top of
+the context.
 
 The `operation` of each action in the context names a write of the run's own
 app. `review` checks the operation when the run parks, as a page read checks it.
@@ -808,7 +932,8 @@ An action target thus declares path parameters and a flat JSON body only:
 
 ```python
 @router.post("/notes/{note_id}/archive", operation_id="archive_note")
-async def archive_note(note_id: int, reason: Annotated[str, Body(embed=True)]) -> ...
+async def archive_note(note_id: int, reason: Annotated[str, Body(embed=True)]):
+    ...
 ```
 
 The app roster at `GET /api/apps` carries the table that the renderer resolves
@@ -884,7 +1009,7 @@ rest of the page still renders.
 
 An absolute `url` opens in a new tab. A relative `url` stays in this tab. A
 path under `/api/`, such as `/api/oauth/acme/connect`, loads from the server.
-Any other path opens in the shell.
+Every other path opens in the shell.
 
 `Link` and `Action` are different public types. Both are blocks. A page can
 hold one directly. Every container's `controls` holds either one.
@@ -912,11 +1037,11 @@ input than they store:
 
 | Field | Author passes | Druks stores |
 | --- | --- | --- |
-| `Page.follows`, `Section.follows`, `Link.subject` | a subject | `Follows` |
+| `Page.follows`, `Section.follows`, `Link.subject`, `GateControls.subject`, `SubjectStatus.subject` | a subject | `Follows` |
 | `Files.files` | `druks.files.File` objects | `list[FileSummary]` |
 | `Metric.value`, `Fact.value`, `TableRow.cells`, `List.items` | a `str` | `TextValue` |
 | `Metric.value`, `Fact.value`, `TableRow.cells`, `List.items` | an `int` or a `float` | `NumberValue` |
-| `Metric.value`, `Fact.value`, `TableRow.cells`, `List.items` | any `Value` | the same value |
+| `Metric.value`, `Fact.value`, `TableRow.cells`, `List.items` | a `Value` | the same value |
 
 A `str`, an `int`, or a `float` is the short form of a value. The short form
 gets the defaults of its `Value`. A `TextValue` then has no description and no
@@ -1322,13 +1447,15 @@ Druks refuses the form when the page function builds it.
   "description": "",
   "fields": [
     {
-      "field": "text",
+      "field": "text_area",
       "name": "body",
       "label": "Note",
       "value": "",
-      "placeholder": "What did you see?",
+      "placeholder": "",
       "helpText": "",
-      "isRequired": true
+      "isRequired": true,
+      "rows": 4,
+      "isMarkdown": false
     }
   ],
   "action": {
@@ -1734,7 +1861,7 @@ class Stack:
 ```
 
 A `Stack` that holds no block is false. `if stack:` then asks whether it shows
-anything. Every other block is always true.
+something. Every other block is always true.
 
 ### Columns
 
@@ -1928,17 +2055,16 @@ class TextAreaField:
     help_text: str = ""
     is_required: bool = False
     rows: int = 4
-    markdown: bool = False
+    is_markdown: bool = False
 ```
 
 ```json
-{"field": "text_area", "name": "body", "label": "Note", "value": "", "placeholder": "", "helpText": "", "isRequired": false, "rows": 4, "markdown": false}
+{"field": "text_area", "name": "body", "label": "Note", "value": "", "placeholder": "", "helpText": "", "isRequired": false, "rows": 4, "isMarkdown": false}
 ```
 
-`markdown=True` keeps the value as markdown source. The shell renders formatted
-text in place. A selection toolbar applies marks, headings, lists, and links.
-A submit still sends markdown. There is no HTML roundtrip. Read-only `Markdown`
-blocks still use the GFM renderer.
+`is_markdown=True` keeps the value as markdown source. The shell renders
+formatted text in place. A selection toolbar applies marks, headings, lists, and
+links. Submit sends markdown. Read-only `Markdown` blocks use the GFM renderer.
 
 ### NumberField
 
@@ -2121,8 +2247,8 @@ async def add_photo(photo: Annotated[str, Body(embed=True)]) -> None:
     shop.image = File(id=photo)
 ```
 
-A `FileField` column takes the id and keeps a real foreign key. The database
-refuses an id that names no file rather than store it.
+A `FileField` column takes a `File` and stores its id as a foreign key. The
+database refuses an id that names no file.
 
 Druks stores the upload under the app whose page holds the form and under the
 operator who sent it. It takes both from the request, not from the client.
