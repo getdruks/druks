@@ -57,6 +57,7 @@ def test_repo_profiler_output_maps_verification_commands_to_plain_dicts():
             "lint_commands": [{"command": "ruff check .", "ci_check": None}],
             "typecheck_commands": [],
             "recommended_skills": ["django-patterns"],
+            "setup_script_draft": "#!/bin/sh\nset -eu\n",
         }
     )
 
@@ -73,6 +74,7 @@ def test_repo_profiler_output_maps_verification_commands_to_plain_dicts():
                 "typecheck_commands": [],
             },
             "recommended_skills": ["django-patterns"],
+            "setup_script_draft": "#!/bin/sh\nset -eu\n",
         },
     }
 

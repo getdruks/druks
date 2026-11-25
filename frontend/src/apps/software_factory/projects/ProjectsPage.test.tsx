@@ -339,6 +339,42 @@ describe('repository details', () => {
     expect(screen.queryByRole('region', { name: 'acme/service' })).toBeNull()
   })
 
+  it('offers the setup draft to copy until the repo has a template', async () => {
+    const draft = '#!/bin/sh\nset -eu\ncurl -LsSf https://astral.sh/uv/install.sh | sh\n'
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
+    renderPage([project({ repos: [repo({ profile: { setup_script_draft: draft } })] })])
+    fireEvent.click(await screen.findByRole('button', { name: /acme\/service/ }))
+    expect(screen.getByText(/astral\.sh\/uv/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Copy script' }))
+    expect(writeText).toHaveBeenCalledWith(draft)
+    vi.unstubAllGlobals()
+  })
+
+  it('asks the person to read the setup draft before they commit it', async () => {
+    renderPage([project({ repos: [repo({ profile: { setup_script_draft: '#!/bin/sh\n' } })] })])
+    fireEvent.click(await screen.findByRole('button', { name: /acme\/service/ }))
+    expect(screen.getByText(/Druks never runs it\. Read it, then commit it/)).toBeTruthy()
+  })
+
+  it.each([
+    ['refuses', () => ({ writeText: vi.fn().mockRejectedValue(new Error('NotAllowedError')) })],
+    ['is missing', () => undefined],
+  ])('says to copy the draft by hand when the clipboard %s', async (_, clipboard) => {
+    vi.stubGlobal('navigator', { ...navigator, clipboard: clipboard() })
+    renderPage([project({ repos: [repo({ profile: { setup_script_draft: '#!/bin/sh\n' } })] })])
+    fireEvent.click(await screen.findByRole('button', { name: /acme\/service/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Copy script' }))
+    expect(await screen.findByText(/copy it by hand/)).toBeTruthy()
+    vi.unstubAllGlobals()
+  })
+
+  it('hides the setup draft once the repo has a template', async () => {
+    renderPage([project({ repos: [repo({ profile: { setup_script_draft: '#!/bin/sh\n', sandbox_template: 'template-1' } })] })])
+    fireEvent.click(await screen.findByRole('button', { name: /acme\/service/ }))
+    expect(screen.queryByRole('button', { name: 'Copy script' })).toBeNull()
+  })
+
   it('starts profiling and refreshes the repository board', async () => {
     const client = renderPage([project({ repos: [repo()] })])
     const invalidate = vi.spyOn(client, 'invalidateQueries')

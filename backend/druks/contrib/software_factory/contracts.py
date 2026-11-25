@@ -50,6 +50,9 @@ class RepoProfilerOutput(workflows.InstructionOutput):
     # Skills the profiler judges an implementer will need to build here — not
     # skills bundled in the repo.
     recommended_skills: list[str]
+    # A setup script for the repo's check box that a person may commit. Null when the
+    # default box already has what the verification commands need.
+    setup_script_draft: str | None
 
     def to_result(self) -> dict[str, Any]:
         # ProjectRepo.profile holds the baseline as plain JSON, so it stays a dict end to end.
@@ -75,6 +78,7 @@ class RepoProfilerOutput(workflows.InstructionOutput):
                     ],
                 },
                 "recommended_skills": self.recommended_skills,
+                "setup_script_draft": self.setup_script_draft,
             },
         }
 
