@@ -77,6 +77,47 @@ class TestResolveAppConfig:
         policy = await RepoPolicy.resolve(REPO)
         assert policy.verification.sandbox.setup == ".druks/software_factory/setup.sh"
 
+    async def test_a_sandbox_names_the_script_that_starts_its_box(self, monkeypatch):
+        _fake_fetch(
+            monkeypatch,
+            {
+                (REPO, ".druks/software_factory/config.yml"): (
+                    "verification:\n  sandbox:\n    setup: .druks/software_factory/setup.sh\n"
+                    "    start: .druks/software_factory/start.sh\n"
+                )
+            },
+        )
+        policy = await RepoPolicy.resolve(REPO)
+        assert policy.verification.sandbox.start == ".druks/software_factory/start.sh"
+
+    @pytest.mark.parametrize(
+        "path", ["start.sh", ".druks/software_factory/../start.sh", ".druks/software_factory/"]
+    )
+    async def test_a_start_script_outside_the_config_folder_fails_loudly(self, monkeypatch, path):
+        _fake_fetch(
+            monkeypatch,
+            {
+                (REPO, ".druks/software_factory/config.yml"): (
+                    "verification:\n  sandbox:\n    setup: .druks/software_factory/setup.sh\n"
+                    f"    start: {path}\n"
+                )
+            },
+        )
+        with pytest.raises(AppConfigError, match="start must be a path in"):
+            await RepoPolicy.resolve(REPO)
+
+    async def test_a_sandbox_with_a_start_script_and_no_setup_fails_loudly(self, monkeypatch):
+        _fake_fetch(
+            monkeypatch,
+            {
+                (REPO, ".druks/software_factory/config.yml"): (
+                    "verification:\n  sandbox:\n    start: .druks/software_factory/start.sh\n"
+                )
+            },
+        )
+        with pytest.raises(AppConfigError, match="start needs a setup script"):
+            await RepoPolicy.resolve(REPO)
+
     async def test_a_sandbox_with_only_env_fails_loudly(self, monkeypatch):
         _fake_fetch(
             monkeypatch,

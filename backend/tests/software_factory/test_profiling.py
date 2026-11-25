@@ -370,6 +370,30 @@ class TestSandboxTemplate:
         with pytest.raises(SandboxSetupMissing, match=f"acme/widget has no {SETUP}"):
             await Profile().run(repo_id=repo.id)
 
+    async def test_a_missing_start_script_fails_the_profile_and_names_it(
+        self, druks_db, monkeypatch
+    ):
+        repo = await _seed_repo()
+        start = ".druks/software_factory/start.sh"
+
+        async def _policy(repo):
+            return RepoPolicy(
+                verification=VerificationProfile(
+                    sandbox=VerificationSandbox(setup=SETUP, start=start)
+                )
+            )
+
+        async def _fetch_file(*, repo, path):
+            return None if path == start else "#!/bin/sh\n"
+
+        monkeypatch.setattr(RepoPolicy, "resolve", staticmethod(_policy))
+        _repo_files(monkeypatch)
+        monkeypatch.setattr("druks.contrib.software_factory.workflows.fetch_file", _fetch_file)
+        _templates(monkeypatch, "template-1")
+
+        with pytest.raises(SandboxSetupMissing, match=f"acme/widget has no {start}"):
+            await Profile().run(repo_id=repo.id)
+
     async def test_a_script_that_does_not_build_keeps_the_last_good_template(
         self, druks_db, monkeypatch
     ):

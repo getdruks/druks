@@ -1,7 +1,7 @@
 import re
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
 
 from druks.apps.config import resolve_app_config
 from druks.prompts import render_prompt
@@ -35,16 +35,20 @@ class VerificationSandbox(BaseModel):
     # Set on the box at creation, never in the template. The values are read from the repo,
     # so they are not secrets: a secret reaches a box through the vault.
     env: dict[str, str] = Field(default_factory=dict)
+    # The script that runs on the check box before each check, a path in the default branch
+    # like ``setup``. A template is built once and keeps its disk, so what a boot needs, such
+    # as a service or a dependency sync, lives here.
+    start: str | None = None
 
-    @field_validator("setup")
+    @field_validator("setup", "start")
     @classmethod
-    def setup_is_in_the_config_folder(cls, setup: str | None) -> str | None:
-        if setup is None:  # ast-grep-ignore: rule-2
-            return setup
-        in_folder = setup.startswith(SETUP_FOLDER) and not setup.endswith("/")
-        if not in_folder or ".." in setup.split("/"):
-            raise ValueError(f"setup must be a path in {SETUP_FOLDER}, not {setup!r}")
-        return setup
+    def script_is_in_the_config_folder(cls, path: str | None, info: ValidationInfo) -> str | None:
+        if path is None:  # ast-grep-ignore: rule-2
+            return path
+        in_folder = path.startswith(SETUP_FOLDER) and not path.endswith("/")
+        if not in_folder or ".." in path.split("/"):
+            raise ValueError(f"{info.field_name} must be a path in {SETUP_FOLDER}, not {path!r}")
+        return path
 
     @field_validator("env")
     @classmethod
@@ -54,11 +58,15 @@ class VerificationSandbox(BaseModel):
         return env
 
     @model_validator(mode="after")
-    def env_needs_a_setup_script(self) -> "VerificationSandbox":
-        # Without a template the check runs on the agent's own box, which this env never reaches.
+    def env_and_start_need_a_setup_script(self) -> "VerificationSandbox":
+        # Without a template the check runs on the agent's own box, which neither reaches.
         if self.env and not self.setup:
             raise ValueError(
                 "env needs a setup script: only a check box made from a template gets it"
+            )
+        if self.start and not self.setup:
+            raise ValueError(
+                "start needs a setup script: only a check box made from a template runs it"
             )
         return self
 

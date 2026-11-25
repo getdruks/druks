@@ -718,6 +718,7 @@ A repository can also describe the computer that its checks run on:
 verification:
   sandbox:
     setup: .druks/software_factory/setup.sh
+    start: .druks/software_factory/start.sh
     env:
       DATABASE_URL: postgres://localhost/test
 ```
@@ -741,8 +742,24 @@ that changes only a lockfile does not, so a new lockfile reaches the template at
 the next profile.
 
 The box that runs a check with `core_run_check` is made from that template, with
-the `env` set on it when the box is created. `env` needs `setup`, and a config that
-sets `env` alone fails the build with an error that names it. A repository with no
+the `env` set on it when the box is created. `env` and `start` need `setup`, and a
+config that sets either alone fails the build with an error that names it. A template
+is built once and keeps its disk, so nothing that `setup` starts is running when a
+check begins. The `start` script is for that: a path in `.druks/software_factory/`,
+read from the default branch like `setup`, that runs on the check box before each
+check. Put in it what a boot needs, such as the services that the tests use and a
+dependency sync. It runs as the user that runs the check, which can have no `sudo`, so
+it starts services in that user's own directory. It runs before every check, so it must
+be safe to run twice. A script that succeeds shows the last 20 lines of its output, and at most 2,000
+characters, ahead of the output of the check, so a long log of installs, or a progress bar
+on one line, does not push the check's own output out of what the service keeps. It has its own time, half of the check's up to 300
+seconds, so a start that never ends cannot use the whole budget. A service that it leaves
+running does not hold the check. A script that fails ends the check with its own exit
+code, the last 6,000 characters of its output, and the line "The start script of the check box failed with exit
+code N", and the command does not run. One that outlives its time ends the check with
+exit code 124 and the line "The start script of the check box timed out after N seconds".
+A script that exits 124 sooner than that is a failure like any other. The profiler
+fails when the file is missing from the default branch. A repository with no
 template has no check box, because the default image holds none of the repository's
 tools: its checks run in the agent's own checkout, on the agent's box, which already
 has them. The agent still ends its turn and gets the result in the same session. The
@@ -750,16 +767,16 @@ command runs in the checkout as the agent left it, uncommitted work included, as
 agent's user, with the agent's environment: a command that prints its environment shows
 it to the agent. A command that outlives its timeout is stopped on the box with the
 processes that it started, except one that it detached into a session of its own,
-which stays. A repository that sets `setup` and `env` has no template until the
-profiler has built it, and until then its checks run on the agent's own box without the
-`env`: Druks logs a warning each time. A check
+which stays. A repository that sets `setup` has no template until the profiler has
+built it, and until then its checks run on the agent's own box without the `env` and
+without the `start` script: Druks logs a warning each time. A check
 on the check box that still exits with 127, for a tool that `setup` did not install,
 comes back with a sentence that says the box is the likely cause. A name
 in `env` must be a valid variable name. The values come from
 `config.yml`, a file of the repository, so they are not secrets: a secret reaches a
 box through the vault. Druks reads `env` from the default branch, like `setup`. The
-size and the start script of the sandbox are not read, and a `verification.sandbox`
-key other than `setup` and `env` fails the build with an error that names it.
+size of the sandbox is not read, and a `verification.sandbox` key other than `setup`,
+`start` and `env` fails the build with an error that names it.
 
 When Druks receives a push to the default branch that changes `config.yml`, the
 next build uses the new file. When a team lists Software Factory, this happens

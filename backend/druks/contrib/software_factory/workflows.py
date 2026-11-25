@@ -107,8 +107,9 @@ class BuildWorkspace(RepoWorkspace):
 
     @classmethod
     async def get_check_box(cls, subject: Any) -> dict[str, Any]:
-        # The repo's template, when its setup script has built one, and the env that its
-        # config sets. A repo with no template checks on the agent's own box.
+        # The repo's template, when its setup script has built one, the env that its config
+        # sets, and the start script that runs before each check. A repo with no template
+        # checks on the agent's own box.
         project_repo = await ProjectRepo.get_for_repo(subject.repo, raise_on_missing=True)
         policy = await RepoPolicy.resolve(subject.repo)
         sandbox = policy.verification and policy.verification.sandbox
@@ -117,6 +118,13 @@ class BuildWorkspace(RepoWorkspace):
             box["template"] = template
         if sandbox and sandbox.env:
             box["env"] = dict(sandbox.env)
+        if sandbox and sandbox.start:
+            # Read from the default branch like ``setup``, so a pull request cannot change
+            # the script that its own checks start with.
+            script = await fetch_file(repo=subject.repo, path=sandbox.start)
+            if not script:
+                raise SandboxSetupMissing(subject.repo, sandbox.start)
+            box["start"] = script
         return box
 
     @classmethod
@@ -828,6 +836,9 @@ class Profile(Workflow):
             setup_script = await fetch_file(repo=repo, path=sandbox.setup)
             if not setup_script:
                 raise SandboxSetupMissing(repo, sandbox.setup)
+            # A start script that is missing would fail every check, so it fails the profile.
+            if sandbox.start and not await fetch_file(repo=repo, path=sandbox.start):
+                raise SandboxSetupMissing(repo, sandbox.start)
             # Drukbox keys a template by its script. The lockfiles go into the script, so a
             # changed dependency builds a new template.
             github = await Github.get_client(repo)
