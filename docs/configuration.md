@@ -1242,8 +1242,9 @@ Druks sends these notifications:
   so Druks disconnected it. Reconnect it in **Settings → Providers**.
 - **Login expires soon.** An Anthropic login expires in three days or less. The
   notification gives the time in your timezone.
-- **Run failed.** A run that no chat started failed. The notification links to the
-  run's page. A run that a chat started reports its failure in that chat.
+- **Run failed.** A run with no chat failed: no chat started it, or its chat was
+  deleted. The notification links to the run's page. A run that still has its chat
+  reports its failure in that chat.
 - **Run waits for an answer.** A run with a subject, which no chat started, parked
   on a gate. For a gate that you answer in Druks, the notification has buttons
   and a link to the run. A run that a chat started asks in that chat. A question

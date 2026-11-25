@@ -126,6 +126,7 @@ async def runtime():
                 9018,
                 9019,
                 9023,
+                9024,
             )
         )
         session.commit()
@@ -200,6 +201,14 @@ async def runtime():
             _FAILED_EXECUTIONS.append(self.workflow_id)
             raise RuntimeError("the disk is full")
 
+    class FailingParkFlow(Workflow):
+        # Parks first, so a test can delete the chat before the run fails.
+        subject = NotificationProbe
+
+        async def run_multistep(self) -> None:
+            await ParkNote.wait(input_request={"presentation": "external", "label": "Round one"})
+            raise RuntimeError("the disk is full")
+
     class StatusFlow(Workflow):
         subject = NotificationProbe
 
@@ -250,6 +259,7 @@ async def runtime():
             ExternalUrlFlow=ExternalUrlFlow,
             DoubleParkFlow=DoubleParkFlow,
             FailingFlow=FailingFlow,
+            FailingParkFlow=FailingParkFlow,
             StatusFlow=StatusFlow,
             EndingFlow=EndingFlow,
             ReviewedFlow=ReviewedFlow,
@@ -893,6 +903,45 @@ async def test_a_failed_run_a_chat_started_sends_no_notification(runtime, delive
     await _wait_run(runtime, workflow_id, lambda run: run.state == RunState.FAILED)
 
     assert not await _notifications_for_run(runtime, workflow_id)
+
+
+async def test_a_failed_run_whose_chat_was_deleted_tells_its_owner(runtime, deliver_spy):
+    # Deleting an agent deletes its conversations, and the FK NULLs the run's
+    # conversation. A run that began in that chat has none left when it fails, so it
+    # notifies its account, as a run that no chat started does.
+    async def create():
+        account = await Account.get_default(db_session())
+        conversation = Conversation(
+            account_id=account.id,
+            source=ConversationSource.SLACK,
+            user_id="U1",
+            thread_id="C9:1700000000.000300",
+        )
+        db_session().add(conversation)
+        await db_session().flush()
+        return conversation.id
+
+    conversation_id = await _seed(runtime, create)
+    reset = current_conversation_id.set(conversation_id)
+    try:
+        workflow_id = await runtime.FailingParkFlow.start(subject=NotificationProbe(id=9024))
+    finally:
+        current_conversation_id.reset(reset)
+    parked = await _wait_run(runtime, workflow_id, lambda run: run.state == RunState.PARKED)
+
+    async def delete_conversation():
+        conversation = await db_session().get(Conversation, conversation_id)
+        await db_session().delete(conversation)
+
+    await _seed(runtime, delete_conversation)
+    await parked.resume(action="approve")
+    run = await _wait_run(runtime, workflow_id, lambda run: run.state == RunState.FAILED)
+
+    # The park asks the account too when the chat is deleted before its own step reads it.
+    notifications = await _notifications_for_run(runtime, workflow_id)
+    (notification,) = [n for n in notifications if n.reason == "run.failed"]
+    assert notification.account_id == run.account_id
+    assert "the disk is full" in notification.body
 
 
 async def test_a_replayed_failure_tells_the_owner_once(runtime, deliver_spy):
