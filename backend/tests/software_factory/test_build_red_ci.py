@@ -4,18 +4,24 @@ from types import SimpleNamespace
 from dbos import DBOS
 from druks import workflows
 from druks.contrib.software_factory.app import SoftwareFactory
-from druks.contrib.software_factory.contracts import CiReport
+from druks.contrib.software_factory.contracts import (
+    CiReport,
+    FindingOutput,
+    ImplementationOutput,
+    ReviewReport,
+)
 from druks.contrib.software_factory.journal import BuildJournal
 from druks.contrib.software_factory.workflows import Build
 from druks.harnesses.exceptions import HarnessSandboxProvisioningError
 from druks.workflows import WaitTimeout
 
 
-def _flow(*, red: bool) -> Build:
+def _flow(*, red: bool, asked: bool = False) -> Build:
     flow = Build()
     flow.journal = SimpleNamespace(
         plan_size=None,
         red_ci_report=CiReport(head_sha="5e6f7a8b", conclusion="red") if red else None,
+        requested_changes=object() if asked else None,
     )
     return flow
 
@@ -199,3 +205,69 @@ async def test_a_wait_that_does_not_hold_the_box_takes_no_lease(monkeypatch):
     await flow.wait("check.completed", label="Waiting for CI", ttl_seconds=60)
 
     assert ("recv", "check.completed") in events
+
+
+async def test_a_round_that_a_review_asked_for_resumes_the_implementers_session(monkeypatch):
+    flow = _flow(red=False, asked=True)
+    seen = []
+
+    async def implement(*, effort=None, resume=None):
+        seen.append(resume)
+        return SimpleNamespace(status="success", check_command=None)
+
+    monkeypatch.setattr(SoftwareFactory, "implement", implement)
+
+    await flow.implement()
+
+    assert seen == [flow._report_requested_changes]
+
+
+async def test_the_resume_message_carries_the_findings_of_the_review():
+    flow = Build()
+    flow.subject = SimpleNamespace(repo="acme/widget")
+    flow.journal = BuildJournal()
+    flow.journal.add(
+        ImplementationOutput.model_validate(
+            {
+                "type": "result",
+                "status": "success",
+                "base_sha": "a",
+                "head_sha": "5e6f7a8b",
+                "commit_sha": "5e6f7a8b",
+                "pr_number": 1,
+                "files_changed": [],
+                "acceptance_results": [],
+                "checks": [],
+                "known_risks": [],
+                "summary": "did it",
+                "workspace_path": "/repo",
+                "workspace_retention": None,
+            }
+        )
+    )
+    flow.journal.add(
+        ReviewReport(
+            decision="request_changes",
+            summary="The counter is wrong.",
+            findings=[
+                FindingOutput(
+                    severity="high",
+                    summary="Off by one",
+                    evidence="range stops early",
+                    path="app/notes.py",
+                    line=12,
+                    start_line=None,
+                )
+            ],
+            context_repos=[],
+        )
+    )
+
+    message = await flow._report_requested_changes(workspace=None)
+
+    assert "`5e6f7a8b`" in message
+    assert "The counter is wrong." in message
+    assert "**high** Off by one (`app/notes.py:12`): range stops early" in message
+    # The rules of a revision that the first prompt gave stay in force.
+    assert "Dismiss only the reviews" in message
+    assert "republish the plan block" in message
