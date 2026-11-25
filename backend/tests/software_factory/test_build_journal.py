@@ -127,3 +127,10 @@ def test_a_review_after_green_ci_that_requests_no_changes_is_ready_for_review():
     assert not _journal(green, _review("request_changes")).is_ready_for_review
     assert not _journal(unfinished, _review("approve")).is_ready_for_review
     assert not _journal(_review("approve"), green).is_ready_for_review
+
+
+def test_the_plan_size_survives_a_revision_that_sizes_nothing():
+    journal = _journal(PlanData(plan_markdown="v1", size="small"), PlanData(plan_markdown="v2"))
+
+    assert journal.plan_size == "small"
+    assert _journal(PlanData()).plan_size is None

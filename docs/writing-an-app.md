@@ -519,7 +519,9 @@ An instruction belongs to the app class. The operator chooses the CLI that runs
 it, the model, the login that it bills, and the effort. The defaults are in
 **Settings → Instructions**. The app's own page overrides them for one
 instruction. `timeout` is the one setting that the app declares, because how long
-a step can run is a fact about the task.
+a step can run is a fact about the task. A call can pass `effort="high"` to run at a
+lower effort than the setting for that one call. The setting is the ceiling: a call
+never runs above it.
 
 ```python
 from druks.workflows import Instruction, InstructionOutput
@@ -559,6 +561,10 @@ plugin state and no MCP server:
 A workflow that sets `steps_reuse_sandbox = True` keeps one sandbox for all its
 instructions. The sandbox takes its entries from the agent call that creates it.
 Give such a workflow instructions that all include MCP servers, or none that do.
+
+A Claude agent's Bash call cannot sleep for over two minutes in total or use
+`--watch`. The guard reads one command at a time. It does not read a loop, and it
+does not stop a command that follows a log or a socket, such as `tail -f`.
 
 Call an instruction only inside a workflow:
 
@@ -974,6 +980,13 @@ end of the output, and the duration. A restart during a check runs the instructi
 again from its start. The answer of the turn that ends for a check is discarded, but
 the agent still has to produce it, so the contract of a resumable instruction must
 accept empty values in its required fields.
+
+A call can also continue the instruction's last call in the run, as the same
+conversation: pass `resume=` a function that takes `workspace=` and returns the
+next message. Druks calls it with the checkout as the agent left it, on the box
+that ran the last call. When the harness cannot resume, the run has no finished call, its box was released,
+or the last call recorded no session totals, the call starts over with its full prompt
+and never calls the function. A resumed call records only its own cost.
 
 ```python
 class BuildWorkspace(RepoWorkspace):
@@ -1421,7 +1434,9 @@ review = await self.wait("review.completed", label="Waiting for the review")
 ```
 
 The run stays running. The run page shows the label. Druks sends no
-notification and keeps the warm sandbox. When the wait is longer than
+notification and keeps the warm sandbox. The sandbox's lease lapses after about 30
+minutes, so a wait whose caller needs the sandbox afterwards passes `hold_box=True`,
+which renews the lease for the wait. When the wait is longer than
 `ttl_seconds`, the workflow fails with `WaitTimeout`. Without `ttl_seconds`,
 the limit is 14 days, as for a gate.
 
@@ -3078,6 +3093,6 @@ Import from concern namespaces, not from `druks.durable` or internal modules:
 | `druks.files` | `File`, `FileField` |
 | `druks.prompts` | `render_prompt` |
 | `druks.webhooks` | `Webhook`, `InvalidWebhookError`, `verify_hmac_sha256` |
-| `druks.testing` | `run_workflow`, `seed_run`, `seed_call`, `init_db`, `asgi_client`, and the fixtures that the plugin registers |
+| `druks.testing` | `run_workflow`, `seed_run`, `seed_call`, `init_db`, `asgi_client`, `worker_name`, and the fixtures that the plugin registers |
 
 The root `druks` package deliberately exports only its version.

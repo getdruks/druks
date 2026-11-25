@@ -125,6 +125,8 @@ class PlanData(BaseModel):
     # The planner's self-reported calibration; "medium" for producers that
     # don't assert one (a contract revision), which never skips a park.
     confidence: Literal["high", "medium", "low"] = "medium"
+    # Reported by the planner; None for a contract revision, which does not size the change.
+    size: Literal["small", "medium", "large"] | None = None
     # Whether the planner could plan at all; "planned" for producers that don't
     # assert one (a contract revision).
     status: Literal["planned", "blocked"] = "planned"
@@ -166,6 +168,8 @@ class PlanOutput(workflows.InstructionOutput):
     questions: list[QuestionOutput] = Field(max_length=8)
     rejected_approaches: list[str]
     confidence: Literal["high", "medium", "low"]
+    # How large the change is. The build runs a small or medium change at less effort.
+    size: Literal["small", "medium", "large"]
     # ``blocked`` = the planner could not read the ticket or the repo, and
     # ``plan_markdown`` names what is missing. The workflow turns that into a
     # run-stopping failure.
@@ -206,6 +210,7 @@ class PlanOutput(workflows.InstructionOutput):
             questions=self.questions,
             rejected_approaches=self.rejected_approaches,
             confidence=self.confidence,
+            size=self.size,
             status=self.status,
             assignee_github_login=self.assignee_github_login,
             tickets=self.tickets,

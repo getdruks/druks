@@ -58,6 +58,15 @@ class BuildJournal(Journal):
         return
 
     @property
+    def plan_size(self) -> str | None:
+        """The size the planner gave the change. A revision keeps it, and so do the rounds
+        that follow a red CI or a review."""
+        for plan in reversed(self.filter(PlanData)):
+            if plan.size:
+                return plan.size
+        return
+
+    @property
     def is_ready_for_review(self) -> bool:
         """The round's review of a head with green CI requested no changes."""
         ci_report = self.latest(CiReport)
