@@ -276,7 +276,7 @@ async def ask_for_answer(session: AsyncSession, run: Run) -> str | None:
             # A Bot serves people outside Druks. They read neither the ask nor the
             # approver, whose username can be an email address.
             body = PARKED_FOR_REVIEW_MESSAGE.format(run=run.id)
-            outcome = "waits for a review"
+            outcome = "waits for someone else's answer"
         return await report_outcome(
             session,
             run.conversation_id,
