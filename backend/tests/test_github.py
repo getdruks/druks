@@ -13,7 +13,7 @@ from druks.core.apis.exceptions import (
     GitHubAppNotInstalledError,
     GitHubRerunRefusedError,
 )
-from druks.core.apis.github import GitHubAppClient, GitHubClient
+from druks.core.apis.github import _FAILURE_LINE, GitHubAppClient, GitHubClient
 from druks.core.services import Github
 from druks.services import Connection, ServiceNotConnectedError
 from githubkit.exception import GraphQLFailed, RequestFailed, RequestTimeout
@@ -608,3 +608,131 @@ def test_github_clients_wait_with_a_limit() -> None:
 
     assert [client.config.timeout for client in clients] == [github_api.DEFAULT_TIMEOUT] * 2
     assert [client.config.auto_retry for client in clients] == [RETRY_SERVER_ERROR] * 2
+
+
+@pytest.mark.parametrize(
+    ("line", "is_failure"),
+    [
+        ("2026-11-25T12:51:45.6Z FAILED backend/tests/test_a.py::test_b - boom", True),
+        ("2026-11-25T12:51:45.6Z ERROR backend/tests/test_a.py::test_c", True),
+        ("2026-11-25T12:51:45.5Z E           assert 1 == 2", True),
+        ("2026-11-25T12:51:45.5Z FAIL: notes/x.txt has 4 lines. A note has at most 2.", True),
+        ("2026-11-25T12:51:45.5Z ERROR: Could not find a version that satisfies pkg", True),
+        ("2026-11-25T12:51:45.5Z Error: Cannot find module 'left-pad'", True),
+        ("2026-11-25T12:51:45.5Z error TS2322: Type 'string' is not assignable to 'number'.", True),
+        ("2026-11-25T12:51:45.5Z backend/app.py:3:1: F401 `os` imported but unused", True),
+        ("2026-11-25T12:51:45.5Z 12:34:56: Starting the service", False),
+        ("2026-11-25T12:51:45.5Z Resolved 112 packages", False),
+        ("2026-11-25T12:51:45.5Z Errors are listed below", False),
+        ("2026-11-25T12:51:59.9Z ##[error]Process completed with exit code 1.", False),
+        ("2026-11-25T12:52:00.2Z  2026-11-25 12:51:00.678 UTC [3999] ERROR:  duplicate key", False),
+        ("2026-11-25T12:52:00.6Z Remove container network: github_network_fe1ea8", False),
+    ],
+)
+def test_a_failed_job_log_keeps_the_failure_lines_and_not_the_runner_noise(line, is_failure):
+    assert bool(_FAILURE_LINE.search(line)) is is_failure
+
+
+async def test_failed_job_logs_keep_a_job_whose_script_reports_its_failure() -> None:
+    script_log = (
+        "2026-11-25T12:51:44.5Z Run sh .ci/check-notes.sh\n"
+        "2026-11-25T12:51:44.6Z FAIL: notes/x.txt has 4 lines. A note has at most 2.\n"
+        "2026-11-25T12:51:59.9Z ##[error]Process completed with exit code 1.\n"
+    )
+
+    async def paginate(*args, **kwargs):
+        yield SimpleNamespace(id=1, name="length", conclusion="failure")
+
+    async def download(owner, repo, job_id):
+        return SimpleNamespace(text=script_log)
+
+    actions = SimpleNamespace(
+        async_list_jobs_for_workflow_run=object(),
+        async_download_job_logs_for_workflow_run=download,
+    )
+    client = _TestGitHubClient(
+        SimpleNamespace(rest=SimpleNamespace(actions=actions, paginate=paginate))
+    )
+    client.list_workflow_runs = AsyncMock(return_value=[{"id": 9, "conclusion": "failure"}])
+
+    logs = await client.get_failed_job_logs("acme/app", "abc", lines=20)
+
+    assert logs == {
+        "length": (
+            "failure lines: 1\n"
+            "2026-11-25T12:51:44.6Z FAIL: notes/x.txt has 4 lines. A note has at most 2."
+        )
+    }
+
+
+async def test_failed_job_logs_keep_the_end_of_a_long_list_and_say_how_long_it_was() -> None:
+    log = "".join(
+        f"2026-11-25T12:51:{n % 60:02d}.0Z backend/app.py:{n}:1: F401 unused import {n}\n"
+        for n in range(1, 301)
+    )
+
+    async def paginate(*args, **kwargs):
+        yield SimpleNamespace(id=1, name="lint", conclusion="failure")
+
+    async def download(owner, repo, job_id):
+        return SimpleNamespace(text=log)
+
+    actions = SimpleNamespace(
+        async_list_jobs_for_workflow_run=object(),
+        async_download_job_logs_for_workflow_run=download,
+    )
+    client = _TestGitHubClient(
+        SimpleNamespace(rest=SimpleNamespace(actions=actions, paginate=paginate))
+    )
+    client.list_workflow_runs = AsyncMock(return_value=[{"id": 9, "conclusion": "failure"}])
+
+    logs = await client.get_failed_job_logs("acme/app", "abc", lines=200)
+
+    lines = logs["lint"].splitlines()
+    assert lines[0] == "failure lines: 300"
+    assert len(lines) == 201
+    assert lines[1].endswith("unused import 101")
+    assert lines[-1].endswith("unused import 300")
+
+
+async def test_failed_job_logs_leave_out_a_job_that_reports_no_failed_test() -> None:
+    pytest_log = (
+        "2026-11-25T12:51:44.5Z E  assert 1 == 2\n"
+        "2026-11-25T12:51:44.6Z FAILED backend/tests/test_a.py::test_b - boom\n"
+        "2026-11-25T12:51:59.9Z ##[error]Process completed with exit code 1.\n"
+    )
+    install_log = (
+        "2026-11-25T12:50:01.1Z Resolved 112 packages\n"
+        "2026-11-25T12:50:09.9Z ##[error]Process completed with exit code 1.\n"
+    )
+    jobs = [
+        SimpleNamespace(id=1, name="backend", conclusion="failure"),
+        SimpleNamespace(id=2, name="install", conclusion="failure"),
+        SimpleNamespace(id=3, name="frontend", conclusion="success"),
+    ]
+
+    async def paginate(*args, **kwargs):
+        for job in jobs:
+            yield job
+
+    async def download(owner, repo, job_id):
+        return SimpleNamespace(text={1: pytest_log, 2: install_log}[job_id])
+
+    actions = SimpleNamespace(
+        async_list_jobs_for_workflow_run=object(),
+        async_download_job_logs_for_workflow_run=download,
+    )
+    client = _TestGitHubClient(
+        SimpleNamespace(rest=SimpleNamespace(actions=actions, paginate=paginate))
+    )
+    client.list_workflow_runs = AsyncMock(return_value=[{"id": 9, "conclusion": "failure"}])
+
+    logs = await client.get_failed_job_logs("acme/app", "abc", lines=20)
+
+    assert logs == {
+        "backend": (
+            "failure lines: 2\n"
+            "2026-11-25T12:51:44.5Z E  assert 1 == 2\n"
+            "2026-11-25T12:51:44.6Z FAILED backend/tests/test_a.py::test_b - boom"
+        )
+    }

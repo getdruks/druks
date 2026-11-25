@@ -1,5 +1,7 @@
 import asyncio
+import hashlib
 import logging
+import re
 import time
 from collections.abc import Sequence
 from contextlib import suppress
@@ -37,6 +39,7 @@ from .constants import (
     CHECK_TOOLS,
     CI_POLL_SECONDS,
     CI_TTL_SECONDS,
+    FINGERPRINT_LOG_LINES,
     GITHUB_MCP_NAME,
     GITHUB_MCP_URL,
     IMPLEMENT_EFFORT_BY_SIZE,
@@ -457,8 +460,10 @@ class Build(Workflow):
     async def _implement_phase(self) -> None:
         await self._create_branch()
         message = "Druks implements the plan and opens a draft pull request."
+        previous_fingerprint = ""
         while True:
             previous_delivery = self.journal.last_implementation
+            is_repeat = False
             requested_changes = []
             if self.journal.revision_request:
                 requested_changes.append(self.journal.revision_request)
@@ -481,7 +486,17 @@ class Build(Workflow):
                     delivery.head_sha
                 ):
                     ci_report = await self._wait_for_ci(delivery.head_sha)
-                if ci_report.conclusion == "red" and can_revise:
+                fingerprint = ""
+                if ci_report.conclusion == "red":
+                    fingerprint = await self._get_failure_fingerprint(delivery.head_sha)
+                    is_repeat = bool(fingerprint) and fingerprint == previous_fingerprint
+                previous_fingerprint = fingerprint
+                if is_repeat:
+                    # A new head that fails as the last one did is no closer to green, so the
+                    # rounds end as at the revision cap and a person decides.
+                    logger.info("%s fails as the last round did", delivery.head_sha)
+                    can_revise = False
+                elif ci_report.conclusion == "red" and can_revise:
                     continue
             await self._report_step("Review", message="Druks reviews the pull request.")
             review = await self._review_work()
@@ -489,7 +504,7 @@ class Build(Workflow):
                 continue
             # Druks says what the build waits for, so this report has no message.
             await self._report_step("Review")
-            if await self._work_gate():
+            if await self._work_gate(is_repeat=is_repeat):
                 return
 
     async def _wait_for_ci(self, head_sha: str) -> CiReport:
@@ -507,6 +522,23 @@ class Build(Workflow):
                 )
         self.journal.add(ci_report)
         return ci_report
+
+    @step(retries=3)
+    async def _get_failure_fingerprint(self, head_sha: str) -> str:
+        """A hash of the failed Actions jobs on ``head_sha``: each job's name and the end of its
+        log, without the timestamps and durations that differ between runs of one failure. It
+        is empty when no Actions job failed or no log can be read, and an empty fingerprint
+        never matches."""
+        repo = (await self.subject).repo
+        github = await Github.get_client(repo)
+        logs = await github.get_failed_job_logs(repo, head_sha, lines=FINGERPRINT_LOG_LINES)
+        parts = []
+        for job, tail in sorted(logs.items()):
+            tail = re.sub(r"(?m)^\S+Z ", "", tail)
+            tail = re.sub(r"\bin \d+(\.\d+)?s\b", "in Ns", tail)
+            tail = re.sub(r"\(\s*\d+(\.\d+)?\s*m?s\s*\)", "(Ns)", tail)
+            parts.append(f"{job}\n{tail}")
+        return hashlib.sha256("\n".join(parts).encode()).hexdigest() if parts else ""
 
     @step(retries=3)
     async def _rerun_failed_jobs(self, head_sha: str) -> bool:
@@ -580,15 +612,17 @@ class Build(Workflow):
         self.journal.add(review)
         return review
 
-    async def _work_gate(self) -> bool:
+    async def _work_gate(self, *, is_repeat: bool = False) -> bool:
         """Park for work approval. Return True when the work is done, or False when it
-        goes back to implementation."""
+        goes back to implementation. ``is_repeat`` is a head that fails as the one before it."""
         if self._policy.implementation_approval_gate() == "none":
             return await self._approved_work()
         label = f"Review implementation on GitHub: PR #{self.pr_number}"
         ci_report = self.journal.latest(CiReport)
         if ci_report.conclusion == "red":
             label = f"{label}. CI on {ci_report.head_sha[:7]} is red"
+            if is_repeat:
+                label = f"{label}, as it was on the round before"
         if ci_report.conclusion == "unfinished":
             label = (
                 f"{label}. CI on {ci_report.head_sha[:7]} did not finish within "
