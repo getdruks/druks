@@ -16,7 +16,11 @@ from druks.contrib.software_factory.constants import (
     TICKET_TOOLS,
 )
 from druks.contrib.software_factory.models import Project, ProjectRepo
-from druks.contrib.software_factory.policy import RepoPolicy
+from druks.contrib.software_factory.policy import (
+    RepoPolicy,
+    VerificationProfile,
+    VerificationSandbox,
+)
 from druks.contrib.software_factory.services import GithubReviewer
 from druks.contrib.software_factory.workflows import Build, BuildWorkspace, ReviewWorkspace
 from druks.core.services import Github, GithubApp
@@ -176,7 +180,9 @@ async def test_a_board_build_on_an_install_with_no_address_still_fails_loudly(
         await BuildWorkspace.get_mcp_servers(SimpleNamespace(repo="o/main"))
 
 
-async def _repo_with_commands(commands: list[str]) -> SimpleNamespace:
+async def _repo_with_commands(
+    commands: list[str], template: str | None = "tpl-1"
+) -> SimpleNamespace:
     project = await Project.create(name="Checks")
     repo = await ProjectRepo.create(project_id=project.id, full_name="o/main")
     await repo.set_profile(
@@ -185,10 +191,43 @@ async def _repo_with_commands(commands: list[str]) -> SimpleNamespace:
             "verification": {
                 "test_commands": [{"command": command, "ci_check": None} for command in commands],
                 "lint_commands": [{"command": "ruff check .", "ci_check": None}],
-            }
+            },
+            **({"sandbox_template": template} if template else {}),
         },
     )
     return SimpleNamespace(repo="o/main")
+
+
+def _sandbox_config(monkeypatch, **fields):
+    async def resolve(repo):
+        return RepoPolicy(verification=VerificationProfile(sandbox=VerificationSandbox(**fields)))
+
+    monkeypatch.setattr(RepoPolicy, "resolve", staticmethod(resolve))
+
+
+async def test_a_build_checks_on_the_template_and_env_of_its_repo(druks_db, monkeypatch):
+    project = await Project.create(name="Box")
+    repo = await ProjectRepo.create(project_id=project.id, full_name="o/main")
+    await repo.set_profile(baseline={}, effective={"sandbox_template": "template-1"})
+    _sandbox_config(monkeypatch, setup=".druks/software_factory/setup.sh", env={"A": "1"})
+
+    box = await BuildWorkspace.get_check_box(SimpleNamespace(repo="o/main"))
+
+    assert box == {"template": "template-1", "env": {"A": "1"}}
+
+
+async def test_a_build_of_a_repo_with_no_template_and_no_env_describes_no_check_box(
+    druks_db, monkeypatch
+):
+    project = await Project.create(name="Plain")
+    await ProjectRepo.create(project_id=project.id, full_name="o/main")
+
+    async def resolve(repo):
+        return RepoPolicy()
+
+    monkeypatch.setattr(RepoPolicy, "resolve", staticmethod(resolve))
+
+    assert await BuildWorkspace.get_check_box(SimpleNamespace(repo="o/main")) == {}
 
 
 async def test_a_build_declares_the_test_commands_of_its_repo_and_no_others(druks_db, monkeypatch):
@@ -196,6 +235,13 @@ async def test_a_build_declares_the_test_commands_of_its_repo_and_no_others(druk
     subject = await _repo_with_commands(["uv run pytest backend/", "npm test"])
 
     assert await BuildWorkspace.get_checks(subject) == ("uv run pytest backend/", "npm test")
+
+
+async def test_a_build_of_a_repo_with_no_template_still_declares_its_checks(druks_db, monkeypatch):
+    await _required_servers(monkeypatch, "linear")
+    subject = await _repo_with_commands(["uv run pytest backend/"], template=None)
+
+    assert await BuildWorkspace.get_checks(subject) == ("uv run pytest backend/",)
 
 
 async def test_a_build_of_a_repo_the_profiler_has_not_run_on_declares_no_checks(

@@ -681,14 +681,15 @@ without their times. The fingerprint reads the failure lines that a test runner,
 pull request leaves draft when the review of a head with green CI requests no changes,
 or when a person approves it.
 
-A build's agent can run one of the repository's test commands in full on a separate
-box, with the `core_run_check` tool. The commands come from the repository's
-verification profile: the ones the profiler found, or the `verification` test
-commands that `config.yml` pins. The tool takes the id of the build's run and one
-command, written as the profile lists it, and refuses any other command. The box has
-the repository at the commit where the agent's checkout left the default branch,
-with the agent's uncommitted and untracked changes on top, and drukbox deletes it
-when the command ends. The implementer ends its turn when it starts a check, and
+A build's agent can run one of the repository's test commands in full with the
+`core_run_check` tool. The commands come from the repository's verification profile:
+the ones the profiler found, or the `verification` test commands that `config.yml`
+pins. The tool takes the id of the build's run and one command, written as the
+profile lists it, and refuses any other command. A repository with a sandbox template
+runs the command on a separate box that has the repository at the commit where the
+agent's checkout left the default branch, with the agent's uncommitted and untracked
+changes on top, and drukbox deletes it when the command ends. A repository with no
+template runs it in the agent's own checkout. The implementer ends its turn when it starts a check, and
 Druks sends it the result as its next message, in the same session. The call keeps
 the model's prompt cache for an hour. A harness that cannot resume, such as Codex,
 waits for the result inside its turn. A build holds the tool for
@@ -711,13 +712,14 @@ an empty one. A list that it leaves out stays as detected. A command that the
 block writes keeps the CI check that the profiler found for it. A key that
 `config.yml` does not know fails the build with an error that names it.
 
-A repository can also name the script that builds the computer that its checks
-run on:
+A repository can also describe the computer that its checks run on:
 
 ```yaml
 verification:
   sandbox:
     setup: .druks/software_factory/setup.sh
+    env:
+      DATABASE_URL: postgres://localhost/test
 ```
 
 The profiler drafts such a script when a verification command needs a tool that the
@@ -736,9 +738,28 @@ while drukbox builds it. Drukbox builds a given script once. When a build fails,
 Druks keeps the last good template and logs the reason. A push to
 `.druks/software_factory/` on the default branch runs the profiler again. A push
 that changes only a lockfile does not, so a new lockfile reaches the template at
-the next profile. Nothing reads the template yet. The size, the start script,
-and the env of the sandbox are not read either, and a `verification.sandbox` key
-other than `setup` fails the build with an error that names it.
+the next profile.
+
+The box that runs a check with `core_run_check` is made from that template, with
+the `env` set on it when the box is created. `env` needs `setup`, and a config that
+sets `env` alone fails the build with an error that names it. A repository with no
+template has no check box, because the default image holds none of the repository's
+tools: its checks run in the agent's own checkout, on the agent's box, which already
+has them. The agent still ends its turn and gets the result in the same session. The
+command runs in the checkout as the agent left it, uncommitted work included, as the
+agent's user, with the agent's environment: a command that prints its environment shows
+it to the agent. A command that outlives its timeout is stopped on the box with the
+processes that it started, except one that it detached into a session of its own,
+which stays. A repository that sets `setup` and `env` has no template until the
+profiler has built it, and until then its checks run on the agent's own box without the
+`env`: Druks logs a warning each time. A check
+on the check box that still exits with 127, for a tool that `setup` did not install,
+comes back with a sentence that says the box is the likely cause. A name
+in `env` must be a valid variable name. The values come from
+`config.yml`, a file of the repository, so they are not secrets: a secret reaches a
+box through the vault. Druks reads `env` from the default branch, like `setup`. The
+size and the start script of the sandbox are not read, and a `verification.sandbox`
+key other than `setup` and `env` fails the build with an error that names it.
 
 When Druks receives a push to the default branch that changes `config.yml`, the
 next build uses the new file. When a team lists Software Factory, this happens

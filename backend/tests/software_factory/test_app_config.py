@@ -77,6 +77,32 @@ class TestResolveAppConfig:
         policy = await RepoPolicy.resolve(REPO)
         assert policy.verification.sandbox.setup == ".druks/software_factory/setup.sh"
 
+    async def test_a_sandbox_with_only_env_fails_loudly(self, monkeypatch):
+        _fake_fetch(
+            monkeypatch,
+            {
+                (REPO, ".druks/software_factory/config.yml"): (
+                    "verification:\n  sandbox:\n    env:\n      DATABASE_URL: postgres://x/y\n"
+                )
+            },
+        )
+        with pytest.raises(AppConfigError, match="env needs a setup script"):
+            await RepoPolicy.resolve(REPO)
+
+    @pytest.mark.parametrize("name", ["1BAD", "has-dash", "with space", "A=B"])
+    async def test_an_env_name_that_is_not_a_variable_name_fails_loudly(self, monkeypatch, name):
+        _fake_fetch(
+            monkeypatch,
+            {
+                (REPO, ".druks/software_factory/config.yml"): (
+                    "verification:\n  sandbox:\n    setup: .druks/software_factory/setup.sh\n"
+                    f'    env:\n      "{name}": "1"\n'
+                )
+            },
+        )
+        with pytest.raises(AppConfigError, match="env names must be valid variable names"):
+            await RepoPolicy.resolve(REPO)
+
     async def test_no_file_yields_defaults(self, monkeypatch):
         _fake_fetch(monkeypatch, {})
         policy = await RepoPolicy.resolve(REPO)
