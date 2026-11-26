@@ -115,3 +115,17 @@ async def test_corrections_are_counted_for_each_build(druks_client, druks_db):
 
     assert _metric(page, "Corrections") == 2
     assert _metric(page, "Per build") == 1.0
+
+
+async def test_a_correction_whose_lesson_was_retired_says_so(druks_client, druks_db):
+    correction = await _reply(druks_db, {"action": "approve", "note": "Cut the comments."})
+    lesson = (await druks_client.post(_LESSONS, json={"text": "Say why, never what."})).json()
+    await druks_client.post(
+        f"{_CORRECTIONS}/{correction.id}/repeat", json={"lesson_id": lesson["id"]}
+    )
+    await druks_client.post(f"{_LESSONS}/{lesson['id']}/retire")
+
+    page = (await druks_client.get(_PAGE)).json()
+
+    (card,) = _cards(page, "Corrections")
+    assert card["blocks"][1]["text"] == "Repeats the lesson: (retired)"
