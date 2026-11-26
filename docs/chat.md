@@ -800,7 +800,7 @@ deletes, joins, hidden events, and people from other workspaces.
 
 ### Files
 
-In a direct message or a thread that you joined, a file that you send to the bot
+In a direct message, or in a room message that reaches the bot, a file that you send
 becomes a Druks file on its message. A message with only a file starts a turn
 like every other message. An image reaches the agent with its message. Every other file,
 except audio, reaches the agent as a link to a copy in the sandbox. The agent
@@ -815,10 +815,10 @@ a Druks file with `chat_show`, Slack shows the image: see [Blocks](#blocks).
 
 Invite the bot to a channel or a group. Tag it in a message. The Bot
 answers in that message's thread. A tag inside a thread answers in that thread.
-Each person who tags the bot gets their own conversation for the thread. For 24
-hours after the last message in your conversation there, your untagged replies
-in the thread reach that conversation too. Other people must tag it. A
-top-level message with no tag reaches nobody. When you tag the bot before you
+Each person who tags the bot gets their own conversation for the thread. Tag the
+bot in every message that is for it. A message with no tag reaches nobody, in a
+thread too, unless you turned the tag off for that thread, as this section says
+below. When you tag the bot before you
 connect Slack, it says in the thread that your account is not connected. It sends
 you the link in a direct message.
 
@@ -827,20 +827,33 @@ To ask an agent, write its name right after the tag:
 match, Druks takes the longer one: "Security engineer", not "Security". A name
 before the tag does
 not count. A comma or a colon after the tag is fine. The agent answers in your
-own conversation with it for that thread. One thread can hold your
-conversations with several agents. A tag that names no agent reaches the
-conversation you last wrote in there, or the Bot if you have none. Your untagged
-replies reach the conversation you last wrote in, under the 24-hour rule above
-and the tag rule below. When you name an agent you cannot talk to, the bot says why
-in the thread and drops the message. The same tag works in a direct message,
-where a name without the tag reaches the Bot.
+own conversation with it for that thread.
+
+The last agent that a person names in a thread owns the thread, for everyone in
+it. A tag that names no agent reaches the thread's agent:
+`@Druks make it shorter`. A tag that names another agent moves the thread to that
+agent. From then on, a tag with no name reaches the new agent, from anyone. A
+thread has no time limit. In a thread where nobody named an agent, a tag with no
+name reaches the channel's agent, or else the Bot. When you cannot talk to the
+agent, because you named it or because it owns the thread, the bot says why in
+the thread and drops the message. Name an agent that you can talk to. The bot
+drops an untagged reply of yours for such an agent and says nothing. The same
+tag works in a direct message, where a name without the tag reaches the Bot.
+
+Tell the agent to answer your replies without a tag. Your untagged replies in
+that thread then reach the thread's agent, as a tag that names no agent does.
+The agent records your choice with `chat_require_tag`. The choice has no time
+limit, and it stays when the thread moves to another agent. It holds for you and
+for that thread only: everyone else in the thread still tags the bot. An agent's
+name counts only after a tag. Tell the agent to answer only when you tag it, and
+a tag is required again.
 
 An admin can give a public agent one Slack channel, under **Slack channel**
 when they edit the agent. The bot must be in the channel. In that channel, a tag
-that names no agent reaches that agent. This does not apply when you already
-have a conversation in the thread, with an agent or with the Bot. A tag that
-names another agent still reaches that agent. A top-level message without
-the tag still reaches nobody. A channel has one agent at most. Choose
+that names no agent reaches that agent. This does not apply in a thread that
+another agent owns. A tag that names another agent still reaches that agent. A
+message without the tag still reaches nobody, unless you turned the tag off for
+its thread. A channel has one agent at most. Choose
 **No channel** to return the channel to normal chat.
 
 An agent's replies in Slack show the agent's name. To give an agent a picture,
@@ -869,13 +882,6 @@ that agent, such as the text that a person types into a workflow's form. Accept
 only an automation whose input you trust. An automation's untagged
 message reaches nobody. Nobody can click the buttons of a question from such a
 run. A person answers it in the dashboard.
-
-Tell the agent to answer only when you tag it. Your untagged replies in that
-thread then stop reaching it. The agent records your choice with `chat_require_tag`.
-Tell it to answer your replies again. They then reach it again for the rest of the
-24 hours. Your choice holds for that thread only. The Slack pane of
-**Chat → Channels** sets the default for the threads that you tag the bot in
-after that.
 
 The agent reads the thread with `chat_read_thread`. It returns the newest 200
 messages, oldest first. Each has its author's id and name, and the files on it.

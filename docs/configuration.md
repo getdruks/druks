@@ -269,8 +269,8 @@ and default account as its scheduled ticks.
 
 The API exposes installation settings at `GET/PATCH /api/settings` and your
 preferences at `GET/PATCH /api/settings/personal`. The personal route uses the
-authenticated account. It returns `timezone`, `theme`, `notificationChannelId`,
-and `isTagRequired`. It rejects execution settings. The installation API rejects
+authenticated account. It returns `timezone`, `theme`, and
+`notificationChannelId`. It rejects execution settings. The installation API rejects
 timezone changes.
 
 ## Core process settings
