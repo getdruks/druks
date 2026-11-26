@@ -29,6 +29,15 @@ async def test_an_accepted_lesson_records_its_source_and_who_accepted_it(druks_d
     assert await Lesson.list_accepted(druks_db) == [lesson]
 
 
+async def test_a_lesson_names_a_run_that_exists(druks_db):
+    account = await Account.get_or_create(druks_db, "owner@example.com")
+
+    with pytest.raises(ValidationError, match="No run has the id run-9"):
+        await Lesson.accept(
+            druks_db, text="Keep tests small.", account=account, source_run_id="run-9"
+        )
+
+
 async def test_a_retired_lesson_leaves_the_accepted_list(druks_db):
     account = await Account.get_or_create(druks_db, "owner@example.com")
     kept = await Lesson.accept(druks_db, text="Keep tests small.", account=account)

@@ -2,13 +2,14 @@ from datetime import datetime
 
 from sqlalchemy import ForeignKey, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from druks.accounts.models import Account
 from druks.core.lessons.constants import LESSON_INDEX_MAX_LINES
 from druks.core.lessons.enums import LessonStatus
 from druks.core.lessons.exceptions import LessonIndexFull
 from druks.core.models import Uuid7Pk
+from druks.durable.models import Run
 from druks.exceptions import ValidationError
 from druks.models import Base, Model
 
@@ -29,6 +30,7 @@ class Lesson(Model, Uuid7Pk, ordering=("-accepted_at",)):
         ForeignKey("durable_runs.id", ondelete="SET NULL"), default=None
     )
     accepted_by_id: Mapped[str] = mapped_column(ForeignKey("accounts.id", ondelete="RESTRICT"))
+    accepted_by: Mapped[Account] = relationship(lazy="joined", foreign_keys=[accepted_by_id])
     accepted_at: Mapped[datetime] = mapped_column(default=Base.utc_now)
 
     @classmethod
@@ -44,6 +46,10 @@ class Lesson(Model, Uuid7Pk, ordering=("-accepted_at",)):
         text = text.strip()
         if not text:
             raise ValidationError("A lesson needs text.")
+        if source_run_id and not await session.get(Run, source_run_id):
+            raise ValidationError(
+                f"No run has the id {source_run_id}. Check the id, or leave it out."
+            )
         accepted_count = await session.scalar(
             select(func.count()).select_from(cls).where(cls.status == LessonStatus.ACCEPTED)
         )
@@ -87,3 +93,21 @@ class LessonRepeat(Model):
     lesson_id: Mapped[str] = mapped_column(ForeignKey("lessons.id", ondelete="CASCADE"), index=True)
     marked_by_id: Mapped[str] = mapped_column(ForeignKey("accounts.id", ondelete="RESTRICT"))
     marked_at: Mapped[datetime] = mapped_column(default=Base.utc_now)
+
+    @classmethod
+    async def mark(
+        cls, session: AsyncSession, *, event_id: int, lesson: Lesson, account: Account
+    ) -> None:
+        """Say that the correction repeats the lesson. A second mark on the same correction
+        replaces the first."""
+        if lesson.status != LessonStatus.ACCEPTED:
+            raise ValidationError("A correction can repeat only an accepted lesson.")
+        await session.merge(
+            cls(
+                event_id=event_id,
+                lesson_id=lesson.id,
+                marked_by_id=account.id,
+                marked_at=Base.utc_now(),
+            )
+        )
+        await session.flush()

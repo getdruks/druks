@@ -50,6 +50,23 @@ first.
 Each question, answer and cost stays in the run history, with who answered and
 when.
 
+## Keep a correction as a lesson
+
+In Software Factory, the Lessons page lists the notes and requests for changes
+that people wrote at a gate, newest first. Nothing waits on this page.
+
+- **Make a lesson:** edit the text of a correction and accept it. The lesson
+  shows who accepted it and where it comes from.
+- **Add a lesson:** write one without a correction. You can name the run that
+  it comes from.
+- **Repeats a lesson:** mark a correction that repeats an accepted lesson.
+- **Retire:** take a lesson out of use.
+
+The page counts the corrections of the last 30 days, the corrections for each
+build, and the marks. Any signed-in account can accept a lesson. The lessons
+index holds 100 accepted lessons. When it is full, retire a lesson or merge
+two before you accept another.
+
 ## For app builders
 
 In code, an approval is a gate. See
