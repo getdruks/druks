@@ -339,6 +339,80 @@ describe('repository details', () => {
     expect(screen.queryByRole('region', { name: 'acme/service' })).toBeNull()
   })
 
+  it('offers the setup draft to copy until the repo has a template', async () => {
+    const draft = '#!/bin/sh\nset -eu\ncurl -LsSf https://astral.sh/uv/install.sh | sh\n'
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
+    renderPage([project({ repos: [repo({ profile: { setup_script_draft: draft } })] })])
+    fireEvent.click(await screen.findByRole('button', { name: /acme\/service/ }))
+    expect(screen.getByText(/astral\.sh\/uv/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Copy setup script' }))
+    expect(writeText).toHaveBeenCalledWith(draft)
+    vi.unstubAllGlobals()
+  })
+
+  it('asks the person to read the setup draft before they commit it', async () => {
+    renderPage([project({ repos: [repo({ profile: { setup_script_draft: '#!/bin/sh\n' } })] })])
+    fireEvent.click(await screen.findByRole('button', { name: /acme\/service/ }))
+    expect(screen.getByText(/Druks never runs it\. Read it, then commit it/)).toBeTruthy()
+  })
+
+  it.each([
+    ['refuses', () => ({ writeText: vi.fn().mockRejectedValue(new Error('NotAllowedError')) })],
+    ['is missing', () => undefined],
+  ])('says to copy the draft by hand when the clipboard %s', async (_, clipboard) => {
+    vi.stubGlobal('navigator', { ...navigator, clipboard: clipboard() })
+    renderPage([project({ repos: [repo({ profile: { setup_script_draft: '#!/bin/sh\n' } })] })])
+    fireEvent.click(await screen.findByRole('button', { name: /acme\/service/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Copy setup script' }))
+    expect(await screen.findByText(/copy it by hand/)).toBeTruthy()
+    vi.unstubAllGlobals()
+  })
+
+  it('offers the start draft beside the setup draft, each with its own copy button', async () => {
+    const setup = '#!/bin/sh\nset -eu\n'
+    const start = '#!/bin/sh\nset -eu\nredis-server --daemonize yes\n'
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
+    renderPage([project({ repos: [repo({ profile: { setup_script_draft: setup, start_script_draft: start } })] })])
+    fireEvent.click(await screen.findByRole('button', { name: /acme\/service/ }))
+    expect(screen.getByText(/redis-server --daemonize yes/)).toBeTruthy()
+    expect(screen.getByText(/verification\.sandbox\.start/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Copy start script' }))
+    expect(writeText).toHaveBeenCalledWith(start)
+    fireEvent.click(screen.getByRole('button', { name: 'Copy setup script' }))
+    expect(writeText).toHaveBeenLastCalledWith(setup)
+    vi.unstubAllGlobals()
+  })
+
+  it('tells the person that a start script runs on every check and what to look for in it', async () => {
+    renderPage([project({ repos: [repo({ profile: { setup_script_draft: '#!/bin/sh\n', start_script_draft: '#!/bin/sh\necho start\n' } })] })])
+    fireEvent.click(await screen.findByRole('button', { name: /acme\/service/ }))
+    expect(screen.getByText(/It runs on every check, in the checkout of the change/)).toBeTruthy()
+    expect(screen.getByText(/pipes nothing from the network into a shell/)).toBeTruthy()
+    expect(screen.getByText(/the repo needs a setup script too/)).toBeTruthy()
+  })
+
+  it('shows no start block when the profile has no start draft', async () => {
+    renderPage([project({ repos: [repo({ profile: { setup_script_draft: '#!/bin/sh\n' } })] })])
+    fireEvent.click(await screen.findByRole('button', { name: /acme\/service/ }))
+    expect(screen.getByRole('button', { name: 'Copy setup script' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Copy start script' })).toBeNull()
+  })
+
+  it('keeps the start draft when the repo has a template, because only the setup draft goes', async () => {
+    renderPage([project({ repos: [repo({ profile: { sandbox_template: 'template-1', setup_script_draft: '#!/bin/sh\n', start_script_draft: '#!/bin/sh\necho start\n' } })] })])
+    fireEvent.click(await screen.findByRole('button', { name: /acme\/service/ }))
+    expect(screen.queryByRole('button', { name: 'Copy setup script' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Copy start script' })).toBeTruthy()
+  })
+
+  it('hides the setup draft once the repo has a template', async () => {
+    renderPage([project({ repos: [repo({ profile: { setup_script_draft: '#!/bin/sh\n', sandbox_template: 'template-1' } })] })])
+    fireEvent.click(await screen.findByRole('button', { name: /acme\/service/ }))
+    expect(screen.queryByRole('button', { name: 'Copy setup script' })).toBeNull()
+  })
+
   it('starts profiling and refreshes the repository board', async () => {
     const client = renderPage([project({ repos: [repo()] })])
     const invalidate = vi.spyOn(client, 'invalidateQueries')

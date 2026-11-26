@@ -1,5 +1,6 @@
 import base64
 import logging
+import re
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -13,7 +14,11 @@ from githubkit.exception import GraphQLFailed, RequestFailed
 from githubkit.retry import RETRY_SERVER_ERROR
 from githubkit.utils import UNSET
 
-from druks.core.apis.exceptions import GitHubAppNotActiveError, GitHubAppNotInstalledError
+from druks.core.apis.exceptions import (
+    GitHubAppNotActiveError,
+    GitHubAppNotInstalledError,
+    GitHubRerunRefusedError,
+)
 from druks.core.utils.time import ensure_utc
 
 logger = logging.getLogger(__name__)
@@ -43,6 +48,17 @@ _ANNOTATIONS_PER_REQUEST = 50
 # serves the last-known set when GitHub hiccups.
 _INSTALLATION_ACCOUNTS_TTL_SECONDS = 600.0
 _INSTALLATION_ACCOUNTS_CACHE: dict[str, tuple[float, tuple[str, ...]]] = {}
+
+
+# What a failed job's log says about the failure: the lines that a test runner, a linter, a
+# compiler or a script writes for it, which begin with a failure word (``FAILED``, ``FAIL:``,
+# ``ERROR``, ``Error:``, ``error TS2322``), pytest's assertion lines, and a diagnostic with a
+# file, a line and a column (``app.py:3:1: F401 ...``). A service container's own log lines
+# are left out: they carry process ids and times that differ between runs. The runner's own
+# ``##[error]`` line is left out too: it reads the same for every failed step.
+_FAILURE_LINE = re.compile(
+    r"^\S+Z (FAIL|FAILED|ERROR|Error|error)\b|^\S+Z E\s|^\S+Z [A-Za-z_./][^\s:]*:\d+:\d+: \S"
+)
 
 
 class GitHubAppClient:
@@ -618,6 +634,78 @@ class GitHubClient:
             owner, name, ref, per_page=100
         )
         return [status.model_dump() for status in response.parsed_data.statuses]
+
+    async def list_workflow_runs(self, repo: str, head_sha: str) -> list[dict[str, Any]]:
+        owner, name = repo.split("/", 1)
+        runs = self._github.rest.paginate(
+            self._github.rest.actions.async_list_workflow_runs_for_repo,
+            map_func=lambda response: response.parsed_data.workflow_runs,
+            owner=owner,
+            repo=name,
+            head_sha=head_sha,
+            per_page=100,
+        )
+        return [
+            {
+                "id": run.id,
+                "conclusion": run.conclusion,
+                "run_attempt": run.run_attempt,
+                "status": run.status,
+            }
+            async for run in runs
+        ]
+
+    async def get_failed_job_logs(self, repo: str, head_sha: str, *, lines: int) -> dict[str, str]:
+        """The last ``lines`` lines that report a failure, from the log of each failed or
+        timed-out Actions job on ``head_sha``, by job name, after a first line with how many
+        lines reported one, so a head that fixes the early findings of a long list reads
+        differently from the head before it. A job whose log reports none, as a
+        failed install step does, is left out: nothing in it tells one cause from another. A
+        log that GitHub no longer serves is left out too."""
+        owner, name = repo.split("/", 1)
+        logs = {}
+        for run in await self.list_workflow_runs(repo, head_sha):
+            if run["conclusion"] not in ("failure", "timed_out"):
+                continue
+            jobs = self._github.rest.paginate(
+                self._github.rest.actions.async_list_jobs_for_workflow_run,
+                map_func=lambda response: response.parsed_data.jobs,
+                owner=owner,
+                repo=name,
+                run_id=run["id"],
+                per_page=100,
+            )
+            async for job in jobs:
+                if job.conclusion not in ("failure", "timed_out"):
+                    continue
+                try:
+                    response = (
+                        await self._github.rest.actions.async_download_job_logs_for_workflow_run(
+                            owner, name, job.id
+                        )
+                    )
+                except RequestFailed as error:
+                    # 410 is a log that expired. A token without the permission gets 403.
+                    if error.response.status_code in (403, 404, 410):
+                        continue
+                    raise
+                reports = [
+                    line for line in response.text.splitlines() if _FAILURE_LINE.search(line)
+                ]
+                if reports:
+                    logs[job.name] = f"failure lines: {len(reports)}\n" + "\n".join(
+                        reports[-lines:]
+                    )
+        return logs
+
+    async def rerun_failed_jobs(self, repo: str, run_id: int) -> None:
+        owner, name = repo.split("/", 1)
+        try:
+            await self._github.rest.actions.async_re_run_workflow_failed_jobs(owner, name, run_id)
+        except RequestFailed as error:
+            if error.response.status_code in (403, 404):
+                raise GitHubRerunRefusedError(f"{repo} run {run_id}") from error
+            raise
 
     async def get_file_content(
         self,

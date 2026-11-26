@@ -679,6 +679,12 @@ class CodexHarness(Harness):
                     "-c",
                     f'mcp_servers.{server.name}.env_http_headers."{header}"="{env_var}"',
                 )
+            if server.tool_timeout_seconds:
+                flags = (
+                    *flags,
+                    "-c",
+                    f"mcp_servers.{server.name}.tool_timeout_sec={server.tool_timeout_seconds}",
+                )
         return flags
 
     def _prompt_flags(self, *, include_apps: bool) -> tuple[str, ...]:

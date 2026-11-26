@@ -15,10 +15,17 @@ from druks.contrib.software_factory.constants import (
     GITHUB_MCP_URL,
     TICKET_TOOLS,
 )
+from druks.contrib.software_factory.exceptions import SandboxSetupMissing
 from druks.contrib.software_factory.models import Project, ProjectRepo
+from druks.contrib.software_factory.policy import (
+    RepoPolicy,
+    VerificationProfile,
+    VerificationSandbox,
+)
 from druks.contrib.software_factory.services import GithubReviewer
-from druks.contrib.software_factory.workflows import BuildWorkspace, ReviewWorkspace
+from druks.contrib.software_factory.workflows import Build, BuildWorkspace, ReviewWorkspace
 from druks.core.services import Github, GithubApp
+from druks.mcp.exceptions import MissingEndpointError
 from druks.mcp.helpers import get_bearer_token_env_var
 from druks.sandbox import SandboxSecret
 from druks.sandbox.host import Host
@@ -26,6 +33,7 @@ from druks.sandbox.layout import get_related_root, get_repo_root
 from druks.secrets.datastructures import Audience
 from druks.secrets.models import VaultSecret
 from druks.settings import Urls
+from druks.skills.models import Skill
 from druks.workspaces import RepoWorkspace
 
 
@@ -101,14 +109,17 @@ async def test_a_build_gets_the_skills_its_repo_profile_recommends(monkeypatch: 
     assert skills == ("python-house-rules",)
 
 
+def _set_urls(monkeypatch: pytest.MonkeyPatch, urls: Urls) -> None:
+    """The address a box reaches, as the workflow and the MCP server both read it."""
+    for module in ("druks.mcp.inbound", "druks.contrib.software_factory.workflows"):
+        monkeypatch.setattr(f"{module}.get_settings", lambda: SimpleNamespace(urls=urls))
+
+
 async def _required_servers(monkeypatch: pytest.MonkeyPatch, tracker: str):
     await connect_service(
         "github", identity={"app_id": "1", "slug": "druks-operator"}, secrets={"private_key": "pem"}
     )
-    monkeypatch.setattr(
-        "druks.mcp.inbound.get_settings",
-        lambda: SimpleNamespace(urls=Urls(endpoint="https://druks.test", webhook_host="")),
-    )
+    _set_urls(monkeypatch, Urls(endpoint="https://druks.test", webhook_host=""))
     settings = SoftwareFactory.Settings(tracker=tracker)
     monkeypatch.setattr(SoftwareFactory, "settings", AsyncMock(return_value=settings))
     return await BuildWorkspace.get_mcp_servers(SimpleNamespace(repo="o/main"))
@@ -122,14 +133,141 @@ async def test_a_board_build_requires_the_appliance_mcp(druks_db, monkeypatch):
     assert (board.url, board.secret_id, board.allowed_tools) == (
         "https://druks.test/mcp",
         "",
-        TICKET_TOOLS,
+        # The name of the route's operation id, namespaced by core: a literal, so that a
+        # renamed tool fails here and not on a box.
+        (*TICKET_TOOLS, "core_run_check"),
     )
 
 
-async def test_a_linear_build_requires_github_alone(druks_db, monkeypatch):
+async def test_a_linear_build_holds_the_check_tool_beside_github(druks_db, monkeypatch):
     servers = await _required_servers(monkeypatch, "linear")
 
+    assert [server.name for server in servers] == [GITHUB_MCP_NAME, "druks"]
+    assert servers[-1].allowed_tools == ("core_run_check",)
+
+
+async def test_a_linear_build_on_an_install_with_no_address_still_builds_with_github_alone(
+    druks_db, monkeypatch
+):
+    await connect_service(
+        "github", identity={"app_id": "1", "slug": "druks-operator"}, secrets={"private_key": "pem"}
+    )
+    _set_urls(monkeypatch, Urls(endpoint="", webhook_host=""))
+    monkeypatch.setattr(
+        SoftwareFactory,
+        "settings",
+        AsyncMock(return_value=SoftwareFactory.Settings(tracker="linear")),
+    )
+
+    servers = await BuildWorkspace.get_mcp_servers(SimpleNamespace(repo="o/main"))
+
     assert [server.name for server in servers] == [GITHUB_MCP_NAME]
+
+
+async def test_a_board_build_on_an_install_with_no_address_still_fails_loudly(
+    druks_db, monkeypatch
+):
+    await connect_service(
+        "github", identity={"app_id": "1", "slug": "druks-operator"}, secrets={"private_key": "pem"}
+    )
+    _set_urls(monkeypatch, Urls(endpoint="", webhook_host=""))
+    monkeypatch.setattr(
+        SoftwareFactory,
+        "settings",
+        AsyncMock(return_value=SoftwareFactory.Settings(tracker="druks")),
+    )
+
+    with pytest.raises(MissingEndpointError):
+        await BuildWorkspace.get_mcp_servers(SimpleNamespace(repo="o/main"))
+
+
+async def _repo_with_commands(
+    commands: list[str], template: str | None = "tpl-1"
+) -> SimpleNamespace:
+    project = await Project.create(name="Checks")
+    repo = await ProjectRepo.create(project_id=project.id, full_name="o/main")
+    await repo.set_profile(
+        baseline={},
+        effective={
+            "verification": {
+                "test_commands": [{"command": command, "ci_check": None} for command in commands],
+                "lint_commands": [{"command": "ruff check .", "ci_check": None}],
+            },
+            **({"sandbox_template": template} if template else {}),
+        },
+    )
+    return SimpleNamespace(repo="o/main")
+
+
+def _sandbox_config(monkeypatch, **fields):
+    async def resolve(repo):
+        return RepoPolicy(verification=VerificationProfile(sandbox=VerificationSandbox(**fields)))
+
+    monkeypatch.setattr(RepoPolicy, "resolve", staticmethod(resolve))
+
+
+async def test_a_build_checks_on_the_template_and_env_of_its_repo(druks_db, monkeypatch):
+    project = await Project.create(name="Box")
+    repo = await ProjectRepo.create(project_id=project.id, full_name="o/main")
+    await repo.set_profile(baseline={}, effective={"sandbox_template": "template-1"})
+    _sandbox_config(monkeypatch, setup=".druks/software_factory/setup.sh", env={"A": "1"})
+
+    box = await BuildWorkspace.get_check_box(SimpleNamespace(repo="o/main"))
+
+    assert box == {"template": "template-1", "env": {"A": "1"}}
+
+
+async def test_a_build_of_a_repo_with_no_template_and_no_env_describes_no_check_box(
+    druks_db, monkeypatch
+):
+    project = await Project.create(name="Plain")
+    await ProjectRepo.create(project_id=project.id, full_name="o/main")
+
+    async def resolve(repo):
+        return RepoPolicy()
+
+    monkeypatch.setattr(RepoPolicy, "resolve", staticmethod(resolve))
+
+    assert await BuildWorkspace.get_check_box(SimpleNamespace(repo="o/main")) == {}
+
+
+async def test_a_build_declares_the_test_commands_of_its_repo_and_no_others(druks_db, monkeypatch):
+    await _required_servers(monkeypatch, "linear")
+    subject = await _repo_with_commands(["uv run pytest backend/", "npm test"])
+
+    assert await BuildWorkspace.get_checks(subject) == ("uv run pytest backend/", "npm test")
+
+
+async def test_a_build_of_a_repo_with_no_template_still_declares_its_checks(druks_db, monkeypatch):
+    await _required_servers(monkeypatch, "linear")
+    subject = await _repo_with_commands(["uv run pytest backend/"], template=None)
+
+    assert await BuildWorkspace.get_checks(subject) == ("uv run pytest backend/",)
+
+
+async def test_a_build_of_a_repo_the_profiler_has_not_run_on_declares_no_checks(
+    druks_db, monkeypatch
+):
+    await _required_servers(monkeypatch, "linear")
+    project = await Project.create(name="Fresh")
+    await ProjectRepo.create(project_id=project.id, full_name="o/main")
+
+    assert await BuildWorkspace.get_checks(SimpleNamespace(repo="o/main")) == ()
+
+
+async def test_a_build_whose_box_cannot_reach_druks_declares_no_checks(druks_db, monkeypatch):
+    await connect_service(
+        "github", identity={"app_id": "1", "slug": "druks-operator"}, secrets={"private_key": "pem"}
+    )
+    _set_urls(monkeypatch, Urls(endpoint="", webhook_host=""))
+    monkeypatch.setattr(
+        SoftwareFactory,
+        "settings",
+        AsyncMock(return_value=SoftwareFactory.Settings(tracker="linear")),
+    )
+    subject = await _repo_with_commands(["make test"])
+
+    assert await BuildWorkspace.get_checks(subject) == ()
 
 
 def test_the_build_clones_as_the_operator():
@@ -268,3 +406,79 @@ async def test_set_git_identity_stamps_the_workspace_repo(
     await workspace.set_git_identity()
     assert not hook.exists()
     current_account_id.reset(dispatch)
+
+
+async def test_a_builds_prompt_carries_its_run_id_and_the_checks_of_its_repo(druks_db, monkeypatch):
+    flow = Build()
+    flow._workflow_id = "run-77"
+    flow._policy = RepoPolicy()
+    flow._profile = {}
+    flow._blockers = []
+    flow.input = SimpleNamespace(assignee_name=None, assignee_email=None)
+    flow.subject = SimpleNamespace(
+        repo="o/main", branch="agent/x", ticket_key="X-1", source="github", id="1"
+    )
+    project = await Project.create(name="Prompt")
+    await ProjectRepo.create(project_id=project.id, full_name="o/main")
+    monkeypatch.setattr(ProjectRepo, "get_siblings", AsyncMock(return_value=[]))
+    monkeypatch.setattr(Skill, "list_delivered", AsyncMock(return_value=[]))
+    monkeypatch.setattr(
+        BuildWorkspace, "get_checks", AsyncMock(return_value=("make test", "make lint"))
+    )
+
+    context = await flow.get_prompt_context()
+
+    assert context["build"].run_id == "run-77"
+    assert context["build"].checks == ("make test", "make lint")
+
+
+START = ".druks/software_factory/start.sh"
+
+
+async def _repo_with_template(monkeypatch, start_body):
+    project = await Project.create(name="Start")
+    repo = await ProjectRepo.create(project_id=project.id, full_name="o/main")
+    await repo.set_profile(baseline={}, effective={"sandbox_template": "template-1"})
+    _sandbox_config(monkeypatch, setup=".druks/software_factory/setup.sh", start=START)
+    fetched = []
+
+    async def fetch_file(*, repo, path):
+        fetched.append((repo, path))
+        return start_body
+
+    monkeypatch.setattr("druks.contrib.software_factory.workflows.fetch_file", fetch_file)
+    return fetched
+
+
+async def test_a_build_starts_its_check_box_with_the_script_of_the_default_branch(
+    druks_db, monkeypatch
+):
+    fetched = await _repo_with_template(monkeypatch, "redis-server --daemonize yes\n")
+
+    box = await BuildWorkspace.get_check_box(SimpleNamespace(repo="o/main"))
+
+    assert box == {"template": "template-1", "start": "redis-server --daemonize yes\n"}
+    assert fetched == [("o/main", START)]
+
+
+async def test_a_start_script_that_the_default_branch_lost_fails_loudly(druks_db, monkeypatch):
+    await _repo_with_template(monkeypatch, None)
+
+    with pytest.raises(SandboxSetupMissing, match=f"o/main has no {START}"):
+        await BuildWorkspace.get_check_box(SimpleNamespace(repo="o/main"))
+
+
+async def test_a_build_with_no_start_script_reads_none(druks_db, monkeypatch):
+    project = await Project.create(name="Plain")
+    repo = await ProjectRepo.create(project_id=project.id, full_name="o/main")
+    await repo.set_profile(baseline={}, effective={"sandbox_template": "template-1"})
+    _sandbox_config(monkeypatch, setup=".druks/software_factory/setup.sh")
+
+    async def fetch_file(*, repo, path):
+        raise AssertionError("no start script is configured, so none is read")
+
+    monkeypatch.setattr("druks.contrib.software_factory.workflows.fetch_file", fetch_file)
+
+    assert await BuildWorkspace.get_check_box(SimpleNamespace(repo="o/main")) == {
+        "template": "template-1"
+    }

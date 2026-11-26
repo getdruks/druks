@@ -26,4 +26,7 @@ class BuildPromptContext:
     related_repos: list[ProjectRepo]
     skills: list[Skill]
     blockers: list[dict]
+    # The run's id and the test commands it may run on another box, for the implement prompt.
+    run_id: str
+    checks: tuple[str, ...]
     journal: BuildJournal

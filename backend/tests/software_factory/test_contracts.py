@@ -57,6 +57,8 @@ def test_repo_profiler_output_maps_verification_commands_to_plain_dicts():
             "lint_commands": [{"command": "ruff check .", "ci_check": None}],
             "typecheck_commands": [],
             "recommended_skills": ["django-patterns"],
+            "setup_script_draft": "#!/bin/sh\nset -eu\n",
+            "start_script_draft": "#!/bin/sh\nset -eu\nredis-server --daemonize yes\n",
         }
     )
 
@@ -73,6 +75,8 @@ def test_repo_profiler_output_maps_verification_commands_to_plain_dicts():
                 "typecheck_commands": [],
             },
             "recommended_skills": ["django-patterns"],
+            "setup_script_draft": "#!/bin/sh\nset -eu\n",
+            "start_script_draft": "#!/bin/sh\nset -eu\nredis-server --daemonize yes\n",
         },
     }
 
@@ -205,6 +209,7 @@ def test_ask_contracts_cap_identity_and_cardinality():
             questions=[O.QuestionOutput(id=f"q{i}", prompt="p", options=[]) for i in range(9)],
             rejected_approaches=[],
             confidence="medium",
+            size="medium",
             status="planned",
             assignee_github_login=None,
             tickets=[],
@@ -233,6 +238,7 @@ def test_a_split_that_druks_cannot_write_is_refused(tickets):
             questions=[],
             rejected_approaches=[],
             confidence="medium",
+            size="medium",
             status="planned",
             assignee_github_login=None,
             tickets=tickets,

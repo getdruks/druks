@@ -127,3 +127,31 @@ def test_a_review_after_green_ci_that_requests_no_changes_is_ready_for_review():
     assert not _journal(green, _review("request_changes")).is_ready_for_review
     assert not _journal(unfinished, _review("approve")).is_ready_for_review
     assert not _journal(_review("approve"), green).is_ready_for_review
+
+
+def test_the_plan_size_survives_a_revision_that_sizes_nothing():
+    journal = _journal(PlanData(plan_markdown="v1", size="small"), PlanData(plan_markdown="v2"))
+
+    assert journal.plan_size == "small"
+    assert _journal(PlanData()).plan_size is None
+
+
+def test_a_plan_stored_before_the_size_existed_reads_as_unsized():
+    # A build parked under an older image replays its stored PlanData, which has no `size`
+    # attribute at all; reading it must not fail the replay.
+    stored = PlanData(plan_markdown="v1")
+    del stored.__dict__["size"]
+
+    assert _journal(stored).plan_size is None
+
+
+def test_requested_changes_are_reported_until_a_delivery_follows_them():
+    asking = _review("request_changes")
+    assert _journal(_implementation(), asking).requested_changes == asking
+    assert _journal(_implementation(), asking, _implementation()).requested_changes is None
+
+
+def test_a_review_that_requests_no_changes_reports_none():
+    assert _journal(_implementation(), _review("approve")).requested_changes is None
+    assert _journal(_implementation(), _review("comment")).requested_changes is None
+    assert _journal(_implementation()).requested_changes is None
