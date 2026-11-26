@@ -9,6 +9,7 @@ from druks.core.lessons.constants import (
     LESSON_INDEX_MAX_LINES,
     LESSON_TITLE_MAX_CHARS,
     VAULT_DIR,
+    VAULT_INDEX,
 )
 from druks.core.lessons.datastructures import Vault
 from druks.core.lessons.enums import LessonStatus
@@ -97,7 +98,7 @@ class Lesson(Model, Uuid7Pk, ordering=("-accepted_at",)):
             index = "\n".join(f"- [{lesson.title}]({lesson.id}.md)" for lesson in lessons)
             return Vault(
                 files=(
-                    HomeFile(f"{VAULT_DIR}/MEMORY.md", index, clears=VAULT_DIR),
+                    HomeFile(f"{VAULT_DIR}/{VAULT_INDEX}", index, clears=VAULT_DIR),
                     *(HomeFile(f"{VAULT_DIR}/{lesson.id}.md", lesson.text) for lesson in lessons),
                 ),
                 index=index,
