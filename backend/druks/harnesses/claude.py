@@ -105,12 +105,21 @@ class ClaudeHarness(Harness):
 
     # The CLI dies with the raw API error in the result text ("API Error: 529
     # {…overloaded_error…}"), so "api error: 5" covers 529 and every 5xx; 429
-    # and 401 are their own families.
+    # and 401 are their own families. A limit message that names a reset is a
+    # plan window that ran out, also when it names a spend limit first ("your
+    # org's monthly spend limit · … · your session limit resets 2:20pm"), so
+    # the reset markers come before the spend markers.
     failure_markers = {
-        "monthly spend limit": exceptions.HarnessSpendLimitError,
+        "limit · resets": exceptions.HarnessUsageLimitError,
+        "limit resets": exceptions.HarnessUsageLimitError,
+        "spend limit": exceptions.HarnessSpendLimitError,
+        "shared budget": exceptions.HarnessSpendLimitError,
+        "group's budget": exceptions.HarnessSpendLimitError,
+        "individual usage limit": exceptions.HarnessSpendLimitError,
         "session limit": exceptions.HarnessUsageLimitError,
         "usage limit": exceptions.HarnessUsageLimitError,
         "api error: 429": exceptions.HarnessRateLimitError,
+        "rejected (429)": exceptions.HarnessRateLimitError,
         "rate limit": exceptions.HarnessRateLimitError,
         "rate_limit": exceptions.HarnessRateLimitError,
         "api error: 401": exceptions.HarnessAuthError,
