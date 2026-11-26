@@ -93,18 +93,23 @@ describe('Chat page', () => {
     expect(screen.queryByRole('link', { name: 'Chat Settings' })).toBeNull()
   })
 
-  it('distinguishes your messages, the agent, and Druks', async () => {
+  it('shows the reply to an internal message without the message', async () => {
     vi.mocked(chatApi.get).mockResolvedValue({ ...conversation, messages: [
       { ...message, state: 'replied' },
       { ...message, id: '11', role: 'assistant', body: 'The runs are ready.', state: null, replyTo: message.id },
-      { ...message, id: '12', body: 'Send the reply to WhatsApp.', isInternal: true },
+      { ...message, id: '12', body: '[Internal: Run 7 ended. Its result: 4 notes]', state: 'replied', isInternal: true },
+      { ...message, id: '13', role: 'assistant', body: 'The run found 4 notes.', state: null, replyTo: '12' },
+      { ...message, id: '14', body: '[Internal: The time is 10:30.]', state: 'replied', isInternal: true },
     ] })
     mount()
     await connected()
     const turns = screen.getAllByRole('article')
+    expect(turns).toHaveLength(2)
     expect(within(turns[0]!).getByText('You')).toBeTruthy()
-    expect(within(turns[0]!).getByText('Agent')).toBeTruthy()
-    expect(within(turns[1]!).getByText('Druks')).toBeTruthy()
+    expect(within(turns[0]!).getByText('The runs are ready.')).toBeTruthy()
+    expect(within(turns[1]!).queryByText('You')).toBeNull()
+    expect(within(turns[1]!).getByText('The run found 4 notes.')).toBeTruthy()
+    expect(screen.queryByText(/Internal:/)).toBeNull()
   })
 
   it('shows what each active run of the conversation does now', async () => {

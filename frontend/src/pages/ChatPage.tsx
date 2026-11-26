@@ -37,7 +37,7 @@ const conversationIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-
 const stoppedTurns: Partial<Record<NonNullable<Message['state']>, { title: string, detail: string }>> = {
   interrupted: { title: 'Interrupted', detail: 'This turn stopped before it finished.' },
   cancelled: { title: 'Cancelled', detail: 'You stopped this turn.' },
-  failed: { title: 'Failed', detail: 'Druks could not deliver this message.' },
+  failed: { title: 'Failed', detail: 'Druks could not start this turn.' },
 }
 
 export function ChatPage({ id, account }: { id?: string; account: Account }) {
@@ -418,10 +418,13 @@ function ConversationThread({ id, account, showMilestone, summary, onPin, pinPen
           const isQueued = message.state === 'pending' && unansweredMessage?.id !== message.id
           const isWaiting = unansweredMessage?.id === message.id && rows.length === 0 && !state.error
           const stoppedTurn = message.state && stoppedTurns[message.state]
-          return <article className="chat-turn" key={message.id} aria-label="Message and reply">
-            <div className={`druks-chat-message chat-user-message${message.isInternal ? ' is-internal' : ' druks-chat-message--user'}`}>
+          const hasReplyBlock = rows.length > 0 || reply?.blocks.length || isWaiting || stoppedTurn || reply?.question
+          // An internal message is for the agent. The page draws only the agent's side of its turn.
+          if (message.isInternal && !hasReplyBlock) return null
+          return <article className="chat-turn" key={message.id} aria-label={message.isInternal ? 'Agent message' : 'Message and reply'}>
+            {!message.isInternal && <div className="druks-chat-message chat-user-message druks-chat-message--user">
               <div className="druks-chat-message__meta">
-                <span>{message.isInternal ? 'Druks' : 'You'}</span>
+                <span>You</span>
                 {isQueued && <span className="druks-badge druks-badge--tinted druks-badge--info">Queued</span>}
                 <time dateTime={message.createdAt} title={format.absTime(message.createdAt)}>{format.absTimeCompact(message.createdAt)}</time>
               </div>
@@ -430,8 +433,8 @@ function ConversationThread({ id, account, showMilestone, summary, onPin, pinPen
                 {message.transcript && <div className="chat-user-body chat-user-transcript">{message.transcript}</div>}
                 {message.file && <a href={message.file.url} target="_blank" rel="noreferrer">{message.file.name}</a>}
               </div>
-            </div>
-            {(rows.length > 0 || reply?.blocks.length || isWaiting || stoppedTurn || reply?.question) && <div className="chat-reply">
+            </div>}
+            {hasReplyBlock && <div className="chat-reply">
               <div className="druks-chat-message">
                 <div className="druks-chat-message__meta">
                   <span className="chat-agent-status">{conversation?.agentName ?? 'Agent'}
