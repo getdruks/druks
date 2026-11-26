@@ -5,12 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from druks.accounts.models import Account
-from druks.core.lessons.constants import (
-    LESSON_INDEX_MAX_LINES,
-    LESSON_TITLE_MAX_CHARS,
-    VAULT_DIR,
-    VAULT_INDEX,
-)
+from druks.core.lessons import constants
 from druks.core.lessons.datastructures import Vault
 from druks.core.lessons.enums import LessonStatus
 from druks.core.lessons.exceptions import LessonIndexFull
@@ -63,8 +58,8 @@ class Lesson(Model, Uuid7Pk, ordering=("-accepted_at",)):
         accepted_count = await session.scalar(
             select(func.count()).select_from(cls).where(cls.status == LessonStatus.ACCEPTED)
         )
-        if accepted_count >= LESSON_INDEX_MAX_LINES:
-            raise LessonIndexFull(LESSON_INDEX_MAX_LINES)
+        if accepted_count >= constants.LESSON_INDEX_MAX_LINES:
+            raise LessonIndexFull(constants.LESSON_INDEX_MAX_LINES)
         lesson = cls(
             text=text,
             accepted_by_id=account.id,
@@ -88,7 +83,7 @@ class Lesson(Model, Uuid7Pk, ordering=("-accepted_at",)):
 
     @property
     def title(self) -> str:
-        return self.text.splitlines()[0][:LESSON_TITLE_MAX_CHARS]
+        return self.text.splitlines()[0][: constants.LESSON_TITLE_MAX_CHARS]
 
     @classmethod
     async def get_vault(cls, session: AsyncSession) -> Vault:
@@ -98,15 +93,22 @@ class Lesson(Model, Uuid7Pk, ordering=("-accepted_at",)):
             index = "\n".join(f"- [{lesson.title}]({lesson.id}.md)" for lesson in lessons)
             return Vault(
                 files=(
-                    HomeFile(f"{VAULT_DIR}/{VAULT_INDEX}", index, clears=VAULT_DIR),
-                    *(HomeFile(f"{VAULT_DIR}/{lesson.id}.md", lesson.text) for lesson in lessons),
+                    HomeFile(
+                        f"{constants.VAULT_DIR}/{constants.VAULT_INDEX}",
+                        index,
+                        clears=constants.VAULT_DIR,
+                    ),
+                    *(
+                        HomeFile(f"{constants.VAULT_DIR}/{lesson.id}.md", lesson.text)
+                        for lesson in lessons
+                    ),
                 ),
                 index=index,
             )
         # A box can still hold a lesson that a person retired since its last call. An
         # installation that never had a lesson gets no change in its boxes.
         if await session.scalar(select(func.count()).select_from(cls)):
-            return Vault(files=(HomeFile("", "", clears=VAULT_DIR),))
+            return Vault(files=(HomeFile("", "", clears=constants.VAULT_DIR),))
         return Vault()
 
     async def retire(self, session: AsyncSession) -> None:

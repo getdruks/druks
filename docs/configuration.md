@@ -1526,6 +1526,29 @@ sandbox each skill that it copied earlier and that the agent no longer gets. A s
 that an admin removed from Druks is one of them. A chat without an agent gets no
 skills.
 
+## Lessons
+
+A person turns a correction at a gate into a lesson on the
+[Lessons page](approvals.md#keep-a-correction-as-a-lesson) of Software Factory.
+Each agent call then reads the accepted lessons. There is no setting for this.
+
+Before a call starts, Druks writes the lessons into the call's sandbox at
+`~/work/memory`. `MEMORY.md` has one line for each lesson, and each lesson has a
+file of its own. Druks removes `~/work/memory` first, so a lesson that a person
+retired is gone on the next call, also on a sandbox that served an earlier
+call. The repo's clone is at `~/work/repo` and is not touched. The prompt opens
+with a note that carries the index and tells the agent to read the lessons that
+apply to its task. The agent does not change them. An installation with no
+lesson gets no note and no file.
+
+Claude Code's own memory is off in these calls, so the lessons are the one
+memory in the sandbox.
+
+`metadata.json` of each call lists the lessons that the call received
+(`lessons_delivered`) and the ones that its transcript opened
+(`lessons_opened`). The prompt carries the first line of each lesson, so a
+lesson that was received and not opened reached the agent as that line only.
+
 ## Credential custody and secrets at rest
 
 Druks keeps the credentials of providers, services, and MCP servers in one

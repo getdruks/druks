@@ -1,6 +1,6 @@
 import pytest
 from druks.accounts.models import Account
-from druks.core.lessons import models
+from druks.core.lessons import constants
 from druks.core.lessons.exceptions import LessonIndexFull
 from druks.core.lessons.models import Lesson, LessonRepeat
 from druks.durable.models import Run
@@ -90,7 +90,7 @@ async def test_a_lesson_needs_text(druks_db):
 
 
 async def test_accepting_past_the_cap_fails_until_a_lesson_is_retired(druks_db, monkeypatch):
-    monkeypatch.setattr(models, "LESSON_INDEX_MAX_LINES", 2)
+    monkeypatch.setattr(constants, "LESSON_INDEX_MAX_LINES", 2)
     account = await Account.get_or_create(druks_db, "owner@example.com")
     first = await Lesson.accept(druks_db, text="First.", account=account)
     await Lesson.accept(druks_db, text="Second.", account=account)
