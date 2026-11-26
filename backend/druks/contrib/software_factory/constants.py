@@ -29,8 +29,10 @@ LINEAR_CLOSED_STATE_TYPES = frozenset({"completed", "canceled"})
 # last month: the judgement point of the memory epic is 30 builds or a month.
 CORRECTIONS_SHOWN = 50
 CORRECTIONS_WINDOW_DAYS = 30
-# Paulo, 19 Nov: judge the lessons after this many builds or a month, whichever comes first.
+# The memory epic judges the lessons after this many builds or days from the first accepted
+# lesson, whichever comes first.
 JUDGEMENT_BUILDS = 30
+JUDGEMENT_DAYS = 30
 # Human corrections for each build between 4 and 26 Nov 2026, and the share that repeated an
 # earlier correction (DRU-1247). The page sets its own numbers beside them.
 CORRECTIONS_PER_BUILD_BASELINE = 0.28
