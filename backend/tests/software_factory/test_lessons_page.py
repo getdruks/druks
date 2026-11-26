@@ -129,3 +129,15 @@ async def test_a_correction_whose_lesson_was_retired_says_so(druks_client, druks
 
     (card,) = _cards(page, "Corrections")
     assert card["blocks"][1]["text"] == "Repeats the lesson: (retired)"
+
+
+async def test_the_page_says_when_to_judge_the_lessons(druks_client, druks_db):
+    await _reply(druks_db, {"action": "request_changes", "body": "One."}, run="run-1")
+    await _reply(druks_db, {"action": "request_changes", "body": "Two."}, run="run-2")
+
+    page = (await druks_client.get(_PAGE)).json()
+
+    callout = next(block for block in page["blocks"] if block["block"] == "callout")
+    assert callout["title"] == "When to judge"
+    assert "after 30 builds or a month" in callout["text"]
+    assert "Builds in the last 30 days: 2." in callout["text"]
