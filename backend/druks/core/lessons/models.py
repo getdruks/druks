@@ -5,7 +5,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from druks.accounts.models import Account
-from druks.core.lessons.constants import LESSON_INDEX_MAX_LINES
+from druks.core.lessons.constants import (
+    LESSON_INDEX_MAX_LINES,
+    LESSON_TITLE_MAX_CHARS,
+    VAULT_DIR,
+)
+from druks.core.lessons.datastructures import Vault
 from druks.core.lessons.enums import LessonStatus
 from druks.core.lessons.exceptions import LessonIndexFull
 from druks.core.models import Uuid7Pk
@@ -13,6 +18,7 @@ from druks.durable.models import Run
 from druks.events.models import Event
 from druks.exceptions import ValidationError
 from druks.models import Base, Model
+from druks.sandbox.datastructures import HomeFile
 
 
 class Lesson(Model, Uuid7Pk, ordering=("-accepted_at",)):
@@ -78,6 +84,29 @@ class Lesson(Model, Uuid7Pk, ordering=("-accepted_at",)):
                 .order_by(cls.accepted_at, cls.id)
             )
         )
+
+    @property
+    def title(self) -> str:
+        return self.text.splitlines()[0][:LESSON_TITLE_MAX_CHARS]
+
+    @classmethod
+    async def get_vault(cls, session: AsyncSession) -> Vault:
+        """The files that a call writes into its box, and the index for its prompt."""
+        lessons = await cls.list_accepted(session)
+        if lessons:
+            index = "\n".join(f"- [{lesson.title}]({lesson.id}.md)" for lesson in lessons)
+            return Vault(
+                files=(
+                    HomeFile(f"{VAULT_DIR}/MEMORY.md", index, clears=VAULT_DIR),
+                    *(HomeFile(f"{VAULT_DIR}/{lesson.id}.md", lesson.text) for lesson in lessons),
+                ),
+                index=index,
+            )
+        # A box can still hold a lesson that a person retired since its last call. An
+        # installation that never had a lesson gets no change in its boxes.
+        if await session.scalar(select(func.count()).select_from(cls)):
+            return Vault(files=(HomeFile("", "", clears=VAULT_DIR),))
+        return Vault()
 
     async def retire(self, session: AsyncSession) -> None:
         self.status = LessonStatus.RETIRED

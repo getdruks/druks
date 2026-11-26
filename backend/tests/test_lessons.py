@@ -6,6 +6,7 @@ from druks.core.lessons.models import Lesson, LessonRepeat
 from druks.durable.models import Run
 from druks.events.models import Event
 from druks.exceptions import ValidationError
+from druks.sandbox.datastructures import HomeFile
 from sqlalchemy import select
 
 
@@ -99,3 +100,39 @@ async def test_accepting_past_the_cap_fails_until_a_lesson_is_retired(druks_db, 
 
     await first.retire(druks_db)
     await Lesson.accept(druks_db, text="Third.", account=account)
+
+
+async def test_the_vault_holds_an_index_and_a_file_for_each_accepted_lesson(druks_db):
+    account = await Account.get_or_create(druks_db, "owner@example.com")
+    kept = await Lesson.accept(
+        druks_db, text="Say why, never what.\nThe code says what.", account=account
+    )
+    retired = await Lesson.accept(druks_db, text="Keep tests small.", account=account)
+    await retired.retire(druks_db)
+
+    vault = await Lesson.get_vault(druks_db)
+
+    index = f"- [Say why, never what.]({kept.id}.md)"
+    assert vault.index == index
+    assert vault.files == (
+        HomeFile("work/memory/MEMORY.md", index, clears="work/memory"),
+        HomeFile(f"work/memory/{kept.id}.md", "Say why, never what.\nThe code says what."),
+    )
+
+
+async def test_a_box_is_cleared_once_every_lesson_is_retired(druks_db):
+    account = await Account.get_or_create(druks_db, "owner@example.com")
+    lesson = await Lesson.accept(druks_db, text="Keep tests small.", account=account)
+    await lesson.retire(druks_db)
+
+    vault = await Lesson.get_vault(druks_db)
+
+    assert vault.files == (HomeFile("", "", clears="work/memory"),)
+    assert vault.index == ""
+
+
+async def test_an_installation_with_no_lesson_gets_an_empty_vault(druks_db):
+    vault = await Lesson.get_vault(druks_db)
+
+    assert vault.files == ()
+    assert vault.index == ""

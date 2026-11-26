@@ -460,10 +460,8 @@ async def lessons():
         .join(Event, Event.id == LessonRepeat.event_id)
         .where(Event.created_at >= since)
     )
-    lesson_options = [
-        ui.Option(lesson.text.splitlines()[0], value=lesson.id) for lesson in accepted_lessons
-    ]
-    lesson_titles = {lesson.id: lesson.text.splitlines()[0] for lesson in accepted_lessons}
+    lesson_options = [ui.Option(lesson.title, value=lesson.id) for lesson in accepted_lessons]
+    lesson_titles = {lesson.id: lesson.title for lesson in accepted_lessons}
     per_build = recent_corrections / builds if builds else 0
     return ui.Page(
         "Lessons",
@@ -571,7 +569,7 @@ async def lessons():
                         layout="stack",
                         cards=[
                             ui.Card(
-                                title=lesson.text.splitlines()[0],
+                                title=lesson.title,
                                 description=(
                                     f"Accepted by {lesson.accepted_by.username} · "
                                     f"{lesson.accepted_at:%-d %b} UTC"

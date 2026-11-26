@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import dataclasses
 import hashlib
 import json
 import logging
@@ -38,6 +39,7 @@ from .datastructures import (
     AgentResult,
     Credentials,
     HarnessRunResult,
+    HomeFile,
     Hook,
     McpServer,
 )
@@ -296,6 +298,7 @@ class Host:
         hooks: dict[str, Hook] | None = None,
         resumable: bool = False,
         resume_session: str | None = None,
+        home: tuple[HomeFile, ...] = (),
     ) -> AgentResult:
         """Run ``agent`` with ``harness`` and return a pure ``AgentResult`` —
         no database write. A failure is carried on the result's ``error``, not
@@ -328,6 +331,7 @@ class Host:
                 identity=identity,
                 include_apps=include_apps,
                 hooks=hooks,
+                home=home,
                 resumable=resumable,
                 resume_session=resume_session,
             ),
@@ -421,6 +425,7 @@ class Host:
         hooks: dict[str, Hook] | None = None,
         resumable: bool = False,
         resume_session: str | None = None,
+        home: tuple[HomeFile, ...] = (),
     ) -> Any:
         """Drive one prompt through ``harness`` on this VM: the harness
         builds the invocation and parses the result; this sandbox executes it.
@@ -456,6 +461,10 @@ class Host:
             hooks=hooks or (),
             **resume,
         )
+        if home:
+            invocation = dataclasses.replace(
+                invocation, credentials=Credentials(home=(*invocation.credentials.home, *home))
+            )
         result = await self._start_run(
             invocation,
             run_id=run_id,
