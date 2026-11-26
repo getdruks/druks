@@ -1068,6 +1068,7 @@ const revokeReasonCopy: Record<string, string> = {
   client_replaced: 'client credentials replaced',
   service_disconnected: 'service disconnected',
   server_removed: 'server removed',
+  invalid_grant: 'the provider ended this sign-in',
 }
 
 function revokedCopy(connection: Connection): string {
@@ -1832,7 +1833,8 @@ export function ProviderConnect({
                   <time dateTime={subscription.revokedAt}>
                     {absTime(subscription.revokedAt)}
                   </time>
-                  {' · '}Reason: <code>{subscription.revokedReason}</code>
+                  {' · '}Reason:{' '}
+                  {revokeReasonCopy[subscription.revokedReason] ?? <code>{subscription.revokedReason}</code>}
                 </p>
               )}
               {connected && loginExpiresAt && (

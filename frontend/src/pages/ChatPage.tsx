@@ -2,7 +2,7 @@ import { useEffect, useReducer, useRef, useState } from 'react'
 import type { ToolCall } from '@agentclientprotocol/sdk'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  ArrowDown, ArrowLeft, ArrowUp, Check, ChevronRight, MessageSquare, Pin, Plus, Search, Settings, X,
+  ArrowDown, ArrowLeft, ArrowUp, Bot, Check, ChevronRight, MessageSquare, Pin, Plus, Search, Settings, X,
 } from 'lucide-react'
 import { useStickToBottom } from 'use-stick-to-bottom'
 import { Link, useLocation } from 'wouter'
@@ -65,6 +65,7 @@ export function ChatPage({ id, account }: { id?: string; account: Account }) {
   const groups = new Map<string, ConversationSummary[]>([
     ['Pinned', []], ['Today', []], ['Yesterday', []], ['Earlier', []],
   ])
+  const openConversation = list.data?.find((conversation) => conversation.id === conversationId)
   const matches = [...list.data ?? []]
     .filter((conversation) => conversationTitle(conversation).toLowerCase().includes(search.trim().toLowerCase()))
     .sort(compareConversations)
@@ -92,6 +93,27 @@ export function ChatPage({ id, account }: { id?: string; account: Account }) {
     return <Page inset><p role="alert">Conversation not found.</p><Link href="/chat">Back to conversations</Link></Page>
   }
 
+  const headerLink = openConversation?.agentId ? (
+    <Link
+      href={`/agents/${openConversation.agentId}`}
+      className="druks-button druks-button--compact"
+      title="Open this agent's page"
+    >
+      <Bot size={16} aria-hidden="true" />
+      {openConversation.agentName}
+    </Link>
+  ) : (
+    <Link
+      href="/apps/chat/settings"
+      className="druks-button druks-button--compact"
+      aria-label="Chat Settings"
+      title="Chat Settings"
+    >
+      <Settings size={16} aria-hidden="true" />
+      Chat Settings
+    </Link>
+  )
+
   return (
     <Page
       className={`page-chat${id ? ' has-conversation' : ''}`}
@@ -101,17 +123,7 @@ export function ChatPage({ id, account }: { id?: string; account: Account }) {
         <PageHeading
           title="Chat"
           icon={<MessageSquare aria-hidden="true" />}
-          actions={account.role === 'admin' ? (
-            <Link
-              href="/apps/chat/settings"
-              className="druks-button druks-button--compact"
-              aria-label="Chat Settings"
-              title="Chat Settings"
-            >
-              <Settings size={16} aria-hidden="true" />
-              Chat Settings
-            </Link>
-          ) : undefined}
+          actions={account.role === 'admin' ? headerLink : undefined}
         />
       }
     >
@@ -165,7 +177,7 @@ export function ChatPage({ id, account }: { id?: string; account: Account }) {
         id={conversationId}
         account={account}
         showMilestone={id === undefined}
-        summary={list.data?.find((conversation) => conversation.id === conversationId)}
+        summary={openConversation}
         onPin={togglePinned}
         pinPending={pin.isPending}
         draft={drafts[draftKey] ?? ''}

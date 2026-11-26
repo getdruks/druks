@@ -93,6 +93,14 @@ describe('Chat page', () => {
     expect(screen.queryByRole('link', { name: 'Chat Settings' })).toBeNull()
   })
 
+  it('links a conversation with an agent to the agent, not to Chat Settings', async () => {
+    vi.mocked(chatApi.list).mockResolvedValue([{ ...conversation, agentId: reviewer.id, agentName: reviewer.name }])
+    mount()
+
+    expect((await screen.findByRole('link', { name: 'Reviewer' })).getAttribute('href')).toBe('/agents/agent-1')
+    expect(screen.queryByRole('link', { name: 'Chat Settings' })).toBeNull()
+  })
+
   it('distinguishes your messages, the agent, and Druks', async () => {
     vi.mocked(chatApi.get).mockResolvedValue({ ...conversation, messages: [
       { ...message, state: 'replied' },
