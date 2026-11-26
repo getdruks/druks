@@ -10,6 +10,7 @@ from druks.core.lessons.enums import LessonStatus
 from druks.core.lessons.exceptions import LessonIndexFull
 from druks.core.models import Uuid7Pk
 from druks.durable.models import Run
+from druks.events.models import Event
 from druks.exceptions import ValidationError
 from druks.models import Base, Model
 
@@ -46,6 +47,8 @@ class Lesson(Model, Uuid7Pk, ordering=("-accepted_at",)):
         text = text.strip()
         if not text:
             raise ValidationError("A lesson needs text.")
+        if source_event_id and not await session.get(Event, source_event_id):
+            raise ValidationError(f"No event has the id {source_event_id}.")
         if source_run_id and not await session.get(Run, source_run_id):
             raise ValidationError(
                 f"No run has the id {source_run_id}. Check the id, or leave it out."
@@ -102,6 +105,8 @@ class LessonRepeat(Model):
         replaces the first."""
         if lesson.status != LessonStatus.ACCEPTED:
             raise ValidationError("A correction can repeat only an accepted lesson.")
+        if not await session.get(Event, event_id):
+            raise ValidationError(f"No event has the id {event_id}.")
         await session.merge(
             cls(
                 event_id=event_id,
