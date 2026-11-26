@@ -836,7 +836,8 @@ agent. From then on, a tag with no name reaches the new agent, from anyone. A
 thread has no time limit. In a thread where nobody named an agent, a tag with no
 name reaches the channel's agent, or else the Bot. When you cannot talk to the
 agent, because you named it or because it owns the thread, the bot says why in
-the thread and drops the message. Name an agent that you can talk to. The same
+the thread and drops the message. Name an agent that you can talk to. The bot
+drops an untagged reply of yours for such an agent and says nothing. The same
 tag works in a direct message, where a name without the tag reaches the Bot.
 
 Tell the agent to answer your replies without a tag. Your untagged replies in

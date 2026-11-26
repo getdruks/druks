@@ -109,11 +109,8 @@ class SlackChannel(Channel):
         mention = f"<@{row.identity['bot_user_id']}>"
         is_tagged = mention in message["text"]
         is_addressed = not thread_id or is_tagged
-        if not is_addressed and (
-            "thread_ts" not in message
-            or await Conversation.is_tag_required_for_user(
-                session, row, user_id=message["user"], thread_id=thread_id
-            )
+        if not is_addressed and await Conversation.is_tag_required_for_user(
+            session, row, user_id=message["user"], thread_id=thread_id
         ):
             # Most of a room's traffic: a message that names nobody.
             return
@@ -129,11 +126,14 @@ class SlackChannel(Channel):
                     session, row, thread_id=thread_id
                 ) or await Agent.get_for_channel(session, message["channel"])
             if agent and not linked_account.can_talk_to(agent):
-                room, _, thread_ts = thread_id.partition(":")
-                client = SlackClient(token=await Slack.get_bot_token())
-                await client.post_markdown(
-                    room or message["user"], PRIVATE_AGENT_MESSAGE, thread_ts=thread_ts
-                )
+                # A reply with no tag can be for a person in the thread, so it gets no
+                # refusal.
+                if is_addressed:
+                    room, _, thread_ts = thread_id.partition(":")
+                    client = SlackClient(token=await Slack.get_bot_token())
+                    await client.post_markdown(
+                        room or message["user"], PRIVATE_AGENT_MESSAGE, thread_ts=thread_ts
+                    )
                 return
             return await cls.save_message(
                 session,
@@ -201,6 +201,19 @@ class SlackChannel(Channel):
         await session.commit()
         await DBOS.start_workflow_async(deliver, conversation.id)
         return conversation
+
+    @classmethod
+    async def get_prompt_context(cls, session: AsyncSession, conversation: Conversation) -> dict:
+        """Whether the person must tag the bot in the conversation's thread, so the agent
+        knows whether to ask for a tag in the answer."""
+        return {
+            "is_tag_required": await Conversation.is_tag_required_for_user(
+                session,
+                conversation.connection,
+                user_id=conversation.user_id,
+                thread_id=conversation.thread_id,
+            )
+        }
 
     @classmethod
     async def get_welcome(cls) -> str:

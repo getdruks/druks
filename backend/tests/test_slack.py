@@ -934,6 +934,47 @@ async def test_a_tag_naming_no_agent_is_refused_when_the_threads_agent_is_privat
     assert PRIVATE_AGENT_MESSAGE in json.dumps(sent)
 
 
+async def test_an_untagged_reply_for_a_private_agent_is_dropped_with_no_refusal(
+    card, druks_db, slack, delivery
+):
+    ana = await Account.get_or_create(druks_db, "ana@example.com")
+    ben = await Account.get_or_create(druks_db, "ben@example.com")
+    await link_person(druks_db, ana)
+    await link_person(druks_db, ben, user_id="U200")
+    writer = await create_agent(druks_db, ana, "Writer")
+    helper = await create_agent(druks_db, ben, "Helper", is_private=True)
+    await druks_db.commit()
+    await receive(room_event(text=f"<@{BOT}> Writer draft the notes"))
+    [drafting] = await Conversation.list_for_connection(druks_db, card.id)
+    await drafting.set_tag_required(druks_db, False)
+    await druks_db.commit()
+    await receive(
+        room_event(user="U200", text=f"<@{BOT}> Helper check this", ts="11.0", thread_ts="10.0")
+    )
+
+    await receive(room_event(text="thanks Ben", ts="12.0", thread_ts="10.0"))
+
+    assert not slack
+    assert await list_bodies(druks_db, card) == {
+        (ANA, writer.id): ["Writer draft the notes"],
+        ("U200", helper.id): ["Helper check this"],
+    }
+
+
+async def test_the_agent_asks_for_a_tag_only_from_a_person_who_must_tag_it(card, druks_db):
+    ana = await Account.get_or_create(druks_db, "ana@example.com")
+    conversation = await thread_conversation(druks_db, card, ana)
+    await druks_db.refresh(conversation, ["account"])
+
+    _, required_prompt, _ = await service.get_agent(druks_db, conversation)
+    await conversation.set_tag_required(druks_db, False)
+    _, optional_prompt, _ = await service.get_agent(druks_db, conversation)
+
+    assert "ask them to tag you in the answer" in required_prompt
+    assert "ask them to tag you in the answer" not in optional_prompt
+    assert "do not ask them for one" in optional_prompt
+
+
 async def test_a_held_message_reaches_the_threads_agent_once_the_person_connects(
     card, druks_db, druks_client, slack, delivery, endpoint
 ):

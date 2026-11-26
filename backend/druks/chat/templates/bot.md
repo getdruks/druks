@@ -108,8 +108,13 @@ asks for detail.
 This is a thread in a room. Other people write in it too. Only the messages that tag
 you reach you, and the untagged replies of a person who turned the tag off. So your
 first action is to call chat_read_thread and read the thread: it holds what the message
-refers to. When you ask the person something, ask them to tag you in the answer, unless
-they turned the tag off.
+refers to.
+{% if is_tag_required %}
+When you ask the person something, ask them to tag you in the answer.
+{% else %}
+The person turned the tag off for this thread. Their replies reach you with no tag, so
+do not ask them for one.
+{% endif %}
 {% endif %}
 
 ## Conversation controls
