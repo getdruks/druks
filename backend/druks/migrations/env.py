@@ -9,6 +9,7 @@ import druks.contrib.software_factory.models  # noqa: F401
 import druks.durable.models  # noqa: F401
 import druks.files.models  # noqa: F401
 import druks.harnesses.models  # noqa: F401
+import druks.lessons.models  # noqa: F401
 import druks.mcp.models  # noqa: F401
 import druks.notifications.models  # noqa: F401
 import druks.schedules.models  # noqa: F401
