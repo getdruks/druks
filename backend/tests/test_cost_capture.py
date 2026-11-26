@@ -78,8 +78,8 @@ def test_extract_claude_cost_returns_none_when_envelope_lacks_cost():
 
 def test_failed_claude_call_writes_cost_before_raising(tmp_path: Path):
     message = (
-        "You've hit your org's monthly spend limit · ask your admin to raise it · "
-        "your session limit resets 2:20pm"
+        "You've hit your org's monthly spend limit · visit "
+        "https://claude.ai/admin-settings/usage to raise it"
     )
     stdout = (
         json.dumps(
