@@ -91,11 +91,15 @@ class SlackClient(AsyncWebClient):
             messages.extend(page["messages"])
         return list(messages)
 
-    async def list_member_channels(self) -> list[dict]:
-        """The public and private channels that this token's user is a member of."""
+    async def list_member_channels(self, *, user: str = "") -> list[dict]:
+        """The public and private channels that this token's user is a member of. With
+        ``user``, only the ones that this Slack user is a member of too."""
         channels = []
         async for page in await self.users_conversations(
-            types="public_channel,private_channel", exclude_archived=True, limit=1000
+            types="public_channel,private_channel",
+            exclude_archived=True,
+            limit=1000,
+            user=user or None,
         ):
             channels.extend(page["channels"])
         return channels

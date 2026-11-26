@@ -1414,7 +1414,7 @@ async def test_a_schedule_takes_a_channel_only_for_a_task_and_with_slack_connect
     async with asgi_client(api) as client:
         without_slack = await client.post("/api/schedules", json=brief, headers=headers)
         await install_service("slack", access_token="xoxb-1", identity={}, secrets={})
-        await druks_db.commit()
+        await link_person(druks_db, owner)
         monkeypatch.setattr(Slack, "get_client", AsyncMock(return_value=bot))
         other_tool = await client.post(
             "/api/schedules",
@@ -1432,11 +1432,18 @@ async def test_a_schedule_takes_a_channel_only_for_a_task_and_with_slack_connect
     assert (made.json()["channelId"], changed.json()["channelId"]) == ("C1", None)
 
 
-async def test_a_schedule_takes_only_a_channel_that_the_bot_is_in(druks_db, tmp_path, monkeypatch):
+async def test_a_schedule_takes_only_a_channel_that_the_bot_and_its_owner_are_in(
+    druks_db, tmp_path, monkeypatch
+):
     bind_ambient_session(druks_db)
     monkeypatch.setattr("druks.schedules.routes.apply_schedule", AsyncMock())
-    member_channels = AsyncMock(return_value=[{"id": "C1", "name": "eng"}])
-    bot = SimpleNamespace(list_member_channels=member_channels)
+    eng, leadership = {"id": "C1", "name": "eng"}, {"id": "C2", "name": "leadership"}
+    member_channels = {"": [eng, leadership], ANA: [eng]}
+
+    async def list_member_channels(*, user=""):
+        return member_channels[user]
+
+    bot = SimpleNamespace(list_member_channels=list_member_channels)
     monkeypatch.setattr(Slack, "get_client", AsyncMock(return_value=bot))
     owner = await Account.get_or_create(druks_db, "owner@example.com")
     conversation = await Conversation.create(druks_db, account_id=owner.id, body="Brief us")
@@ -1454,19 +1461,47 @@ async def test_a_schedule_takes_only_a_channel_that_the_bot_is_in(druks_db, tmp_
     }
 
     async with asgi_client(api) as client:
-        refused = await client.post(
+        unknown = await client.post(
+            "/api/schedules", json={**task, "channel": "C1"}, headers=headers
+        )
+        await link_person(druks_db, owner)
+        without_bot = await client.post(
             "/api/schedules", json={**task, "channel": "#ops"}, headers=headers
+        )
+        without_owner = await client.post(
+            "/api/schedules", json={**task, "channel": "#leadership"}, headers=headers
         )
         made = await client.post("/api/schedules", json={**task, "channel": "C1"}, headers=headers)
         address = f"/api/schedules/{made.json()['id']}"
-        moved = await client.put(address, json={**task, "channel": "#ops"}, headers=headers)
+        moved = await client.put(address, json={**task, "channel": "#leadership"}, headers=headers)
         by_name = await client.put(address, json={**task, "channel": "eng"}, headers=headers)
-        member_channels.return_value = []
+        member_channels[""] = []
         kept = await client.put(
             address, json={**task, "cron": "0 9 * * 1", "channel": "C1"}, headers=headers
         )
 
-    assert (refused.status_code, moved.status_code) == (422, 422)
-    assert refused.json()["detail"] == "The bot is not in #ops. Invite it to the channel first."
-    assert by_name.json()["channelId"] == "C1"
+    assert unknown.json()["detail"] == (
+        "Druks does not know the person's Slack account. Ask them to connect Slack in Druks first."
+    )
+    assert without_bot.json()["detail"] == "The bot is not in #ops. Invite it to the channel first."
+    assert without_owner.json()["detail"] == (
+        "The person is not in C2. Ask them to join the channel first, or choose a channel "
+        "that they are in."
+    )
+    assert (moved.status_code, by_name.json()["channelId"]) == (422, "C1")
     assert (kept.status_code, kept.json()["channelId"]) == (200, "C1")
+
+
+async def test_the_client_lists_only_the_channels_that_the_bot_shares_with_a_person(monkeypatch):
+    asked = []
+
+    async def api_call(client, api_method, *, params, **request):
+        asked.append((api_method, params["user"]))
+        return Answer(ok=True, channels=[{"id": "C1", "name": "eng"}])
+
+    monkeypatch.setattr(SlackClient, "api_call", api_call)
+
+    channels = await SlackClient(token="xoxb-1").list_member_channels(user=ANA)
+
+    assert channels == [{"id": "C1", "name": "eng"}]
+    assert asked == [("users.conversations", ANA)]

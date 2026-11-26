@@ -1,6 +1,5 @@
 from collections.abc import Collection
 from datetime import datetime
-from typing import Any
 from zoneinfo import ZoneInfo
 
 from croniter import CroniterBadDateError, croniter
@@ -34,7 +33,7 @@ class Schedule(Base, Uuid7Pk):
     )
     # The tool's name and arguments, as the agent calls it.
     tool: Mapped[str]
-    arguments: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    arguments: Mapped[dict] = mapped_column(JSONB)
     # A cron in the installation timezone.
     cron: Mapped[str]
     # The id of the channel where each run posts its answer. None posts nowhere.
@@ -49,7 +48,7 @@ class Schedule(Base, Uuid7Pk):
         account_id: str,
         conversation_id: str,
         tool: str,
-        arguments: dict[str, Any],
+        arguments: dict,
         cron: str,
         channel_id: str = "",
         tool_names: Collection[str],
@@ -73,7 +72,7 @@ class Schedule(Base, Uuid7Pk):
         self,
         *,
         tool: str,
-        arguments: dict[str, Any],
+        arguments: dict,
         cron: str,
         channel_id: str,
         tool_names: Collection[str],

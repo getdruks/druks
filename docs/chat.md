@@ -548,8 +548,13 @@ chat, a mention of the channel holds the id, and the agent gives that. Say
 `chat_run_instruction` takes a channel, because only its run answers in words.
 Druks refuses a new channel while Slack is not connected. Druks also refuses a
 channel that the bot is not a member of: invite the bot to the channel first.
-Druks saves the id of the channel, so the schedule keeps its channel when
-someone renames it in Slack. `list_schedules` gives that id as `channelId`.
+The person who sets the schedule must be a member of the channel too, because
+Slack lets nobody post in a channel that they are not in. Druks knows the
+person by their Slack account: see [Link your account](#link-your-account).
+Druks checks the bot and the person when the schedule takes the channel, not at
+each run. Druks saves the id of the channel, so the schedule keeps its channel
+when someone renames it in Slack. `list_schedules` gives that id as
+`channelId`.
 Each run then posts its answer in the channel as a new message, with the name
 and picture of the conversation's agent. Slack shows them when the Slack app
 has the `chat:write.customize` scope. The post is text. Druks sends an answer
@@ -558,9 +563,9 @@ files. The run still reports to the conversation, so a failure or a question
 goes to the owner there. The report names the channel that took the post, so
 the agent can say where the answer is. When Slack does not take the post, such
 as after the bot left the channel, the run still finishes, and its report to
-the conversation gives the reason. The schedule goes on. The run reads the channel when it posts, so a
-change to the schedule also applies to a run that has started. An interrupted
-run does its task again, so it can post again.
+the conversation gives the reason. The schedule goes on. The run reads the
+channel when it posts, so a change to the schedule also applies to a run that
+has started. An interrupted run does its task again, so it can post again.
 
 Each schedule has its own DBOS schedule. At each due time, Druks makes the tool
 call through its own MCP server. It calls as the owner, from the

@@ -54,6 +54,25 @@ async def require_bot_in_channel(channel: str) -> str:
     raise ValidationError(f"The bot is not in {channel}. Invite it to the channel first.")
 
 
+async def require_person_in_channel(account: Account, channel_id: str) -> None:
+    """Refuse a channel that the person of ``account`` is not a member of. Slack lets
+    nobody post in a channel that they are not in, so Druks posts there for no such
+    person. The person's Slack sign-in says who they are in Slack."""
+    sign_ins = await Slack.list_for_account(account.id)
+    if not sign_ins:
+        raise ValidationError(
+            "Druks does not know the person's Slack account. Ask them to connect Slack in "
+            "Druks first."
+        )
+    client = await Slack.get_client()
+    shared_channels = await client.list_member_channels(user=sign_ins[0].identity["subject"])
+    if channel_id not in [shared_channel["id"] for shared_channel in shared_channels]:
+        raise ValidationError(
+            f"The person is not in {channel_id}. Ask them to join the channel first, or "
+            "choose a channel that they are in."
+        )
+
+
 async def get_rendered_ask(session: AsyncSession, run: Run) -> dict:
     """The ask that ``run`` waits on, as the content of its notification. The blocks are the
     ask in order. The body is their text form. Each action is a control that a click can

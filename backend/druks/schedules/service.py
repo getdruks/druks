@@ -1,5 +1,4 @@
 from datetime import datetime
-from typing import Any
 
 from dbos import DBOS, StepOptions
 from fastmcp import Client
@@ -38,7 +37,7 @@ async def apply_schedule(schedule: Schedule) -> None:
 
 
 @DBOS.workflow(name=RUN_SCHEDULE_WORKFLOW)
-async def run_schedule(scheduled_at: datetime, context: dict[str, Any]) -> None:
+async def run_schedule(scheduled_at: datetime, context: dict) -> None:
     """Make the schedule's tool call at a due time. When Druks skips the call, the
     conversation hears why, and the due time fails."""
     try:

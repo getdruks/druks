@@ -8,7 +8,7 @@ from druks.accounts.dependencies import current_account
 from druks.accounts.models import Account
 from druks.api.dependencies import SessionDep
 from druks.exceptions import PermissionDenied
-from druks.notifications.services import require_bot_in_channel
+from druks.notifications.services import require_bot_in_channel, require_person_in_channel
 
 from .models import Schedule
 from .schemas import ScheduleResponse
@@ -58,14 +58,16 @@ async def create_schedule(
     example, schedule a tool that starts a run. When none of your tools does the task,
     schedule chat_run_instruction with the task in words. Each call goes through the same
     checks as when you call the tool. Its runs report to this chat. With channel,
-    each run also posts its answer in that channel. The bot must be a member of it. Local
-    time is the installation timezone. The answer's nextRunAt is local. Tell the person
-    that time as it is. When Druks refuses the time, ask the person rather than guess."""
+    each run also posts its answer in that channel. The bot and the person must both be
+    members of it. Local time is the installation timezone. The answer's nextRunAt is
+    local. Tell the person that time as it is. When Druks refuses the time, ask the person
+    rather than guess."""
     conversation_id = current_conversation_id.get()
     if not conversation_id:
         raise HTTPException(422, "This call comes from no chat. Make a schedule from a chat.")
     if channel:
         channel = await require_bot_in_channel(channel)
+        await require_person_in_channel(account, channel)
     schedule = await Schedule.create(
         session,
         account_id=account.id,
@@ -129,9 +131,11 @@ async def change_schedule(
     schedule = await Schedule.get_for_account(session, schedule_id, account.id)
     if not schedule:
         raise HTTPException(404, "Schedule not found. Choose one from list_schedules.")
-    # The bot can leave the channel later. A change that gives the saved id still saves.
+    # The bot or the person can leave the channel later. A change that gives the saved id
+    # still saves.
     if channel and channel != schedule.channel_id:
         channel = await require_bot_in_channel(channel)
+        await require_person_in_channel(account, channel)
     schedule.change(
         tool=tool,
         arguments=arguments,

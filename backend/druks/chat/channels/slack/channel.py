@@ -292,7 +292,7 @@ class SlackChannel(Channel):
         them. An agent's reply shows the agent's name and picture."""
         client = SlackClient(token=await Slack.get_bot_token())
         room, _, thread_ts = conversation.thread_id.partition(":")
-        identity = await cls.get_identity(conversation.agent)
+        author = await cls.get_author(conversation.agent)
         if reply.blocks:
             blocks = reply.answer_blocks
             posted = await deliver_notification(
@@ -303,7 +303,7 @@ class SlackChannel(Channel):
                 account=conversation.account,
                 blocks=blocks,
                 thread_ts=thread_ts,
-                **identity,
+                **author,
             )
         else:
             posted, *_ = [
@@ -311,7 +311,7 @@ class SlackChannel(Channel):
                     room or conversation.user_id,
                     reply.answer[start : start + MARKDOWN_TEXT_LIMIT],
                     thread_ts=thread_ts,
-                    **identity,
+                    **author,
                 )
                 for start in range(0, len(reply.answer), MARKDOWN_TEXT_LIMIT)
             ]
@@ -325,7 +325,7 @@ class SlackChannel(Channel):
         """Post ``text`` at the top of ``room``, in pieces that fit a markdown block. Each
         piece shows the agent's name and picture."""
         client = SlackClient(token=await Slack.get_bot_token())
-        identity = await cls.get_identity(agent)
+        author = await cls.get_author(agent)
         for start in range(0, len(text), MARKDOWN_TEXT_LIMIT):
             await deliver_notification(
                 client,
@@ -333,11 +333,11 @@ class SlackChannel(Channel):
                 text[start : start + MARKDOWN_TEXT_LIMIT],
                 session=session,
                 account=None,
-                **identity,
+                **author,
             )
 
     @classmethod
-    async def get_identity(cls, agent: Agent | None) -> dict:
+    async def get_author(cls, agent: Agent | None) -> dict:
         """The name and the picture that a message of ``agent`` shows. Slack takes them
         only with the scope. A workspace that has not approved the app again gets the
         message under the app's own name."""
