@@ -38,7 +38,6 @@ class PersonalSettingsResponse(Schema):
     timezone: str
     theme: Theme
     notification_channel_id: str | None
-    is_tag_required: bool
 
 
 class SettingsResponse(Schema):
@@ -63,7 +62,6 @@ class UpdatePersonalSettingsRequest(BaseModel):
     notification_channel_id: str | None = Field(
         default=None, validation_alias="notificationChannelId"
     )
-    is_tag_required: bool | None = Field(default=None, validation_alias="isTagRequired")
 
 
 class UpdateSettingsRequest(BaseModel):

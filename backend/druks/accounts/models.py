@@ -63,7 +63,6 @@ class Account(Model, Uuid7Pk, ordering=("created_at", "id")):
     )
     # The channel that gets this account's notifications. None sends them by direct message.
     notification_channel_id: Mapped[str | None] = mapped_column(String, default=None)
-    is_tag_required: Mapped[bool] = mapped_column(default=False, server_default=text("false"))
     created_at: Mapped[datetime] = mapped_column(default=Base.utc_now)
     # The database refuses to delete an account that is on a team, so a delete loads no team.
     teams: sqlalchemy.orm.WriteOnlyMapped["Team"] = relationship(

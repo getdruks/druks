@@ -58,7 +58,7 @@ beforeEach(() => {
   topics.mockResolvedValue([{ app: 'field_notes', topic: 'gist.prepared' }, { app: 'field_notes', topic: 'older.kind' }])
   destinations.mockResolvedValue({ isSubjectAvailable: true, isRunAvailable: true, isArtifactAvailable: true })
   artifact.mockResolvedValue({ kind: 'markdown', title: 'Gist', content: '# Saved finding\nExact old result.' })
-  settings.mockResolvedValue({ timezone: 'UTC', theme: 'system', notificationChannelId: null, isTagRequired: false })
+  settings.mockResolvedValue({ timezone: 'UTC', theme: 'system', notificationChannelId: null })
   vi.spyOn(api, 'listApps').mockResolvedValue([app, { ...app, name: 'core', builtin: true }, { ...app, name: 'usage', builtin: true }])
   vi.spyOn(identityApi, 'me').mockResolvedValue({
     authMode: 'none',
@@ -337,7 +337,7 @@ it('shows Factory review findings through the shared saved-result renderer', asy
 })
 
 it('sends the operator timezone day boundaries to history and the live stream', async () => {
-  settings.mockResolvedValue({ timezone: 'Europe/Madrid', theme: 'system', notificationChannelId: null, isTagRequired: false })
+  settings.mockResolvedValue({ timezone: 'Europe/Madrid', theme: 'system', notificationChannelId: null })
   mount()
   await screen.findByRole('button', { name: /Pump A.*Gist prepared/ })
   await waitFor(() => expect(screen.getByText('17:00')).toBeTruthy())
@@ -442,7 +442,7 @@ it('shows active values and clears only the controls in the open panel', async (
 })
 
 it('groups consecutive rows by the account day across daylight saving and pagination', async () => {
-  settings.mockResolvedValue({ timezone: 'Europe/Madrid', theme: 'system', notificationChannelId: null, isTagRequired: false })
+  settings.mockResolvedValue({ timezone: 'Europe/Madrid', theme: 'system', notificationChannelId: null })
   history.mockImplementation(async (params) => params?.before
     ? { items: [
       { ...result, id: 'event:8', seq: 8, at: '2025-10-26T00:30:00Z' },

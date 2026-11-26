@@ -56,7 +56,7 @@ function run(id: string, costs: number[]): RunSummary {
 function renderPage(account: Account, timezone?: string) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   const page = <AgentPage id="agent-1" account={account} />
-  if (timezone) vi.spyOn(api, 'getPersonalSettings').mockResolvedValue({ timezone, theme: 'system', notificationChannelId: null, isTagRequired: false })
+  if (timezone) vi.spyOn(api, 'getPersonalSettings').mockResolvedValue({ timezone, theme: 'system', notificationChannelId: null })
   render(
     <QueryClientProvider client={queryClient}>
       {timezone ? <UserPreferencesProvider accountId={account.id}>{page}</UserPreferencesProvider> : page}

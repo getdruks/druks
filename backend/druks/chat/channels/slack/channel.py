@@ -1,7 +1,6 @@
 import json
 import logging
 import secrets
-from datetime import timedelta
 from functools import partial
 
 from dbos import DBOS
@@ -20,7 +19,6 @@ from druks.chat.service import deliver
 from druks.core.apis.slack import SLACK_CUSTOMIZE_SCOPE, SlackClient
 from druks.core.services import Slack
 from druks.files.datastructures import File
-from druks.models import Base
 from druks.notifications.constants import CLOSED_MESSAGE
 from druks.notifications.exceptions import ChannelUnavailableError
 from druks.notifications.models import Notification, mint_correlation_token
@@ -32,7 +30,6 @@ from druks.secrets.models import VaultSecret
 from druks.settings import get_settings
 
 from .constants import (
-    JOINED_THREAD_SECONDS,
     LINK_KEY,
     LINK_MESSAGE,
     LINK_TTL_SECONDS,
@@ -82,17 +79,20 @@ class SlackChannel(Channel):
         return await session.get(Account, owner_id) if owner_id else None
 
     @classmethod
-    async def route_message(cls, session: AsyncSession, row: VaultSecret, message: dict) -> None:
-        """Route a message for the bot. A direct message or a tag reaches the linked
-        account's own conversation, or waits under a private link until the person
-        connects their Slack account. A tag followed by an agent's name reaches the
-        person's conversation with that agent. A tag that names none reaches the
-        person's latest conversation in the thread, or else the channel's agent.
+    async def route_message(
+        cls, session: AsyncSession, row: VaultSecret, message: dict
+    ) -> Conversation | None:
+        """Route a message for the bot, and return the conversation that takes it. A
+        direct message or a tag reaches the linked account's own conversation, or waits
+        under a private link until the person connects their Slack account. A tag
+        followed by an agent's name reaches the person's conversation with that agent. A
+        tag that names none reaches the agent that owns the thread, or else the
+        channel's agent, or else the Bot. So does a reply with no tag, from a person who
+        turned the tag off for the thread.
 
-        An untagged reply reaches the thread conversation that the person used in the last
-        day, unless they asked for a tag. The tag of an automation, which is another app's
-        bot or a workflow, reaches the default account once an admin accepted the
-        automation. Its first tag waits for that. Everything else is not for the bot."""
+        The tag of an automation, which is another app's bot or a workflow, reaches the
+        default account once an admin accepted the automation. Its first tag waits for
+        that. Everything else is not for the bot."""
         if bot_id := message.get("bot_id"):
             automation = await Automation.get_or_none(
                 session, connection_id=row.id, source_id=bot_id
@@ -109,57 +109,41 @@ class SlackChannel(Channel):
         mention = f"<@{row.identity['bot_user_id']}>"
         is_tagged = mention in message["text"]
         is_addressed = not thread_id or is_tagged
-        if not is_addressed and "thread_ts" not in message:
-            # Most of a room's traffic: a top-level message that names nobody.
+        if not is_addressed and await Conversation.is_tag_required_for_user(
+            session, row, user_id=message["user"], thread_id=thread_id
+        ):
+            # Most of a room's traffic: a message that names nobody.
             return
         linked_account = await cls.lookup_account(session, row, message)
-        if is_addressed and linked_account:
+        if linked_account:
             agent = None
             if is_tagged:
                 # "@Druks, Security engineer" and "@Druks: Security engineer" name it too.
                 text = message["text"].partition(mention)[2].lstrip(",: \n")
                 agent = await Agent.lookup(session, text)
-                if not agent and thread_id:
-                    latest_conversation = await Conversation.get_for_user(
-                        session, row, user_id=message["user"], thread_id=thread_id
-                    )
-                    if latest_conversation:
-                        agent = latest_conversation.agent
-                    else:
-                        agent = await Agent.get_for_channel(session, message["channel"])
+            if not agent and thread_id:
+                agent = await Conversation.get_thread_owner(
+                    session, row, thread_id=thread_id
+                ) or await Agent.get_for_channel(session, message["channel"])
             if agent and not linked_account.can_talk_to(agent):
-                room, _, thread_ts = thread_id.partition(":")
-                client = SlackClient(token=await Slack.get_bot_token())
-                await client.post_markdown(
-                    room or message["user"], PRIVATE_AGENT_MESSAGE, thread_ts=thread_ts
-                )
+                # A reply with no tag can be for a person in the thread, so it gets no
+                # refusal.
+                if is_addressed:
+                    room, _, thread_ts = thread_id.partition(":")
+                    client = SlackClient(token=await Slack.get_bot_token())
+                    await client.post_markdown(
+                        room or message["user"], PRIVATE_AGENT_MESSAGE, thread_ts=thread_ts
+                    )
                 return
-            await cls.save_message(
+            return await cls.save_message(
                 session,
                 row,
                 account=linked_account,
                 message=message,
                 agent_id=agent.id if agent else None,
             )
-        elif is_addressed:
+        if is_addressed:
             await cls.send_link(message)
-        elif linked_account:
-            joined_conversation = await Conversation.get_for_user(
-                session, row, user_id=message["user"], thread_id=thread_id
-            )
-            since = Base.utc_now() - timedelta(seconds=JOINED_THREAD_SECONDS)
-            if (
-                joined_conversation
-                and not joined_conversation.is_tag_required
-                and joined_conversation.last_message_at > since
-            ):
-                await cls.save_message(
-                    session,
-                    row,
-                    account=linked_account,
-                    message=message,
-                    agent_id=joined_conversation.agent_id,
-                )
 
     @classmethod
     async def save_message(
@@ -185,7 +169,6 @@ class SlackChannel(Channel):
             user_name="",
             user_phone="",
             thread_id=get_thread_id(message),
-            is_tag_required=account.is_tag_required,
             agent_id=agent_id,
         )
         client = SlackClient(token=await Slack.get_bot_token())
@@ -218,6 +201,19 @@ class SlackChannel(Channel):
         await session.commit()
         await DBOS.start_workflow_async(deliver, conversation.id)
         return conversation
+
+    @classmethod
+    async def get_prompt_context(cls, session: AsyncSession, conversation: Conversation) -> dict:
+        """Whether the person must tag the bot in the conversation's thread, so the agent
+        knows whether to ask for a tag in the answer."""
+        return {
+            "is_tag_required": await Conversation.is_tag_required_for_user(
+                session,
+                conversation.connection,
+                user_id=conversation.user_id,
+                thread_id=conversation.thread_id,
+            )
+        }
 
     @classmethod
     async def get_welcome(cls) -> str:

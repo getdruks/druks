@@ -84,7 +84,6 @@ describe('NotificationBell', () => {
       timezone: 'UTC',
       theme: 'system',
       notificationChannelId: null,
-      isTagRequired: false,
     })
     vi.mocked(api.listConnections).mockResolvedValue([])
     renderBell()
