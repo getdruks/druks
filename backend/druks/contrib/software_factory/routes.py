@@ -44,6 +44,7 @@ from druks.core.apis.exceptions import (
     GitHubAppNotInstalledError,
     UnknownTicketError,
 )
+from druks.core.lessons.models import Lesson, LessonRepeat
 from druks.core.services import Github
 from druks.db import db_session
 from druks.services.exceptions import ServiceNotConnectedError
@@ -524,3 +525,45 @@ async def add_comment(
     """Append a comment to a ticket as the calling account."""
     ticket = await require_ticket(identifier)
     return await ticket.add_comment(author=account, body=body)
+
+
+lessons_router = APIRouter(prefix="/lessons", tags=["lessons"])
+corrections_router = APIRouter(prefix="/corrections", tags=["corrections"])
+
+
+@lessons_router.post("", status_code=status.HTTP_201_CREATED, operation_id="accept_lesson")
+async def accept_lesson(
+    text: Annotated[str, Body(embed=True)],
+    event_id: Annotated[int | None, Body(embed=True)] = None,
+    run_id: Annotated[str | None, Body(embed=True)] = None,
+    account: Account = Depends(current_account),
+) -> dict[str, str]:
+    """Keep a lesson. The gate correction that it comes from is ``event_id``, and the run
+    that it comes from is ``run_id``. Both are optional."""
+    lesson = await Lesson.accept(
+        db_session(),
+        text=text,
+        account=account,
+        source_event_id=event_id,
+        source_run_id=run_id or None,
+    )
+    return {"id": lesson.id}
+
+
+@lessons_router.post("/{lesson_id}/retire", operation_id="retire_lesson")
+async def retire_lesson(lesson_id: str) -> dict[str, str]:
+    lesson = await Lesson.get(db_session(), id=lesson_id)
+    await lesson.retire(db_session())
+    return {"id": lesson.id}
+
+
+@corrections_router.post("/{event_id}/repeat", operation_id="mark_repeat")
+async def mark_repeat(
+    event_id: int,
+    lesson_id: Annotated[str, Body(embed=True)],
+    account: Account = Depends(current_account),
+) -> dict[str, str]:
+    """Say that a gate correction repeats an accepted lesson."""
+    lesson = await Lesson.get(db_session(), id=lesson_id)
+    await LessonRepeat.mark(db_session(), event_id=event_id, lesson=lesson, account=account)
+    return {"id": lesson.id}

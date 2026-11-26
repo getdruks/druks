@@ -1,11 +1,24 @@
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Literal
+
+from sqlalchemy import func, select
 
 from druks import ui
 from druks.accounts import Account, AccountKind, current_account_id
+from druks.contrib.software_factory.constants import (
+    CORRECTION_REPEAT_SHARE_BASELINE,
+    CORRECTIONS_PER_BUILD_BASELINE,
+    CORRECTIONS_SHOWN,
+    CORRECTIONS_WINDOW_DAYS,
+)
 from druks.contrib.software_factory.enums import Priority, Status
 from druks.contrib.software_factory.models import Project, ProjectRepo, Ticket, WorkItem
+from druks.core.lessons.constants import LESSON_INDEX_MAX_LINES
+from druks.core.lessons.models import Lesson, LessonRepeat
+from druks.db import db_session
+from druks.events import Event
 from druks.models import Base
+from druks.workflows import WorkflowEvent
 
 PRIORITY_LABELS: dict[Priority, str] = {
     Priority.NONE: "No priority",
@@ -395,5 +408,204 @@ async def ticket(identifier: str):
                 ],
                 layout="sidebar",
             )
+        ],
+    )
+
+
+@ui.page("/lessons")
+async def lessons():
+    session = db_session()
+    since = datetime.now(UTC) - timedelta(days=CORRECTIONS_WINDOW_DAYS)
+    # A correction is a gate reply that says something: the note of a plan review, or the
+    # body of a request for changes on the work.
+    correction_text = func.coalesce(
+        func.nullif(Event.payload["result"]["note"].astext, ""),
+        func.nullif(Event.payload["result"]["body"].astext, ""),
+    )
+    is_correction = (
+        Event.app == "software_factory",
+        Event.type == WorkflowEvent.RUNNING,
+        correction_text.is_not(None),
+    )
+    corrections = (
+        await session.execute(
+            select(Event, correction_text)
+            .where(*is_correction)
+            .order_by(Event.id.desc())
+            .limit(CORRECTIONS_SHOWN)
+        )
+    ).all()
+    accepted_lessons = await Lesson.list_accepted(session)
+    repeats = {
+        repeat.event_id: repeat.lesson_id
+        for repeat in await session.scalars(
+            select(LessonRepeat).where(
+                LessonRepeat.event_id.in_([event.id for event, _ in corrections])
+            )
+        )
+    }
+    recent_corrections = await session.scalar(
+        select(func.count()).select_from(Event).where(*is_correction, Event.created_at >= since)
+    )
+    builds = await session.scalar(
+        select(func.count(func.distinct(Event.payload["run"].astext))).where(
+            Event.app == "software_factory",
+            Event.payload["kind"].astext == "software_factory.build",
+            Event.created_at >= since,
+        )
+    )
+    marked_repeats = await session.scalar(
+        select(func.count())
+        .select_from(LessonRepeat)
+        .join(Event, Event.id == LessonRepeat.event_id)
+        .where(Event.created_at >= since)
+    )
+    lesson_options = [
+        ui.Option(lesson.text.splitlines()[0], value=lesson.id) for lesson in accepted_lessons
+    ]
+    lesson_titles = {lesson.id: lesson.text.splitlines()[0] for lesson in accepted_lessons}
+    per_build = recent_corrections / builds if builds else 0
+    return ui.Page(
+        "Lessons",
+        blocks=[
+            ui.Metrics(
+                metrics=[
+                    ui.Metric(
+                        "Corrections",
+                        ui.NumberValue(recent_corrections),
+                        description=f"Notes at a gate, last {CORRECTIONS_WINDOW_DAYS} days.",
+                    ),
+                    ui.Metric(
+                        "Per build",
+                        ui.NumberValue(round(per_build, 2)),
+                        description=f"Before the lessons: {CORRECTIONS_PER_BUILD_BASELINE}.",
+                    ),
+                    ui.Metric(
+                        "Marked as repeats",
+                        ui.NumberValue(marked_repeats),
+                        description=(
+                            "Corrections that repeat an accepted lesson. Before the lessons, "
+                            f"{CORRECTION_REPEAT_SHARE_BASELINE:.0%} repeated an earlier one."
+                        ),
+                    ),
+                    ui.Metric(
+                        "Accepted lessons",
+                        ui.NumberValue(len(accepted_lessons)),
+                        description=f"The index holds {LESSON_INDEX_MAX_LINES} at most.",
+                    ),
+                ]
+            ),
+            ui.Section(
+                title="Corrections",
+                blocks=[
+                    ui.Cards(
+                        layout="stack",
+                        cards=[
+                            ui.Card(
+                                title=event.subject_key or event.payload["run"],
+                                description=(
+                                    f"{event.payload['gate']} · {event.created_at:%-d %b %H:%M} UTC"
+                                ),
+                                blocks=[
+                                    ui.Quote(text),
+                                    *(
+                                        [
+                                            ui.Text(
+                                                "Repeats the lesson: "
+                                                + lesson_titles.get(repeats[event.id], "(retired)")
+                                            )
+                                        ]
+                                        if event.id in repeats
+                                        else []
+                                    ),
+                                ],
+                                controls=[
+                                    ui.Action(
+                                        label="Make a lesson",
+                                        operation="accept_lesson",
+                                        tone="primary",
+                                        arguments={"event_id": event.id},
+                                        fields=[
+                                            ui.TextAreaField(
+                                                name="text",
+                                                label="Lesson",
+                                                value=text,
+                                                is_required=True,
+                                            )
+                                        ],
+                                    ),
+                                    *(
+                                        [
+                                            ui.Action(
+                                                label="Repeats a lesson",
+                                                operation="mark_repeat",
+                                                arguments={"event_id": event.id},
+                                                fields=[
+                                                    ui.SelectField(
+                                                        name="lesson_id",
+                                                        label="Lesson",
+                                                        options=lesson_options,
+                                                        is_required=True,
+                                                    )
+                                                ],
+                                            )
+                                        ]
+                                        if accepted_lessons
+                                        else []
+                                    ),
+                                ],
+                            )
+                            for event, text in corrections
+                        ],
+                        empty=ui.EmptyState(
+                            "No corrections yet",
+                            description="A person's note at a gate shows here.",
+                        ),
+                    )
+                ],
+            ),
+            ui.Section(
+                title="Lessons",
+                blocks=[
+                    ui.Cards(
+                        layout="stack",
+                        cards=[
+                            ui.Card(
+                                title=lesson.text.splitlines()[0],
+                                description=(
+                                    f"Accepted by {lesson.accepted_by.username} · "
+                                    f"{lesson.accepted_at:%-d %b} UTC"
+                                ),
+                                blocks=[ui.Markdown(lesson.text)],
+                                controls=[
+                                    ui.Action(
+                                        label="Retire",
+                                        operation="retire_lesson",
+                                        tone="danger",
+                                        confirm="Retire this lesson?",
+                                        arguments={"lesson_id": lesson.id},
+                                    )
+                                ],
+                            )
+                            for lesson in accepted_lessons
+                        ],
+                        empty=ui.EmptyState(
+                            "No lessons yet",
+                            description="Make a lesson from a correction, or add one below.",
+                        ),
+                    )
+                ],
+            ),
+            ui.Form(
+                title="Add a lesson",
+                description="A judgment that holds for every build, not a fact about the code.",
+                fields=[
+                    ui.TextAreaField(name="text", label="Lesson", is_required=True),
+                    ui.TextField(
+                        name="run_id", label="Run id", help_text="The run it comes from. Optional."
+                    ),
+                ],
+                action=ui.Action(label="Keep lesson", operation="accept_lesson", tone="primary"),
+            ),
         ],
     )

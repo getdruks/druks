@@ -25,3 +25,11 @@ CI_POLL_SECONDS = 60
 CI_GREEN_CONCLUSIONS = frozenset({"success", "neutral", "skipped"})
 # A Linear issue in a state of these types is finished or dropped, so it blocks nothing.
 LINEAR_CLOSED_STATE_TYPES = frozenset({"completed", "canceled"})
+# The lessons page lists this many gate corrections, newest first, and counts those of the
+# last month: the judgement point of the memory epic is 30 builds or a month.
+CORRECTIONS_SHOWN = 50
+CORRECTIONS_WINDOW_DAYS = 30
+# Human corrections for each build between 4 and 26 Nov 2026, and the share that repeated an
+# earlier correction (DRU-1247). The page sets its own numbers beside them.
+CORRECTIONS_PER_BUILD_BASELINE = 0.28
+CORRECTION_REPEAT_SHARE_BASELINE = 0.63
