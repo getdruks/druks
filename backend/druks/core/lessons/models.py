@@ -90,7 +90,7 @@ class Lesson(Model, Uuid7Pk, ordering=("-accepted_at",)):
         """The files that a call writes into its box, and the index for its prompt."""
         lessons = await cls.list_accepted(session)
         if lessons:
-            index = "\n".join(f"- [{lesson.title}]({lesson.id}.md)" for lesson in lessons)
+            index = "\n".join(f"- {lesson.title} — {lesson.id}.md" for lesson in lessons)
             return Vault(
                 files=(
                     HomeFile(

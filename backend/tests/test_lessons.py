@@ -112,7 +112,7 @@ async def test_the_vault_holds_an_index_and_a_file_for_each_accepted_lesson(druk
 
     vault = await Lesson.get_vault(druks_db)
 
-    index = f"- [Say why, never what.]({kept.id}.md)"
+    index = f"- Say why, never what. — {kept.id}.md"
     assert vault.index == index
     assert vault.files == (
         HomeFile("work/memory/MEMORY.md", index, clears="work/memory"),
@@ -136,3 +136,14 @@ async def test_an_installation_with_no_lesson_gets_an_empty_vault(druks_db):
 
     assert vault.files == ()
     assert vault.index == ""
+
+
+async def test_a_title_with_brackets_stays_one_plain_line_of_the_index(druks_db):
+    account = await Account.get_or_create(druks_db, "owner@example.com")
+    lesson = await Lesson.accept(
+        druks_db, text="Avoid f(x) when it ) returns [early]\nBecause.", account=account
+    )
+
+    vault = await Lesson.get_vault(druks_db)
+
+    assert vault.index == f"- Avoid f(x) when it ) returns [early] — {lesson.id}.md"

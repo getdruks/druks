@@ -410,7 +410,7 @@ async def test_a_call_reads_the_lessons_of_the_installation(
     await DUMMY_INSTRUCTION._run(workflow_id="wf-9", repo="acme/widget")
 
     kwargs = sandbox.run_agent.await_args.kwargs
-    index = f"- [Say why, never what.]({lesson.id}.md)"
+    index = f"- Say why, never what. — {lesson.id}.md"
     assert kwargs["home"] == (
         HomeFile("work/memory/MEMORY.md", index, clears="work/memory"),
         HomeFile(f"work/memory/{lesson.id}.md", "Say why, never what."),

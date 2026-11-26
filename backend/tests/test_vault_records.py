@@ -1,6 +1,6 @@
 import json
 
-from druks.core.lessons.records import get_delivered_lessons, get_opened_lessons
+from druks.core.lessons.datastructures import Vault
 from druks.sandbox.datastructures import HomeFile
 
 
@@ -17,20 +17,21 @@ def _read(path: str) -> str:
 def test_the_delivered_lessons_are_the_files_of_the_vault_but_its_index():
     home = (
         HomeFile(".claude.json", "{}"),
-        HomeFile("work/memory/MEMORY.md", "- [a](abc.md)", clears="work/memory"),
+        HomeFile("work/memory/MEMORY.md", "- A — abc.md", clears="work/memory"),
         HomeFile("work/memory/abc.md", "A."),
         HomeFile("work/memory/def.md", "D."),
     )
 
-    assert get_delivered_lessons(home) == ["abc", "def"]
+    assert Vault.list_delivered(home) == ["abc", "def"]
 
 
 def test_a_lesson_is_opened_when_a_tool_call_names_its_file():
-    transcript = "\n".join(
-        [_read("/home/exedev/work/memory/MEMORY.md"), _read("/home/exedev/work/memory/abc.md")]
-    )
+    transcript = [
+        _read("/home/exedev/work/memory/MEMORY.md"),
+        _read("/home/exedev/work/memory/abc.md"),
+    ]
 
-    assert get_opened_lessons(["abc", "def"], transcript) == ["abc"]
+    assert Vault.list_opened(["abc", "def"], transcript) == ["abc"]
 
 
 def test_a_shell_command_that_reads_a_lesson_opens_it():
@@ -39,7 +40,7 @@ def test_a_shell_command_that_reads_a_lesson_opens_it():
         "item": {"type": "command_execution", "command": "sed -n 1,80p ~/work/memory/def.md"},
     }
 
-    assert get_opened_lessons(["abc", "def"], json.dumps(event)) == ["def"]
+    assert Vault.list_opened(["abc", "def"], [json.dumps(event)]) == ["def"]
 
 
 def test_a_path_that_only_the_message_text_names_opens_nothing():
@@ -48,4 +49,4 @@ def test_a_path_that_only_the_message_text_names_opens_nothing():
         "message": {"content": [{"type": "text", "text": "I read work/memory/abc.md"}]},
     }
 
-    assert get_opened_lessons(["abc"], json.dumps(event) + "\nnot json") == []
+    assert Vault.list_opened(["abc"], [json.dumps(event), "not json"]) == []

@@ -17,7 +17,7 @@ import asyncssh
 from drukbox_sdk import SandboxHost as SandboxHostRecord
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from druks.core.lessons.records import get_delivered_lessons, get_opened_lessons
+from druks.core.lessons.datastructures import Vault
 from druks.core.models import uuid7_str
 from druks.core.utils.time import ensure_utc
 from druks.durable.enums import AgentCallStatus
@@ -558,7 +558,7 @@ class Host:
             # this run downloads them without the invocation.
             "artifact_filenames": list(invocation.extra_artifact_filenames),
         }
-        if lessons := get_delivered_lessons(invocation.credentials.home):
+        if lessons := Vault.list_delivered(invocation.credentials.home):
             metadata["lessons_delivered"] = lessons
         _write_metadata(local_dir / "metadata.json", metadata)
         return await self._watch_run(
@@ -645,9 +645,11 @@ class Host:
         opened = {}
         if delivered := metadata.get("lessons_delivered"):
             # A record of the call must never fail the call.
-            with contextlib.suppress(OSError):
-                transcript = (local_dir / "stdout.jsonl").read_text(errors="replace")
-                opened["lessons_opened"] = get_opened_lessons(delivered, transcript)
+            with (
+                contextlib.suppress(OSError),
+                (local_dir / "stdout.jsonl").open(errors="replace") as transcript,
+            ):
+                opened["lessons_opened"] = Vault.list_opened(delivered, transcript)
         _write_metadata(
             local_dir / "metadata.json",
             {
