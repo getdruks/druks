@@ -220,6 +220,30 @@ async def test_push_writes_every_credential_file():
     }
 
 
+async def test_push_clears_a_directory_before_it_writes_into_it():
+    sandbox = _FakeSandbox()
+
+    await creds_module.push(
+        sandbox,  # type: ignore[arg-type]
+        Credentials(home=(HomeFile("work/memory/MEMORY.md", "- a", clears="work/memory"),)),
+    )
+
+    assert sandbox.exec_log == [(["rm", "-rf", "/root/work/memory"], 10.0)]
+    assert sandbox.secrets == [("- a", "/root/work/memory/MEMORY.md")]
+
+
+async def test_a_home_file_with_no_path_only_clears():
+    sandbox = _FakeSandbox()
+
+    await creds_module.push(
+        sandbox,  # type: ignore[arg-type]
+        Credentials(home=(HomeFile("", "", clears="work/memory"),)),
+    )
+
+    assert sandbox.exec_log == [(["rm", "-rf", "/root/work/memory"], 10.0)]
+    assert sandbox.secrets == []
+
+
 async def test_push_copies_a_host_file_under_user_home(tmp_path: Path):
     sandbox = _FakeSandbox()
     sandbox.ssh_username = "exedev"  # non-root → /home/exedev

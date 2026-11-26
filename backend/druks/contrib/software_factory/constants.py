@@ -59,3 +59,15 @@ RERUN_START_POLLS = 24
 IMPLEMENT_EFFORT_BY_SIZE = {"small": "high", "medium": "high"}
 # A Linear issue in a state of these types is finished or dropped, so it blocks nothing.
 LINEAR_CLOSED_STATE_TYPES = frozenset({"completed", "canceled"})
+# The lessons page lists this many gate corrections, newest first, and counts those of the
+# last month: the judgement point of the memory epic is 30 builds or a month.
+CORRECTIONS_SHOWN = 50
+CORRECTIONS_WINDOW_DAYS = 30
+# The memory epic judges the lessons after this many builds or days from the first accepted
+# lesson, whichever comes first.
+JUDGEMENT_BUILDS = 30
+JUDGEMENT_DAYS = 30
+# Human corrections for each build between 4 and 26 Nov 2026, and the share that repeated an
+# earlier correction (DRU-1247). The page sets its own numbers beside them.
+CORRECTIONS_PER_BUILD_BASELINE = 0.28
+CORRECTION_REPEAT_SHARE_BASELINE = 0.63

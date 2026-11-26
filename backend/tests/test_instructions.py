@@ -20,6 +20,7 @@ from druks.apps import App
 from druks.browser import BrowserClient, BrowserSession
 from druks.browser.agent_browsers import AgentBrowser
 from druks.chat.service import report_quota_resume, report_quota_wait
+from druks.core.lessons.models import Lesson
 from druks.db import db_session
 from druks.durable import AgentCall, WorkflowError
 from druks.durable.engine import _step_engine
@@ -43,7 +44,7 @@ from druks.harnesses.providers import AnthropicProvider
 from druks.redis import get_client as get_redis
 from druks.redis import is_resumable, request_check, take_check_request
 from druks.sandbox.client import sandbox_client
-from druks.sandbox.datastructures import McpServer
+from druks.sandbox.datastructures import HomeFile, McpServer
 from druks.sandbox.exceptions import SandboxDownloadError
 from druks.sandbox.host import Host
 from druks.sandbox.models import SandboxIdentity, SecretRef
@@ -396,6 +397,41 @@ async def test_a_call_without_an_agent_gets_every_enabled_skill(
 
     _, manifest = sandbox.run_agent.await_args.args
     assert manifest.skills == ("alpha",)
+
+
+async def test_a_call_reads_the_lessons_of_the_installation(
+    druks_db, tmp_path, monkeypatch, current_run
+):
+    account = await Account.get_or_create(druks_db, "owner@example.com")
+    lesson = await Lesson.accept(druks_db, text="Say why, never what.", account=account)
+    sandbox = _patch_runtime(monkeypatch, tmp_path, {"ok": True})
+    _patch_ephemeral(monkeypatch, sandbox)
+
+    await DUMMY_INSTRUCTION._run(workflow_id="wf-9", repo="acme/widget")
+
+    kwargs = sandbox.run_agent.await_args.kwargs
+    index = f"- Say why, never what. — {lesson.id}.md"
+    assert kwargs["home"] == (
+        HomeFile("work/memory/MEMORY.md", index, clears="work/memory"),
+        HomeFile(f"work/memory/{lesson.id}.md", "Say why, never what."),
+    )
+    assert kwargs["prompt"].startswith("People at this installation taught the lessons below")
+    assert "read the lesson files in ~/work/memory" in kwargs["prompt"]
+    assert index in kwargs["prompt"]
+    assert kwargs["prompt"].endswith("PROMPT:dummy/agent.md:repo=acme/widget")
+
+
+async def test_a_call_of_an_installation_with_no_lesson_changes_nothing(
+    druks_db, tmp_path, monkeypatch, current_run
+):
+    sandbox = _patch_runtime(monkeypatch, tmp_path, {"ok": True})
+    _patch_ephemeral(monkeypatch, sandbox)
+
+    await DUMMY_INSTRUCTION._run(workflow_id="wf-9", repo="acme/widget")
+
+    kwargs = sandbox.run_agent.await_args.kwargs
+    assert kwargs["home"] == ()
+    assert kwargs["prompt"] == "PROMPT:dummy/agent.md:repo=acme/widget"
 
 
 async def test_declared_plugin_choice_is_forwarded(druks_db, tmp_path, monkeypatch, current_run):

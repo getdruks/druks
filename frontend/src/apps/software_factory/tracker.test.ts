@@ -28,16 +28,18 @@ describe('isDruksTracker', () => {
 })
 
 describe('softwareFactoryNavigation', () => {
-  it('omits the board until the tracker is druks', () => {
+  it('omits the board until the tracker is druks, and always lists lessons', () => {
     expect(softwareFactoryNavigation()).toEqual([
       [`/${SOFTWARE_FACTORY}`, 'Overview'],
       [`/${SOFTWARE_FACTORY}/history`, 'history'],
       [`/${SOFTWARE_FACTORY}/projects`, 'projects'],
+      [`/${SOFTWARE_FACTORY}/lessons`, 'lessons'],
     ])
     expect(softwareFactoryNavigation(settingsWithTracker('linear'))).toEqual([
       [`/${SOFTWARE_FACTORY}`, 'Overview'],
       [`/${SOFTWARE_FACTORY}/history`, 'history'],
       [`/${SOFTWARE_FACTORY}/projects`, 'projects'],
+      [`/${SOFTWARE_FACTORY}/lessons`, 'lessons'],
     ])
   })
 
@@ -47,6 +49,7 @@ describe('softwareFactoryNavigation', () => {
       [`/${SOFTWARE_FACTORY}/board`, 'board'],
       [`/${SOFTWARE_FACTORY}/history`, 'history'],
       [`/${SOFTWARE_FACTORY}/projects`, 'projects'],
+      [`/${SOFTWARE_FACTORY}/lessons`, 'lessons'],
     ])
   })
 })

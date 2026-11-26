@@ -188,13 +188,20 @@ class SandboxMcpServer:
 
 @dataclass(frozen=True)
 class HomeFile:
-    """Rendered content written at a home-relative path, never staged on the host."""
+    """Rendered content written at a home-relative path, never staged on the host.
+    ``clears`` names a home-relative directory that Druks removes before the write: a box
+    serves more than one call, and a file that a later call no longer delivers would stay.
+    With no ``path`` the entry only clears."""
 
     path: str
     content: str
+    clears: str = ""
 
     async def push(self, host: "Host", home: str) -> None:
-        await host.write_secret(secret=self.content, remote=f"{home}/{self.path}")
+        if self.clears:
+            await host.exec(["rm", "-rf", f"{home}/{self.clears}"], timeout=10.0)
+        if self.path:
+            await host.write_secret(secret=self.content, remote=f"{home}/{self.path}")
 
 
 @dataclass(frozen=True)

@@ -17,6 +17,7 @@ from druks.sandbox.datastructures import McpServer
 
 # A manifest for a call with no skills.
 _MANIFEST = Manifest(model="", harness="", mcp_servers=(), skills=())
+MEMORY_OFF = {"CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"}
 
 
 _CODEX_MODEL = CodexHarness.default_model
@@ -96,7 +97,7 @@ async def test_claude_build_invocation_carries_every_flag():
     # The MCP token rides only in env — never in argv.
     assert "secret" not in wrapper
     assert "druks-after-agent" not in wrapper
-    assert inv.env == {"TOK": "secret"}
+    assert inv.env == {"TOK": "secret", **MEMORY_OFF}
     assert inv.stdin == b"hello"
     assert inv.extra_artifact_filenames == ("debug.log", "session.jsonl")
 
@@ -291,7 +292,7 @@ async def test_claude_resumes_a_session_as_a_fork_with_the_long_cache():
     start = parts.index("--resume")
     assert parts[start : start + 4] == ["--resume", "run-1", "--fork-session", "--session-id"]
     assert parts[start + 4] == "run-2"
-    assert inv.env == {"CLAUDE_CODE_PROMPT_CACHE_TTL": "1h"}
+    assert inv.env == {**MEMORY_OFF, "CLAUDE_CODE_PROMPT_CACHE_TTL": "1h"}
 
 
 async def test_claude_writes_the_long_cache_in_the_call_that_may_be_resumed():
@@ -301,9 +302,9 @@ async def test_claude_writes_the_long_cache_in_the_call_that_may_be_resumed():
     resumable = await harness.build_invocation(_MANIFEST, resumable=True, **kwargs)
     plain = await harness.build_invocation(_MANIFEST, **kwargs)
 
-    assert resumable.env == {"CLAUDE_CODE_PROMPT_CACHE_TTL": "1h"}
+    assert resumable.env == {**MEMORY_OFF, "CLAUDE_CODE_PROMPT_CACHE_TTL": "1h"}
     assert "--resume" not in resumable.args[2]
-    assert plain.env is None
+    assert plain.env == MEMORY_OFF
 
 
 def test_a_resumed_claude_call_records_only_its_own_cost():
@@ -447,7 +448,7 @@ async def test_claude_reads_its_key_from_a_placeholder_in_the_vm():
         ssh_username="exedev",
         extra_env={"TOK": "secret"},
     )
-    assert inv.env == {"TOK": "secret"}
+    assert inv.env == {"TOK": "secret", **MEMORY_OFF}
     assert not any(file.path == ".claude/.credentials.json" for file in inv.credentials.home)
     assert "sk-secret" not in inv.args[2]
 

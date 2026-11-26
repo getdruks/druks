@@ -65,6 +65,8 @@ from druks.chat.service import (
     report_quota_wait,
     report_result,
 )
+from druks.core.lessons.constants import VAULT_DIR, VAULT_PROMPT
+from druks.core.lessons.models import Lesson
 from druks.db import db_session
 from druks.durable.activity import set_run_phase
 from druks.durable.constants import (
@@ -2369,6 +2371,7 @@ class Instruction:
                     fast_mode=config.fast_mode,
                     effort=cap_effort(config.effort, effort),
                 )
+                vault = await Lesson.get_vault(session)
                 agent_instructions = ""
                 if agent_id:
                     agent = await Agent.get(session, id=agent_id)
@@ -2438,6 +2441,10 @@ class Instruction:
                 prompt = await template.render_async(**context_on_box)
                 if agent_instructions:
                     prompt = f"{agent_instructions}\n\n{prompt}"
+                if vault.index:
+                    prompt = "\n\n".join(
+                        [VAULT_PROMPT.format(path=f"~/{VAULT_DIR}", index=vault.index), prompt]
+                    )
                 hooks = {}
                 if self._after_agent:
                     hooks["after_agent"] = partial(
@@ -2500,6 +2507,7 @@ class Instruction:
                         include_plugins=self.include_plugins,
                         mcp_servers=mcp_servers,
                         hooks=hooks,
+                        home=vault.files,
                         **session_options,
                     )
                 try:

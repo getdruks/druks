@@ -16,15 +16,17 @@ export function softwareFactoryNavigation(settings?: AppsSettingsResponse): [str
   const overview: [string, string] = [`/${SOFTWARE_FACTORY}`, 'Overview']
   const history: [string, string] = [`/${SOFTWARE_FACTORY}/history`, 'history']
   const projects: [string, string] = [`/${SOFTWARE_FACTORY}/projects`, 'projects']
+  const lessons: [string, string] = [`/${SOFTWARE_FACTORY}/lessons`, 'lessons']
   if (isDruksTracker(settings)) {
     return [
       overview,
       [`/${SOFTWARE_FACTORY}/board`, 'board'],
       history,
       projects,
+      lessons,
     ]
   }
-  return [overview, history, projects]
+  return [overview, history, projects, lessons]
 }
 
 export function useDruksTracker(): boolean | undefined {

@@ -239,12 +239,13 @@ class ClaudeHarness(Harness):
             f"cp $HOME/.claude/projects/*/{run_id}.jsonl {session_q} 2>/dev/null; "
             "exit $ec"
         )
-        env = extra_env
+        # The lessons are the one memory in the box. Claude's own notes would die with the lease.
+        env = {**(extra_env or {}), "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"}
         if resumable or resume_session:
             # A pause for a check outlasts the default five-minute cache, and the resumed
             # call would pay to write the whole context again. The first call must write
             # the context with the long lifetime for the resume to read it.
-            env = {**(extra_env or {}), "CLAUDE_CODE_PROMPT_CACHE_TTL": "1h"}
+            env["CLAUDE_CODE_PROMPT_CACHE_TTL"] = "1h"
         return AgentInvocation(
             name="claude",
             args=("sh", "-c", wrapper),
