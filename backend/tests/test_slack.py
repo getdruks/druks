@@ -1644,8 +1644,8 @@ async def test_a_schedule_takes_only_a_channel_that_the_bot_and_its_owner_are_in
     )
     assert without_bot.json()["detail"] == "The bot is not in #ops. Invite it to the channel first."
     assert without_owner.json()["detail"] == (
-        "The person is not in C2. Ask them to join the channel first, or choose a channel "
-        "that they are in."
+        "The person is not in #leadership. Ask them to join the channel first, or choose a "
+        "channel that they are in."
     )
     assert (moved.status_code, by_name.json()["channelId"]) == (422, "C1")
     assert (kept.status_code, kept.json()["channelId"]) == (200, "C1")

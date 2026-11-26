@@ -16,7 +16,7 @@ from druks.durable.schemas import RunResponse
 from druks.exceptions import PermissionDenied
 from druks.files import File
 from druks.files.routes import get_file
-from druks.notifications.services import require_bot_in_channel
+from druks.notifications.services import list_notification_channels
 from druks.schedules.models import Schedule
 from druks.schedules.schemas import AgentScheduleResponse
 
@@ -140,8 +140,17 @@ async def update_agent(
     account: Account = Depends(current_session_account),
 ) -> Agent:
     agent = await Agent.get_for_account(session, agent_id, account)
-    if account.is_admin and body.channel_id and body.channel_id != agent.channel_id:
-        body.channel_id = await require_bot_in_channel(body.channel_id)
+    channel_id = body.channel_id
+    if (
+        account.is_admin
+        and channel_id
+        and channel_id != agent.channel_id
+        and channel_id not in [channel["id"] for channel in await list_notification_channels()]
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=f"The bot is not in {channel_id}. Invite it to the channel first.",
+        )
     await agent.replace(session, editor=account, **body.model_dump())
     return agent
 

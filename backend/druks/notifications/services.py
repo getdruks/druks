@@ -37,40 +37,46 @@ from druks.ui.blocks import iter_parts
 from druks.ui.page import get_route_path, list_route_parameters
 
 
-async def list_notification_channels() -> list[dict]:
+async def list_notification_channels(*, member: Account | None = None) -> list[dict]:
     """The channels that a person can choose for their notifications, by name. The bot
-    posts only in a channel that it is a member of."""
+    posts only in a channel that it is a member of. With ``member``, only the channels
+    that the person of that account is a member of too. Their Slack sign-in says who they
+    are in Slack."""
     client = await Slack.get_client()
-    return sorted(await client.list_member_channels(), key=lambda channel: channel["name"])
+    user = ""
+    if member:
+        sign_ins = await Slack.list_for_account(member.id)
+        if not sign_ins:
+            raise ValidationError(
+                "Druks does not know the person's Slack account. Ask them to connect Slack "
+                "in Druks first."
+            )
+        user = sign_ins[0].identity["subject"]
+    channels = await client.list_member_channels(user=user)
+    return sorted(channels, key=lambda channel: channel["name"])
 
 
-async def require_bot_in_channel(channel: str) -> str:
-    """The id of a channel that a person gives by its id or by its name. Refuse a channel
-    that the bot is not a member of."""
+async def lookup_notification_channel(channel: str, *, member: Account) -> dict:
+    """The channel that a person gives by its id or by its name, when both the bot and
+    ``member``, the person of that account, are in it. Slack lets nobody post in a channel
+    that they are not in, so Druks posts there for no such person. Raises
+    ``ValidationError`` with the reason when there is no such channel."""
     name = channel.removeprefix("#")
-    for member_channel in await list_notification_channels():
-        if name in (member_channel["id"], member_channel["name"]):
-            return member_channel["id"]
-    raise ValidationError(f"The bot is not in {channel}. Invite it to the channel first.")
-
-
-async def require_person_in_channel(account: Account, channel_id: str) -> None:
-    """Refuse a channel that the person of ``account`` is not a member of. Slack lets
-    nobody post in a channel that they are not in, so Druks posts there for no such
-    person. The person's Slack sign-in says who they are in Slack."""
-    sign_ins = await Slack.list_for_account(account.id)
-    if not sign_ins:
+    bot_channels = [
+        bot_channel
+        for bot_channel in await list_notification_channels()
+        if name in (bot_channel["id"], bot_channel["name"])
+    ]
+    if not bot_channels:
+        raise ValidationError(f"The bot is not in {channel}. Invite it to the channel first.")
+    found_channel = bot_channels[0]
+    shared_channels = await list_notification_channels(member=member)
+    if found_channel["id"] not in [shared_channel["id"] for shared_channel in shared_channels]:
         raise ValidationError(
-            "Druks does not know the person's Slack account. Ask them to connect Slack in "
-            "Druks first."
+            f"The person is not in #{found_channel['name']}. Ask them to join the channel "
+            "first, or choose a channel that they are in."
         )
-    client = await Slack.get_client()
-    shared_channels = await client.list_member_channels(user=sign_ins[0].identity["subject"])
-    if channel_id not in [shared_channel["id"] for shared_channel in shared_channels]:
-        raise ValidationError(
-            f"The person is not in {channel_id}. Ask them to join the channel first, or "
-            "choose a channel that they are in."
-        )
+    return found_channel
 
 
 async def get_rendered_ask(session: AsyncSession, run: Run) -> dict:

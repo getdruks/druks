@@ -8,7 +8,7 @@ from druks.accounts.dependencies import current_account
 from druks.accounts.models import Account
 from druks.api.dependencies import SessionDep
 from druks.exceptions import PermissionDenied
-from druks.notifications.services import require_bot_in_channel, require_person_in_channel
+from druks.notifications.services import lookup_notification_channel
 
 from .models import Schedule
 from .schemas import ScheduleResponse
@@ -66,8 +66,7 @@ async def create_schedule(
     if not conversation_id:
         raise HTTPException(422, "This call comes from no chat. Make a schedule from a chat.")
     if channel:
-        channel = await require_bot_in_channel(channel)
-        await require_person_in_channel(account, channel)
+        channel = (await lookup_notification_channel(channel, member=account))["id"]
     schedule = await Schedule.create(
         session,
         account_id=account.id,
@@ -134,8 +133,7 @@ async def change_schedule(
     # The bot or the person can leave the channel later. A change that gives the saved id
     # still saves.
     if channel and channel != schedule.channel_id:
-        channel = await require_bot_in_channel(channel)
-        await require_person_in_channel(account, channel)
+        channel = (await lookup_notification_channel(channel, member=account))["id"]
     schedule.change(
         tool=tool,
         arguments=arguments,
