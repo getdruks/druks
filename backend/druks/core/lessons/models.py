@@ -50,7 +50,9 @@ class Lesson(Model, Uuid7Pk, ordering=("-accepted_at",)):
         if not text:
             raise ValidationError("A lesson needs text.")
         if source_event_id and not await session.get(Event, source_event_id):
-            raise ValidationError(f"No event has the id {source_event_id}.")
+            raise ValidationError(
+                f"No event has the id {source_event_id}. Check the id, or leave it out."
+            )
         if source_run_id and not await session.get(Run, source_run_id):
             raise ValidationError(
                 f"No run has the id {source_run_id}. Check the id, or leave it out."
@@ -138,7 +140,7 @@ class LessonRepeat(Model):
         if lesson.status != LessonStatus.ACCEPTED:
             raise ValidationError("A correction can repeat only an accepted lesson.")
         if not await session.get(Event, event_id):
-            raise ValidationError(f"No event has the id {event_id}.")
+            raise ValidationError(f"No event has the id {event_id}. Check the id.")
         await session.merge(
             cls(
                 event_id=event_id,

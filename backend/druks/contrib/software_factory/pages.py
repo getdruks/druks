@@ -11,6 +11,7 @@ from druks.contrib.software_factory.constants import (
     CORRECTIONS_SHOWN,
     CORRECTIONS_WINDOW_DAYS,
     JUDGEMENT_BUILDS,
+    JUDGEMENT_DAYS,
 )
 from druks.contrib.software_factory.enums import Priority, Status
 from druks.contrib.software_factory.models import Project, ProjectRepo, Ticket, WorkItem
@@ -464,6 +465,28 @@ async def lessons():
     lesson_options = [ui.Option(lesson.title, value=lesson.id) for lesson in accepted_lessons]
     lesson_titles = {lesson.id: lesson.title for lesson in accepted_lessons}
     per_build = recent_corrections / builds if builds else 0
+    judgement = (
+        f"Judge the lessons after {JUDGEMENT_BUILDS} builds or {JUDGEMENT_DAYS} days from the "
+        "first accepted lesson, whichever comes first. If the corrections that repeat an "
+        "accepted lesson are no fewer than before the lessons, stop and rethink the feature."
+    )
+    judgement_reached = False
+    if first_lesson_at := await session.scalar(select(func.min(Lesson.accepted_at))):
+        builds_since = await session.scalar(
+            select(func.count(func.distinct(Event.payload["run"].astext))).where(
+                Event.app == "software_factory",
+                Event.payload["kind"].astext == "software_factory.build",
+                Event.created_at >= first_lesson_at,
+            )
+        )
+        days_since = (datetime.now(UTC) - first_lesson_at).days
+        judgement += (
+            f" Since the first lesson on {first_lesson_at:%-d %b}: {builds_since} builds, "
+            f"{days_since} days."
+        )
+        judgement_reached = builds_since >= JUDGEMENT_BUILDS or days_since >= JUDGEMENT_DAYS
+    else:
+        judgement += " No lesson has been accepted yet."
     return ui.Page(
         "Lessons",
         blocks=[
@@ -495,13 +518,9 @@ async def lessons():
                 ]
             ),
             ui.Callout(
+                tone="warning" if judgement_reached else "info",
                 title="When to judge",
-                text=(
-                    f"Judge the lessons after {JUDGEMENT_BUILDS} builds or a month, whichever "
-                    "comes first. If the corrections that repeat an accepted lesson are no "
-                    "fewer than before the lessons, stop and rethink the feature. "
-                    f"Builds in the last {CORRECTIONS_WINDOW_DAYS} days: {builds}."
-                ),
+                text=judgement,
             ),
             ui.Section(
                 title="Corrections",

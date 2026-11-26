@@ -544,7 +544,7 @@ async def accept_lesson(
         db_session(),
         text=text,
         account=account,
-        source_event_id=event_id,
+        source_event_id=event_id or None,
         source_run_id=run_id or None,
     )
     return {"id": lesson.id}

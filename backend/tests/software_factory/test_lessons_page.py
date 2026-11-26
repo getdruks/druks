@@ -1,3 +1,6 @@
+from datetime import UTC, datetime, timedelta
+
+from druks.contrib.software_factory import pages
 from druks.core.lessons.models import Lesson
 from druks.events import Event
 from sqlalchemy import select
@@ -7,13 +10,17 @@ _LESSONS = "/api/software_factory/lessons"
 _CORRECTIONS = "/api/software_factory/corrections"
 
 
-async def _reply(druks_db, result: dict, *, run: str = "run-1", gate: str = "review_work") -> Event:
+async def _reply(
+    druks_db, result: dict, *, run: str = "run-1", gate: str = "review_work", at=None
+) -> Event:
     event = Event(
         type="workflow.running",
         app="software_factory",
         subject_key="DRU-1 Rename the flag",
         payload={"run": run, "kind": "software_factory.build", "gate": gate, "result": result},
     )
+    if at:
+        event.created_at = at
     druks_db.add(event)
     await druks_db.flush()
     return event
@@ -131,13 +138,45 @@ async def test_a_correction_whose_lesson_was_retired_says_so(druks_client, druks
     assert card["blocks"][1]["text"] == "Repeats the lesson: (retired)"
 
 
-async def test_the_page_says_when_to_judge_the_lessons(druks_client, druks_db):
+def _judgement(page: dict) -> dict:
+    return next(block for block in page["blocks"] if block["block"] == "callout")
+
+
+async def test_the_page_says_when_to_judge_before_the_first_lesson(druks_client):
+    page = (await druks_client.get(_PAGE)).json()
+
+    callout = _judgement(page)
+    assert callout["title"] == "When to judge"
+    assert "after 30 builds or 30 days from the first accepted lesson" in callout["text"]
+    assert callout["text"].endswith("No lesson has been accepted yet.")
+
+
+async def test_the_judgement_counts_the_builds_since_the_first_lesson(druks_client, druks_db):
+    earlier = datetime.now(UTC) - timedelta(days=3)
+    await _reply(druks_db, {"action": "request_changes", "body": "Old."}, run="run-0", at=earlier)
+    await druks_client.post(_LESSONS, json={"text": "Say why, never what."})
     await _reply(druks_db, {"action": "request_changes", "body": "One."}, run="run-1")
     await _reply(druks_db, {"action": "request_changes", "body": "Two."}, run="run-2")
 
-    page = (await druks_client.get(_PAGE)).json()
+    callout = _judgement((await druks_client.get(_PAGE)).json())
 
-    callout = next(block for block in page["blocks"] if block["block"] == "callout")
-    assert callout["title"] == "When to judge"
-    assert "after 30 builds or a month" in callout["text"]
-    assert "Builds in the last 30 days: 2." in callout["text"]
+    assert ": 2 builds, 0 days." in callout["text"]
+    assert callout["tone"] == "info"
+
+
+async def test_the_judgement_point_is_flagged_when_it_has_come(druks_client, druks_db, monkeypatch):
+    monkeypatch.setattr(pages, "JUDGEMENT_BUILDS", 1)
+    await druks_client.post(_LESSONS, json={"text": "Say why, never what."})
+    await _reply(druks_db, {"action": "request_changes", "body": "One."}, run="run-1")
+
+    callout = _judgement((await druks_client.get(_PAGE)).json())
+
+    assert callout["tone"] == "warning"
+
+
+async def test_an_event_id_of_zero_means_no_event(druks_client, druks_db):
+    created = await druks_client.post(_LESSONS, json={"text": "Keep tests small.", "event_id": 0})
+
+    assert created.status_code == 201
+    lesson = (await druks_db.scalars(select(Lesson))).one()
+    assert lesson.source_event_id is None
