@@ -2599,13 +2599,12 @@ async def test_a_parked_run_asks_its_chat_with_its_blocks_and_where_their_work_s
     assert (value["status"]["run"], value["status"]["gate"]) == (run.id, "review")
 
 
-async def test_each_turn_opens_with_the_local_time(monkeypatch):
-    settings = SimpleNamespace(timezone="Europe/Madrid")
-    monkeypatch.setattr(service, "get_settings", lambda: settings)
+async def test_each_turn_opens_with_the_time_in_the_timezone_of_the_account(monkeypatch):
+    conversation = Conversation(account=Account(username="ana", timezone="Europe/Madrid"))
     monkeypatch.setattr(Base, "utc_now", lambda: datetime(2026, 10, 17, 21, 14, 57, tzinfo=UTC))
     message = Message(body="Remind me in 5 minutes", transcript="", file=None)
 
-    content = await service.get_turn_content(SimpleNamespace(), "/chat", [message])
+    content = await service.get_turn_content(SimpleNamespace(), conversation, "/chat", [message])
 
     assert content == [
         {

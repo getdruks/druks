@@ -95,17 +95,24 @@ def register_task_schedule(name: str, cron: str, entry: Callable) -> None:
 
 
 async def apply_schedules(session: AsyncSession) -> None:
+    # The schedules module imports this one, so this import cannot be at the top.
+    from druks.schedules.models import Schedule  # noqa: PLC0415
+
     declared = {workflow.kind for workflow, _ in _workflow_schedules} | {
         name for name, _, _ in _task_schedules
     }
     rows = await DBOS.list_schedules_async()
     # A person's schedules are rows, not declarations: this keeps them and only moves
-    # them to the installation timezone.
+    # each one to the timezone of its account.
     existing = {
         row["schedule_name"]: row for row in rows if row["workflow_name"] != RUN_SCHEDULE_WORKFLOW
     }
     for name in existing.keys() - declared:
         await DBOS.delete_schedule_async(name)
+    account_timezones = {
+        schedule.schedule_name: schedule.account.timezone
+        for schedule in await session.scalars(select(Schedule))
+    }
     # Evaluate in the installation timezone so daily cadence follows DST.
     # Personal display preferences must not move a shared schedule.
     timezone = get_settings().timezone
@@ -118,11 +125,13 @@ async def apply_schedules(session: AsyncSession) -> None:
                 "workflow_name": row["workflow_name"],
                 "schedule": row["schedule"],
                 "context": row["context"],
-                "cron_timezone": timezone,
+                "cron_timezone": account_timezones[row["schedule_name"]],
                 "application_name": row["application_name"],
             }
             for row in rows
-            if row["workflow_name"] == RUN_SCHEDULE_WORKFLOW and row["cron_timezone"] != timezone
+            # A schedule that a request is still making has no committed row yet.
+            if row["schedule_name"] in account_timezones
+            and row["cron_timezone"] != account_timezones[row["schedule_name"]]
         ]
     )
     for workflow, entry in _workflow_schedules:

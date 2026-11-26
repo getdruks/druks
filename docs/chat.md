@@ -493,8 +493,9 @@ one of these:
 | `send_at` | Once, at that time. A time with no offset is local. | `2026-10-20T09:00` |
 | `cron` | Again and again, in local time | `0 9 * * 1` for Mondays at 9 |
 
-Local time is the installation `timezone`. Each turn opens with the current time
-and that timezone, so that the agent never guesses them. Without
+Local time is the timezone of the person's account. Each turn opens with the current
+time and that timezone, so that the agent never guesses them. When the person changes
+the timezone in **Settings → Preferences**, a reminder on a cron moves with it. Without
 `conversation_id`, the reminder sends in the chat that asked for it. The answer
 gives `nextSendAt` in local time. The agent tells the person that time.
 
@@ -535,11 +536,12 @@ agent has no schedule of its own.
 | --- | --- | --- |
 | `tool` | The name of one of the agent's tools | `software_factory_review` |
 | `arguments` | The tool's arguments, the same at every call | `{"repo": "acme/api", "prNumber": 7}` |
-| `cron` | When to call, in local time | `0 9 * * *` |
+| `cron` | When to call, in the person's timezone | `0 9 * * *` |
 
 Druks checks that the tool exists and that the cron has five fields when the
-agent saves the schedule. Local time is the installation `timezone`, as for
-reminders.
+agent saves the schedule. The cron is in the timezone of the person's account, as for
+reminders. When the person changes that timezone in **Settings → Preferences**, the
+schedule moves with it.
 
 Each schedule has its own DBOS schedule. At each due time, Druks makes the tool
 call through its own MCP server. It calls as the owner, from the

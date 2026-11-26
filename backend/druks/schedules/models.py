@@ -7,13 +7,13 @@ from croniter import CroniterBadDateError, croniter
 from sqlalchemy import ForeignKey, Index, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from druks.accounts.models import Account
 from druks.chat.models import Conversation
 from druks.core.models import Uuid7Pk
 from druks.exceptions import ValidationError
 from druks.models import Base
-from druks.settings import get_settings
 
 from .constants import SCHEDULE_NAME_PREFIX
 
@@ -28,13 +28,14 @@ class Schedule(Base, Uuid7Pk):
     # The account that asked for the schedule. Each call runs as this account. Only it
     # changes the schedule, and only it or an admin stops it.
     account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id", ondelete="RESTRICT"))
+    account: Mapped[Account] = relationship(lazy="joined")
     conversation_id: Mapped[str] = mapped_column(
         ForeignKey("chat_conversations.id", ondelete="CASCADE")
     )
     # The tool's name and arguments, as the agent calls it.
     tool: Mapped[str]
     arguments: Mapped[dict[str, Any]] = mapped_column(JSONB)
-    # A cron in the installation timezone.
+    # A cron in the account's timezone.
     cron: Mapped[str]
     created_at: Mapped[datetime] = mapped_column(default=Base.utc_now)
 
@@ -61,6 +62,7 @@ class Schedule(Base, Uuid7Pk):
         )
         session.add(schedule)
         await session.flush()
+        await session.refresh(schedule, ["account"])
         return schedule
 
     def change(
@@ -131,7 +133,7 @@ class Schedule(Base, Uuid7Pk):
 
     @property
     def next_run_at(self) -> datetime:
-        """When the schedule calls its tool next, in the installation timezone."""
+        """When the schedule calls its tool next, in the account's timezone."""
         return croniter(
-            self.cron, Base.utc_now().astimezone(ZoneInfo(get_settings().timezone))
+            self.cron, Base.utc_now().astimezone(ZoneInfo(self.account.timezone))
         ).get_next(datetime)

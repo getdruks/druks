@@ -242,8 +242,10 @@ notification destinations. A member can change personal preferences,
 subscriptions, API tokens, and per-person connections and keys. A member can
 also pair a phone with a private Bot's number in **Settings → Phones**.
 
-The installation timezone controls schedules and operational day boundaries.
-Your personal timezone controls timestamp display. Gate notifications use the
+The installation timezone controls the schedules that workflows declare and
+operational day boundaries. Your personal timezone controls timestamp display and
+local time in your chats: the time that an agent reads, your reminders, and the
+schedules that you ask an agent for. Gate notifications use the
 run account's preferences. Unattended runs record the default account.
 Druks refuses to start a run before account setup.
 
@@ -254,7 +256,7 @@ automatically. Custom cron input saves when you press Enter or leave the field.
 enabled state. App settings show the same fields.
 
 The page shows the installation timezone. Account timezone preferences do not
-change schedule timing. A failed save keeps your edits. A read refresh also
+change the timing of these schedules. A failed save keeps your edits. A read refresh also
 preserves unsaved edits. If you leave the page with unsaved edits, Druks asks
 first. The `?app=` filter selects one installed app.
 

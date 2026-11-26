@@ -21,7 +21,6 @@ from druks.models import Base, Model
 from druks.notifications.models import Notification
 from druks.registry import channel_registry
 from druks.secrets.models import VaultSecret
-from druks.settings import get_settings
 
 from .enums import ConversationSource, MessageRole, MessageState
 from .exceptions import ReminderError
@@ -531,8 +530,9 @@ class Reminder(Base, Uuid7Pk):
     conversation: Mapped[Conversation] = relationship(lazy="joined")
     # The account that asked for the reminder. Only it lists or cancels the reminder.
     account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id", ondelete="RESTRICT"))
+    account: Mapped[Account] = relationship(lazy="joined")
     body: Mapped[str]
-    # A cron in the installation timezone. Empty for a reminder that sends once.
+    # A cron in the account's timezone. Empty for a reminder that sends once.
     cron: Mapped[str] = mapped_column(default="", server_default=text("''"))
     next_send_at: Mapped[datetime]
     created_at: Mapped[datetime] = mapped_column(default=Base.utc_now)
@@ -542,7 +542,7 @@ class Reminder(Base, Uuid7Pk):
         cls,
         session: AsyncSession,
         conversation: Conversation,
-        account_id: str,
+        account: Account,
         *,
         body: str,
         send_at: datetime | None = None,
@@ -557,7 +557,7 @@ class Reminder(Base, Uuid7Pk):
             raise ReminderError(f"'{cron}' is not a cron. Write five fields, such as '0 9 * * 1'.")
         reminder = cls(
             conversation_id=conversation.id,
-            account_id=account_id,
+            account=account,
             body=body,
             cron=cron,
             next_send_at=send_at,
@@ -568,7 +568,7 @@ class Reminder(Base, Uuid7Pk):
             reminder.next_send_at = Base.utc_now() + timedelta(seconds=delay_seconds)
         elif not send_at.tzinfo:
             # The agent writes the time that the person said, which is local.
-            reminder.next_send_at = send_at.replace(tzinfo=ZoneInfo(get_settings().timezone))
+            reminder.next_send_at = send_at.replace(tzinfo=ZoneInfo(account.timezone))
         if reminder.next_send_at <= Base.utc_now():
             raise ReminderError("That time is past. Give a later one.")
         session.add(reminder)
@@ -607,13 +607,13 @@ class Reminder(Base, Uuid7Pk):
 
     @property
     def local_next_send_at(self) -> datetime:
-        """When the reminder sends next, in the installation timezone."""
-        return self.next_send_at.astimezone(ZoneInfo(get_settings().timezone))
+        """When the reminder sends next, in the account's timezone."""
+        return self.next_send_at.astimezone(ZoneInfo(self.account.timezone))
 
     def get_next_send_at(self, after: datetime) -> datetime:
         """The first time after ``after`` on the reminder's cron, which runs in the
-        installation timezone."""
-        local = after.astimezone(ZoneInfo(get_settings().timezone))
+        account's timezone."""
+        local = after.astimezone(ZoneInfo(self.account.timezone))
         return croniter(self.cron, local).get_next(datetime).astimezone(UTC)
 
     async def create_message(self, session: AsyncSession) -> Message:

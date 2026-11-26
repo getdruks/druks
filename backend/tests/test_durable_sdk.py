@@ -27,7 +27,7 @@ from druks.browser.exceptions import BrowserSessionSignedOutError
 from druks.browser.models import StoredBrowserSession
 from druks.chat.constants import CANCELLED_MESSAGE, CONVERSATION_HEADER, SKIPPED_MESSAGE
 from druks.chat.dependencies import current_conversation
-from druks.chat.models import Conversation, Message
+from druks.chat.models import Conversation, Message, Reminder
 from druks.database import configure_session, get_session, session_scope
 from druks.db import atomic, db_session
 from druks.durable import FatalError, Run, RunState, WorkflowError, engine, get_run_phase
@@ -64,6 +64,7 @@ from druks.signals import subscribe
 from druks.teams.models import Team
 from druks.testing import asgi_client, init_db
 from druks.user_settings.models import InstallationSettings, SettingsOverride
+from druks.user_settings.routes import router as settings_router
 from druks.workflows import (
     GATE_TTL_SECONDS,
     Gate,
@@ -2411,23 +2412,53 @@ async def test_a_schedule_needs_a_known_tool_and_a_five_field_cron_that_comes_du
         )
 
 
-async def test_apply_schedules_keeps_a_persons_schedules_in_the_installation_timezone(
-    runtime, monkeypatch
-):
-    schedule = await _make_schedule(runtime)
-    await apply_schedule(schedule)
-    async with session_scope(runtime.engine) as session:
-        await apply_schedules(session)
-    assert await DBOS.get_schedule_async(schedule.schedule_name)
-    settings = engine.get_settings().model_copy(update={"timezone": "Europe/Madrid"})
-    monkeypatch.setattr(engine, "get_settings", lambda: settings)
+async def test_a_persons_schedule_runs_in_the_timezone_of_their_account(runtime):
+    api = FastAPI(dependencies=[Depends(request_session)])
+    api.include_router(schedules_router, dependencies=[Depends(current_conversation)])
+    api.include_router(settings_router)
+    # The MCP surface names the tools that a schedule can call.
+    create_mcp_app(api)
+    owner_id = await _get_or_create_account_id(runtime.engine, "traveler@example.com")
+    async with get_session(runtime.engine) as session:
+        chat = await Conversation.create(session, account_id=owner_id, body="A joke at 9am")
+        _, token = await PersonalAccessToken.create(session, account_id=owner_id, name="t")
+        await session.commit()
+    owner = {"Authorization": f"Bearer {token}", CONVERSATION_HEADER: chat.id}
+    daily = {"tool": "list_schedules", "arguments": {}, "cron": "0 9 * * *"}
 
-    async with session_scope(runtime.engine) as session:
-        await apply_schedules(session)
+    async with asgi_client(api) as client:
+        await client.patch(
+            "/api/settings/personal", json={"timezone": "Asia/Kolkata"}, headers=owner
+        )
+        made = await client.post("/api/schedules", json=daily, headers=owner)
+        name = f"schedule:{made.json()['id']}"
+        made_in_dbos = await DBOS.get_schedule_async(name)
+        async with session_scope(runtime.engine) as session:
+            reminder = Reminder.create(
+                session, chat, await session.get(Account, owner_id), body="Joke", cron="0 9 * * *"
+            )
+        await client.patch(
+            "/api/settings/personal", json={"timezone": "Europe/Madrid"}, headers=owner
+        )
+        moved_in_dbos = await DBOS.get_schedule_async(name)
+        async with session_scope(runtime.engine) as session:
+            moved_reminder = await session.get(Reminder, reminder.id)
+            reminder_sends_at = moved_reminder.local_next_send_at
+            await session.delete(moved_reminder)
+            account = await session.get(Account, owner_id)
+            await account.update_preferences(timezone="America/Lima")
+            await apply_schedules(session)
+        moved_at_launch = await DBOS.get_schedule_async(name)
+        await client.delete(f"/api/schedules/{made.json()['id']}", headers=owner)
 
-    row = await DBOS.get_schedule_async(schedule.schedule_name)
-    assert (row["cron_timezone"], row["context"]) == ("Europe/Madrid", {"schedule_id": schedule.id})
-    await DBOS.delete_schedule_async(schedule.schedule_name)
+    assert made.json()["nextRunAt"].endswith("T09:00:00+05:30")
+    assert made_in_dbos["cron_timezone"] == "Asia/Kolkata"
+    assert (moved_in_dbos["cron_timezone"], moved_in_dbos["context"]) == (
+        "Europe/Madrid",
+        {"schedule_id": made.json()["id"]},
+    )
+    assert moved_at_launch["cron_timezone"] == "America/Lima"
+    assert reminder_sends_at.strftime("%H:%M %Z") in ("09:00 CET", "09:00 CEST")
 
 
 async def test_a_person_makes_their_schedule_in_a_chat_and_only_they_change_it(
