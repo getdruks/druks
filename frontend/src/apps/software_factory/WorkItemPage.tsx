@@ -712,6 +712,15 @@ function RunHeader({
         {run.state === 'failed' && data.timeline.at(-1)?.id === run.id && (
           <RetryRun runId={run.id} />
         )}
+        {!isActiveRun(run) && (
+          <button
+            type="button"
+            className="ins-run-link druks-button druks-button--quiet druks-button--compact"
+            onClick={() => navigate(`/software_factory/lessons?run=${encodeURIComponent(run.id)}`)}
+          >
+            remember this
+          </button>
+        )}
         {call && (
           <button
             type="button"

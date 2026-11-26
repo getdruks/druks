@@ -348,7 +348,7 @@ async def test_a_run_with_include_apps_moves_the_login_before_the_command(druks_
 
     wrapper = invocation.args[2]
     assert wrapper.index(_LOGIN) < wrapper.index("claude ")
-    assert invocation.env is None
+    assert invocation.env == {"CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"}
     assert "live" not in wrapper
 
 
@@ -361,7 +361,7 @@ async def test_a_run_without_include_apps_keeps_the_bearer_where_the_box_put_it(
 
     assert "CLAUDE_CODE_OAUTH_TOKEN" not in invocation.args[2]
     assert "env -u" not in invocation.args[2]
-    assert invocation.env is None
+    assert invocation.env == {"CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"}
 
 
 async def test_an_api_key_run_keeps_its_key_whatever_the_switch_says(druks_db, config_root):

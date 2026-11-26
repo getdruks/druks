@@ -415,7 +415,7 @@ async def ticket(identifier: str):
 
 
 @ui.page("/lessons")
-async def lessons():
+async def lessons(run: str = ""):
     session = db_session()
     since = datetime.now(UTC) - timedelta(days=CORRECTIONS_WINDOW_DAYS)
     # A correction is a gate reply that says something: the note of a plan review, or the
@@ -629,7 +629,10 @@ async def lessons():
                 fields=[
                     ui.TextAreaField(name="text", label="Lesson", is_required=True),
                     ui.TextField(
-                        name="run_id", label="Run id", help_text="The run it comes from. Optional."
+                        name="run_id",
+                        label="Run id",
+                        value=run,
+                        help_text="The run it comes from. Optional.",
                     ),
                 ],
                 action=ui.Action(label="Keep lesson", operation="accept_lesson", tone="primary"),

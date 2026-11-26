@@ -180,3 +180,11 @@ async def test_an_event_id_of_zero_means_no_event(druks_client, druks_db):
     assert created.status_code == 201
     lesson = (await druks_db.scalars(select(Lesson))).one()
     assert lesson.source_event_id is None
+
+
+async def test_a_run_in_the_address_fills_the_run_of_the_new_lesson(druks_client):
+    page = (await druks_client.get(_PAGE, params={"run": "run-7"})).json()
+
+    form = next(block for block in page["blocks"] if block["block"] == "form")
+    field = next(field for field in form["fields"] if field["name"] == "run_id")
+    assert field["value"] == "run-7"

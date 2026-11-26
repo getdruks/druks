@@ -58,7 +58,8 @@ that people wrote at a gate, newest first. Nothing waits on this page.
 - **Make a lesson:** edit the text of a correction and accept it. The lesson
   shows who accepted it and where it comes from.
 - **Add a lesson:** write one without a correction. You can name the run that
-  it comes from.
+  it comes from. On a work item, choose "remember this" on a run that has ended,
+  and the form opens with that run filled in.
 - **Repeats a lesson:** mark a correction that repeats an accepted lesson.
 - **Retire:** take a lesson out of use.
 
