@@ -1,11 +1,11 @@
 import pytest
 from druks.accounts.models import Account
+from druks.core.lessons import models
+from druks.core.lessons.exceptions import LessonIndexFull
+from druks.core.lessons.models import Lesson
 from druks.durable.models import Run
 from druks.events.models import Event
 from druks.exceptions import ValidationError
-from druks.lessons import models
-from druks.lessons.exceptions import LessonIndexFull
-from druks.lessons.models import Lesson
 
 
 async def test_an_accepted_lesson_records_its_source_and_who_accepted_it(druks_db):

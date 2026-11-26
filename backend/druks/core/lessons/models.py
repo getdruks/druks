@@ -5,11 +5,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
 from druks.accounts.models import Account
+from druks.core.lessons.constants import LESSON_INDEX_MAX_LINES
+from druks.core.lessons.enums import LessonStatus
+from druks.core.lessons.exceptions import LessonIndexFull
 from druks.core.models import Uuid7Pk
 from druks.exceptions import ValidationError
-from druks.lessons.constants import LESSON_INDEX_MAX_LINES
-from druks.lessons.enums import LessonStatus
-from druks.lessons.exceptions import LessonIndexFull
 from druks.models import Base, Model
 
 
