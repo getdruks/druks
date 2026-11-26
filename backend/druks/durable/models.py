@@ -103,6 +103,7 @@ class Run(Base):
     subject_key: Mapped[str | None] = column_property(
         subject_attribute_expression(id, "subject_key")
     )
+    subject_id: Mapped[str | None] = column_property(subject_attribute_expression(id, "subject_id"))
     retry_from: Mapped[str | None] = column_property(retry_from_expression(id))
     account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id", ondelete="RESTRICT"))
     account: Mapped[Account] = relationship(lazy="joined", foreign_keys=[account_id])
@@ -818,16 +819,29 @@ class AgentCall(Base, Uuid7Pk):
 
     @classmethod
     async def lookup_running(
-        cls, session: AsyncSession, run_id: str, agent: str
+        cls, session: AsyncSession, run_id: str, agent: str | None = None
     ) -> "AgentCall | None":
         # An agent's calls are sequential, so at most one row is RUNNING: the call a
-        # stopped process left on its box.
+        # stopped process left on its box. Without an agent, the newest running call of
+        # the run.
+        query = select(cls).where(cls.run_id == run_id, cls.status == AgentCallStatus.RUNNING.value)
+        if agent:
+            query = query.where(cls.agent == agent)
+        return await session.scalar(query.order_by(cls.created_at.desc()).limit(1))
+
+    @classmethod
+    async def lookup_last_succeeded(
+        cls, session: AsyncSession, run_id: str, agent: str
+    ) -> "AgentCall | None":
         return await session.scalar(
-            select(cls).where(
+            select(cls)
+            .where(
                 cls.run_id == run_id,
                 cls.agent == agent,
-                cls.status == AgentCallStatus.RUNNING.value,
+                cls.status == AgentCallStatus.SUCCEEDED.value,
             )
+            .order_by(cls.created_at.desc(), cls.id.desc())
+            .limit(1)
         )
 
     @classmethod

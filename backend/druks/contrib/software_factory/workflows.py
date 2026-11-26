@@ -1,12 +1,18 @@
+import asyncio
+import hashlib
+import json
 import logging
+import re
 import time
 from collections.abc import Sequence
+from contextlib import suppress
 from typing import Any
 
 from pydantic import BaseModel, Field
 
 from druks import ui
 from druks.accounts import Account
+from druks.apps.fetcher import fetch_file
 from druks.contrib.software_factory.contracts import (
     CiReport,
     ImplementationOutput,
@@ -16,28 +22,43 @@ from druks.contrib.software_factory.contracts import (
 from druks.contrib.software_factory.enums import HumanFeedbackAction, Resolution, ReviewDecision
 from druks.contrib.software_factory.models import ProjectRepo, WorkItem
 from druks.contrib.software_factory.ticketing.enums import TicketStatus
+from druks.core.apis.exceptions import GitHubRerunRefusedError
 from druks.core.services import Github
 from druks.db import db_session
 from druks.mcp.inbound import get_druks_mcp_server
-from druks.sandbox import SandboxMcpServer, SandboxSecret
+from druks.prompts import render_prompt
+from druks.sandbox import Sandbox, SandboxMcpServer, SandboxSecret, TemplateUnavailable
 from druks.sandbox.layout import get_related_root, get_work_root
 from druks.services.exceptions import ServiceNotConnectedError
 from druks.settings import get_settings
 from druks.skills.models import Skill
-from druks.workflows import FatalError, Workflow, step
+from druks.workflows import FatalError, WaitTimeout, Workflow, step
 from druks.workspaces import RepoWorkspace
 
 from .app import SoftwareFactory
 from .constants import (
     BUILD_STEPS,
+    CHECK_TOOLS,
     CI_POLL_SECONDS,
     CI_TTL_SECONDS,
+    FINGERPRINT_LOG_LINES,
     GITHUB_MCP_NAME,
     GITHUB_MCP_URL,
+    IMPLEMENT_EFFORT_BY_SIZE,
+    LOCKFILES,
+    RERUN_CONCLUSIONS,
+    RERUN_POLL_SECONDS,
+    RERUN_START_POLLS,
+    RUN_ACTIVE_STATUSES,
     TICKET_TOOLS,
 )
 from .datastructures import PullRequest
-from .exceptions import TicketAlreadyMerged, TicketBlocked, TicketNotRoutable
+from .exceptions import (
+    SandboxSetupMissing,
+    TicketAlreadyMerged,
+    TicketBlocked,
+    TicketNotRoutable,
+)
 from .github import get_review_actor
 from .journal import BuildJournal
 from .policy import PlanGate, RepoPolicy
@@ -75,6 +96,49 @@ class BuildWorkspace(RepoWorkspace):
         ]
 
     @classmethod
+    async def get_checks(cls, subject: Any) -> tuple[str, ...]:
+        # The repo's test commands, which the agent may run on another box. A box that
+        # cannot reach Druks' server has no tool to run them with, so it declares none.
+        if not await cls._get_druks_server():
+            return ()
+        project_repo = await ProjectRepo.get_for_repo(subject.repo, raise_on_missing=True)
+        verification = project_repo.effective_profile.get("verification") or {}
+        return tuple(entry["command"] for entry in verification.get("test_commands", []))
+
+    @classmethod
+    async def get_check_box(cls, subject: Any) -> dict[str, Any]:
+        # The repo's template, when its setup script has built one, the env that its config
+        # sets, and the start script that runs before each check. A repo with no template
+        # checks on the agent's own box.
+        project_repo = await ProjectRepo.get_for_repo(subject.repo, raise_on_missing=True)
+        policy = await RepoPolicy.resolve(subject.repo)
+        sandbox = policy.verification and policy.verification.sandbox
+        box = {}
+        if template := project_repo.effective_profile.get("sandbox_template"):
+            box["template"] = template
+        if sandbox and sandbox.env:
+            box["env"] = dict(sandbox.env)
+        if sandbox and sandbox.start:
+            # Read from the default branch like ``setup``, so a pull request cannot change
+            # the script that its own checks start with.
+            script = await fetch_file(repo=subject.repo, path=sandbox.start)
+            if not script:
+                raise SandboxSetupMissing(subject.repo, sandbox.start)
+            box["start"] = script
+        return box
+
+    @classmethod
+    async def _get_druks_server(cls) -> SandboxMcpServer | None:
+        tracker = (await SoftwareFactory.settings()).tracker
+        tools = (*TICKET_TOOLS, *CHECK_TOOLS) if tracker == "druks" else CHECK_TOOLS
+        urls = get_settings().urls
+        if tracker != "druks" and not (urls.mcp_url or urls.webhook_base):
+            # Any other tracker built without this server before it carried the check tool.
+            return None
+        # A board build with no address raises here, as it did before.
+        return get_druks_mcp_server(allowed_tools=tools)
+
+    @classmethod
     async def get_mcp_servers(cls, subject: Any) -> tuple[SandboxMcpServer, ...]:
         github = SandboxMcpServer(
             name=GITHUB_MCP_NAME,
@@ -82,8 +146,8 @@ class BuildWorkspace(RepoWorkspace):
             secret_id=(await cls.github.get()).id,
             resources=await get_project_repos(subject.repo),
         )
-        if (await SoftwareFactory.settings()).tracker == "druks":
-            return (github, get_druks_mcp_server(allowed_tools=TICKET_TOOLS))
+        if druks := await cls._get_druks_server():
+            return (github, druks)
         return (github,)
 
     async def prepare(self) -> None:
@@ -212,7 +276,9 @@ class Build(Workflow):
         # Steps read the policy, the profile, the settings, and the blockers, so replay
         # reuses them.
         resolved = await self._load_policy_and_profile()
-        self._policy = RepoPolicy.model_validate(resolved["policy"])
+        # The stored policy passed the file's check when the build started. The copy of an
+        # older build can hold a key that the config no longer has.
+        self._policy = RepoPolicy.model_validate(resolved["policy"], extra="ignore")
         self._profile = resolved["profile"]
         self._settings = await self._load_settings()
         self._blockers = await self._load_blockers()
@@ -293,6 +359,8 @@ class Build(Workflow):
                 db_session(), self._profile.get("recommended_skills", [])
             ),
             blockers=self._blockers,
+            run_id=self.workflow_id,
+            checks=await self.workspace_class.get_checks(work_item),
             journal=self.journal,
         )
         return {
@@ -424,8 +492,10 @@ class Build(Workflow):
     async def _implement_phase(self) -> None:
         await self._create_branch()
         message = "Druks implements the plan and opens a draft pull request."
+        previous_fingerprint = ""
         while True:
             previous_delivery = self.journal.last_implementation
+            is_repeat = False
             requested_changes = []
             if self.journal.revision_request:
                 requested_changes.append(self.journal.revision_request)
@@ -444,7 +514,21 @@ class Build(Workflow):
                     "Draft pull request", message="Druks waits for CI on the pull request."
                 )
                 ci_report = await self._wait_for_ci(delivery.head_sha)
-                if ci_report.conclusion == "red" and can_revise:
+                if ci_report.conclusion == "red" and await self._rerun_failed_jobs(
+                    delivery.head_sha
+                ):
+                    ci_report = await self._wait_for_ci(delivery.head_sha)
+                fingerprint = ""
+                if ci_report.conclusion == "red":
+                    fingerprint = await self._get_failure_fingerprint(delivery.head_sha)
+                    is_repeat = bool(fingerprint) and fingerprint == previous_fingerprint
+                previous_fingerprint = fingerprint
+                if is_repeat:
+                    # A new head that fails as the last one did is no closer to green, so the
+                    # rounds end as at the revision cap and a person decides.
+                    logger.info("%s fails as the last round did", delivery.head_sha)
+                    can_revise = False
+                elif ci_report.conclusion == "red" and can_revise:
                     continue
             await self._report_step("Review", message="Druks reviews the pull request.")
             review = await self._review_work()
@@ -452,16 +536,84 @@ class Build(Workflow):
                 continue
             # Druks says what the build waits for, so this report has no message.
             await self._report_step("Review")
-            if await self._work_gate():
+            if await self._work_gate(is_repeat=is_repeat):
                 return
 
     async def _wait_for_ci(self, head_sha: str) -> CiReport:
-        """Wait until CI has finished on ``head_sha``, and return its verdict."""
+        """Wait until CI has finished on ``head_sha``, and return its verdict. The wait keeps
+        the implementer's box, because a red CI resumes the implementer's session, a file on
+        that box."""
         started_at = await self._now()
         while not (ci_report := await self._read_ci(head_sha, started_at)):
-            await self.sleep(CI_POLL_SECONDS, label="Waiting for CI", until="check.completed")
+            with suppress(WaitTimeout):
+                await self.wait(
+                    "check.completed",
+                    label="Waiting for CI",
+                    ttl_seconds=CI_POLL_SECONDS,
+                    hold_box=True,
+                )
         self.journal.add(ci_report)
         return ci_report
+
+    @step(retries=3)
+    async def _get_failure_fingerprint(self, head_sha: str) -> str:
+        """A hash of the failed Actions jobs on ``head_sha``: each job's name and the end of its
+        log, without the timestamps and durations that differ between runs of one failure. It
+        is empty when no Actions job failed or no log can be read, and an empty fingerprint
+        never matches."""
+        repo = (await self.subject).repo
+        github = await Github.get_client(repo)
+        logs = await github.get_failed_job_logs(repo, head_sha, lines=FINGERPRINT_LOG_LINES)
+        parts = []
+        for job, tail in sorted(logs.items()):
+            tail = re.sub(r"(?m)^\S+Z ", "", tail)
+            tail = re.sub(r"\bin \d+(\.\d+)?s\b", "in Ns", tail)
+            tail = re.sub(r"\(\s*\d+(\.\d+)?\s*m?s\s*\)", "(Ns)", tail)
+            parts.append(f"{job}\n{tail}")
+        return hashlib.sha256("\n".join(parts).encode()).hexdigest() if parts else ""
+
+    @step(retries=3)
+    async def _rerun_failed_jobs(self, head_sha: str) -> bool:
+        """Rerun every failed or timed-out Actions run on ``head_sha`` once, and wait for
+        the rerun to start, so the next CI read sees it and not the old red. Return whether
+        a rerun is running. A red with no Actions run to rerun, such as
+        ``druks-house-rules``, returns False. A run that already has a second attempt is not
+        rerun again, so a retry of this step reruns no run twice."""
+        repo = (await self.subject).repo
+        github = await Github.get_client(repo)
+        runs = await github.list_workflow_runs(repo, head_sha)
+        # CI had finished when the build read it red, so a run that is active now is a rerun,
+        # also when GitHub has not raised its attempt number yet.
+        has_rerun = any(
+            run["run_attempt"] > 1 or run["status"] in RUN_ACTIVE_STATUSES for run in runs
+        )
+        attempts = {}
+        for run in runs:
+            if run["conclusion"] not in RERUN_CONCLUSIONS or run["run_attempt"] > 1:
+                continue
+            try:
+                await github.rerun_failed_jobs(repo, run["id"])
+            except GitHubRerunRefusedError as error:
+                logger.warning("Druks could not rerun %s", error)
+                continue
+            attempts[run["id"]] = run["run_attempt"]
+        if not attempts and not has_rerun:
+            return False
+        for _ in range(RERUN_START_POLLS):
+            runs = {run["id"]: run for run in await github.list_workflow_runs(repo, head_sha)}
+            if all(
+                run_id in runs
+                and (
+                    runs[run_id]["run_attempt"] > attempt
+                    or runs[run_id]["status"] in RUN_ACTIVE_STATUSES
+                )
+                for run_id, attempt in attempts.items()
+            ):
+                break
+            await asyncio.sleep(RERUN_POLL_SECONDS)
+        else:
+            logger.warning("The rerun on %s did not start in time", head_sha)
+        return True
 
     @step
     async def _now(self) -> float:
@@ -492,15 +644,17 @@ class Build(Workflow):
         self.journal.add(review)
         return review
 
-    async def _work_gate(self) -> bool:
+    async def _work_gate(self, *, is_repeat: bool = False) -> bool:
         """Park for work approval. Return True when the work is done, or False when it
-        goes back to implementation."""
+        goes back to implementation. ``is_repeat`` is a head that fails as the one before it."""
         if self._policy.implementation_approval_gate() == "none":
             return await self._approved_work()
         label = f"Review implementation on GitHub: PR #{self.pr_number}"
         ci_report = self.journal.latest(CiReport)
         if ci_report.conclusion == "red":
             label = f"{label}. CI on {ci_report.head_sha[:7]} is red"
+            if is_repeat:
+                label = f"{label}, as it was on the round before"
         if ci_report.conclusion == "unfinished":
             label = (
                 f"{label}. CI on {ci_report.head_sha[:7]} did not finish within "
@@ -555,12 +709,34 @@ class Build(Workflow):
     # Body code, never @step. The agent calls inside memoize themselves and write the
     # journal. On replay a @step would skip them, and the journal would stay empty.
     async def implement(self) -> ImplementationOutput:
-        delivery = await SoftwareFactory.implement()
+        effort = IMPLEMENT_EFFORT_BY_SIZE.get(self.journal.plan_size)
+        # A red CI or a review that requests changes continues the implementer's session, and
+        # the call starts over with its full prompt when it cannot.
+        resume = None
+        if self.journal.red_ci_report:
+            resume = self._report_red_ci
+        elif self.journal.requested_changes:
+            resume = self._report_requested_changes
+        delivery = await SoftwareFactory.implement(effort=effort, resume=resume)
         # The implementer found a contradiction in the binding requirements and stopped.
         # The run fails with that reason, so the dashboard shows it.
         if delivery.status == "needs_clarification":
             raise FatalError(f"implementation needs clarification: {delivery.summary}")
         return delivery
+
+    async def _report_red_ci(self, *, workspace: BuildWorkspace) -> str:
+        """The message that continues the implementer's session when CI on its head is red:
+        the red-CI rules of the implement prompt."""
+        return await render_prompt(
+            "software_factory/build/_red_ci.md", repo=(await self.subject).repo, build=self
+        )
+
+    async def _report_requested_changes(self, *, workspace: BuildWorkspace) -> str:
+        """The message that continues the implementer's session when the review of its head
+        requests changes: the review's findings."""
+        return await render_prompt(
+            "software_factory/build/_review_changes.md", repo=(await self.subject).repo, build=self
+        )
 
     @step
     async def _create_branch(self) -> None:
@@ -654,6 +830,39 @@ class Profile(Workflow):
             effective["verification"] = policy.verification.get_commands(
                 detected=baseline.get("verification") or {}
             )
+        sandbox = policy.verification and policy.verification.sandbox
+        if sandbox and sandbox.setup:
+            repo = project_repo.full_name
+            setup_script = await fetch_file(repo=repo, path=sandbox.setup)
+            if not setup_script:
+                raise SandboxSetupMissing(repo, sandbox.setup)
+            # A start script that is missing would fail every check, so it fails the profile.
+            if sandbox.start and not await fetch_file(repo=repo, path=sandbox.start):
+                raise SandboxSetupMissing(repo, sandbox.start)
+            # Drukbox keys a template by its script. The lockfiles go into the script, so a
+            # changed dependency builds a new template.
+            github = await Github.get_client(repo)
+            lockfiles = {
+                name: content
+                for name in LOCKFILES
+                if (content := await github.get_file_content(repo, name))
+            }
+            if lockfiles:
+                digest = hashlib.sha256(json.dumps(lockfiles, sort_keys=True).encode())
+                setup_script = f"{setup_script}\n# lockfiles {digest.hexdigest()}\n"
+            try:
+                template = await Sandbox(setup=sandbox.setup, script=setup_script).build(
+                    label=f"{repo}:{sandbox.setup}"
+                )
+            except TemplateUnavailable as error:
+                # A script that does not build leaves the last good template in place.
+                logger.warning("The sandbox template of %s did not build: %s", repo, error)
+                if previous := (project_repo.profile.get("effective") or {}).get(
+                    "sandbox_template"
+                ):
+                    effective["sandbox_template"] = previous
+            else:
+                effective["sandbox_template"] = template.id
         await project_repo.set_profile(baseline=baseline, effective=effective)
 
     async def get_prompt_context(self, **context: Any) -> dict[str, Any]:

@@ -78,7 +78,7 @@ jobs:
           DRUKS_DATA_DIR: ${{ runner.temp }}/druks
           DRUKS_DATABASE_URL: postgresql+psycopg://druks:druks@localhost:5432/druks_migrate
           DRUKS_SECRETS_KEY: MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=
-      - run: uv run pytest backend/
+      - run: uv run pytest backend/ -n auto --maxprocesses=8
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"

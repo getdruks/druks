@@ -58,6 +58,16 @@ class BuildJournal(Journal):
         return
 
     @property
+    def plan_size(self) -> str | None:
+        """The size the planner gave the change. A revision keeps it, and so do the rounds
+        that follow a red CI or a review. A plan that a build stored before the field existed
+        has no attribute at all, so it is read with a default: a replay must not fail on it."""
+        for plan in reversed(self.filter(PlanData)):
+            if getattr(plan, "size", None):
+                return plan.size
+        return
+
+    @property
     def is_ready_for_review(self) -> bool:
         """The round's review of a head with green CI requested no changes."""
         ci_report = self.latest(CiReport)
@@ -78,6 +88,18 @@ class BuildJournal(Journal):
             and not self.filter(ReviewReport, after=ci_report)
         ):
             return ci_report
+        return
+
+    @property
+    def requested_changes(self) -> ReviewReport | None:
+        """The latest review when it requests changes and no delivery follows it."""
+        review = self.latest(ReviewReport)
+        if (
+            review
+            and review.decision == "request_changes"
+            and not self.filter(ImplementationOutput, after=review)
+        ):
+            return review
         return
 
     @property

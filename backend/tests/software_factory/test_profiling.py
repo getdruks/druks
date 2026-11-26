@@ -1,11 +1,19 @@
+from types import SimpleNamespace
+
 import pytest
 from conftest import connect_service
 from druks.contrib.software_factory.app import SoftwareFactory
+from druks.contrib.software_factory.exceptions import SandboxSetupMissing
 from druks.contrib.software_factory.models import Project, ProjectRepo
-from druks.contrib.software_factory.policy import RepoPolicy, VerificationProfile
+from druks.contrib.software_factory.policy import (
+    RepoPolicy,
+    VerificationProfile,
+    VerificationSandbox,
+)
 from druks.contrib.software_factory.workflows import Profile
 from druks.db import db_session
 from druks.durable.engine import configure_engine
+from druks.sandbox import Sandbox, TemplateUnavailable
 from druks.services.exceptions import ServiceNotConnectedError
 from druks.skills.datastructures import InstalledSkill
 from druks.skills.models import SkillCollection
@@ -162,7 +170,7 @@ class TestProfileRun:
 
         assert repo.profile["baseline"]["recommended_skills"] == ["django-patterns"]
 
-    async def test_pinned_verification_replaces_the_detected_one(self, druks_db, monkeypatch):
+    async def test_a_pinned_list_replaces_only_that_list(self, druks_db, monkeypatch):
         repo = await _seed_repo()
 
         async def _profiler(*, repo: str):
@@ -177,14 +185,37 @@ class TestProfileRun:
         await Profile().run(repo_id=repo.id)
         await db_session().refresh(repo)
 
-        # The pin replaces the whole verification section on the effective profile...
+        # The list that the operator wrote replaces its detected list...
         assert repo.effective_profile["verification"]["test_commands"] == [
             {"command": "make test", "ci_check": None}
         ]
-        assert repo.effective_profile["verification"]["lint_commands"] == []
-        # ...but the detected baseline is preserved underneath it.
-        assert repo.profile["baseline"]["verification"]["lint_commands"] == [
+        # ...and the lists that the operator left out stay as detected.
+        assert repo.effective_profile["verification"]["lint_commands"] == [
             {"command": "ruff check .", "ci_check": "Backend / lint"}
+        ]
+        # The detected baseline is preserved underneath.
+        assert repo.profile["baseline"]["verification"]["test_commands"] == [
+            {"command": "pytest", "ci_check": "Backend / tests"}
+        ]
+
+    async def test_an_empty_pinned_list_removes_the_detected_commands(self, druks_db, monkeypatch):
+        repo = await _seed_repo()
+
+        async def _profiler(*, repo: str):
+            return _profiled()
+
+        async def _pinning_policy(repo):
+            return RepoPolicy(verification=VerificationProfile(lint_commands=()))
+
+        monkeypatch.setattr(SoftwareFactory, "repo_profiler", _profiler)
+        monkeypatch.setattr(RepoPolicy, "resolve", staticmethod(_pinning_policy))
+
+        await Profile().run(repo_id=repo.id)
+        await db_session().refresh(repo)
+
+        assert repo.effective_profile["verification"]["lint_commands"] == []
+        assert repo.effective_profile["verification"]["test_commands"] == [
+            {"command": "pytest", "ci_check": "Backend / tests"}
         ]
 
     async def test_pinned_command_keeps_the_check_detected_for_it(self, druks_db, monkeypatch):
@@ -235,3 +266,158 @@ class TestRefreshOnly:
         assert repo.effective_profile["verification"]["test_commands"] == [
             {"command": "make test", "ci_check": None}
         ]
+
+
+SETUP = ".druks/software_factory/setup.sh"
+
+
+def _sandbox_policy(monkeypatch) -> None:
+    async def _policy(repo):
+        return RepoPolicy(
+            verification=VerificationProfile(sandbox=VerificationSandbox(setup=SETUP))
+        )
+
+    monkeypatch.setattr(RepoPolicy, "resolve", staticmethod(_policy))
+
+
+def _repo_files(
+    monkeypatch, *, setup: str | None = "#!/bin/bash\napt-get install -y make\n", lockfiles=None
+):
+    """The default branch of the repo: its setup script, and the lockfiles at its root."""
+
+    async def _fetch_file(*, repo, path):
+        return setup
+
+    async def _get_file_content(repo, path):
+        return (lockfiles or {}).get(path)
+
+    async def _client(repo):
+        return SimpleNamespace(get_file_content=_get_file_content)
+
+    async def _profiler(*, repo):
+        return _profiled()
+
+    monkeypatch.setattr("druks.contrib.software_factory.workflows.fetch_file", _fetch_file)
+    monkeypatch.setattr("druks.contrib.software_factory.workflows.Github.get_client", _client)
+    monkeypatch.setattr(SoftwareFactory, "repo_profiler", _profiler)
+
+
+def _templates(monkeypatch, *outcomes):
+    """``Sandbox.build`` answers with each of ``outcomes`` in turn: a template id, or an
+    exception to raise. Returns the (script, label) of every call."""
+    answers = iter(outcomes)
+    calls = []
+
+    async def _build(self, *, label):
+        calls.append((self.read_setup_script().decode(), label))
+        answer = next(answers)
+        if isinstance(answer, Exception):
+            raise answer
+        return SimpleNamespace(id=answer)
+
+    monkeypatch.setattr(Sandbox, "build", _build)
+    return calls
+
+
+class TestSandboxTemplate:
+    async def test_a_setup_script_builds_the_repos_template(self, druks_db, monkeypatch):
+        repo = await _seed_repo()
+        _sandbox_policy(monkeypatch)
+        _repo_files(monkeypatch)
+        calls = _templates(monkeypatch, "template-1")
+
+        await Profile().run(repo_id=repo.id)
+        await db_session().refresh(repo)
+
+        assert calls == [("#!/bin/bash\napt-get install -y make\n", f"acme/widget:{SETUP}")]
+        assert repo.effective_profile["sandbox_template"] == "template-1"
+        assert "sandbox_template" not in repo.profile["baseline"]
+
+    async def test_a_repo_without_a_sandbox_builds_no_template(self, druks_db, monkeypatch):
+        repo = await _seed_repo()
+        _repo_files(monkeypatch)
+        calls = _templates(monkeypatch)
+
+        await Profile().run(repo_id=repo.id)
+        await db_session().refresh(repo)
+
+        assert calls == []
+        assert "sandbox_template" not in repo.effective_profile
+
+    async def test_a_changed_lockfile_changes_the_script_that_builds_the_template(
+        self, druks_db, monkeypatch
+    ):
+        repo = await _seed_repo()
+        _sandbox_policy(monkeypatch)
+        calls = _templates(monkeypatch, *["template-1"] * 4)
+
+        for lockfiles in ({"uv.lock": "a"}, {"uv.lock": "a"}, {"uv.lock": "b"}, {}):
+            _repo_files(monkeypatch, lockfiles=lockfiles)
+            await Profile().run(repo_id=repo.id)
+
+        scripts = [script for script, _ in calls]
+        assert scripts[0] == scripts[1]
+        assert scripts[0] != scripts[2]
+        assert all("# lockfiles " in script for script in scripts[:3])
+        assert scripts[3] == "#!/bin/bash\napt-get install -y make\n"
+
+    async def test_a_missing_setup_script_fails_loudly(self, druks_db, monkeypatch):
+        repo = await _seed_repo()
+        _sandbox_policy(monkeypatch)
+        _repo_files(monkeypatch, setup=None)
+        _templates(monkeypatch)
+
+        with pytest.raises(SandboxSetupMissing, match=f"acme/widget has no {SETUP}"):
+            await Profile().run(repo_id=repo.id)
+
+    async def test_a_missing_start_script_fails_the_profile_and_names_it(
+        self, druks_db, monkeypatch
+    ):
+        repo = await _seed_repo()
+        start = ".druks/software_factory/start.sh"
+
+        async def _policy(repo):
+            return RepoPolicy(
+                verification=VerificationProfile(
+                    sandbox=VerificationSandbox(setup=SETUP, start=start)
+                )
+            )
+
+        async def _fetch_file(*, repo, path):
+            return None if path == start else "#!/bin/sh\n"
+
+        monkeypatch.setattr(RepoPolicy, "resolve", staticmethod(_policy))
+        _repo_files(monkeypatch)
+        monkeypatch.setattr("druks.contrib.software_factory.workflows.fetch_file", _fetch_file)
+        _templates(monkeypatch, "template-1")
+
+        with pytest.raises(SandboxSetupMissing, match=f"acme/widget has no {start}"):
+            await Profile().run(repo_id=repo.id)
+
+    async def test_a_script_that_does_not_build_keeps_the_last_good_template(
+        self, druks_db, monkeypatch
+    ):
+        repo = await _seed_repo()
+        _sandbox_policy(monkeypatch)
+        _repo_files(monkeypatch)
+        _templates(monkeypatch, "template-1", TemplateUnavailable("no such package"))
+
+        await Profile().run(repo_id=repo.id)
+        await Profile().run(repo_id=repo.id)
+        await db_session().refresh(repo)
+
+        assert repo.effective_profile["sandbox_template"] == "template-1"
+
+    async def test_a_first_build_that_fails_leaves_no_template_and_still_profiles(
+        self, druks_db, monkeypatch
+    ):
+        repo = await _seed_repo()
+        _sandbox_policy(monkeypatch)
+        _repo_files(monkeypatch)
+        _templates(monkeypatch, TemplateUnavailable("no such package"))
+
+        await Profile().run(repo_id=repo.id)
+        await db_session().refresh(repo)
+
+        assert "sandbox_template" not in repo.effective_profile
+        assert repo.effective_profile["languages"] == ["python"]
