@@ -44,7 +44,7 @@ class Schedule(Base, Uuid7Pk):
         cls,
         session: AsyncSession,
         *,
-        account_id: str,
+        account: Account,
         conversation_id: str,
         tool: str,
         arguments: dict[str, Any],
@@ -54,7 +54,7 @@ class Schedule(Base, Uuid7Pk):
         cls._check_tool(tool, tool_names)
         cls._check_cron(cron)
         schedule = cls(
-            account_id=account_id,
+            account=account,
             conversation_id=conversation_id,
             tool=tool,
             arguments=arguments,
@@ -62,7 +62,6 @@ class Schedule(Base, Uuid7Pk):
         )
         session.add(schedule)
         await session.flush()
-        await session.refresh(schedule, ["account"])
         return schedule
 
     def change(
@@ -135,5 +134,5 @@ class Schedule(Base, Uuid7Pk):
     def next_run_at(self) -> datetime:
         """When the schedule calls its tool next, in the account's timezone."""
         return croniter(
-            self.cron, Base.utc_now().astimezone(ZoneInfo(self.account.timezone))
+            self.cron, Base.utc_now().astimezone(ZoneInfo(self.account.local_timezone))
         ).get_next(datetime)

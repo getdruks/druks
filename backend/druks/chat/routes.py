@@ -517,9 +517,9 @@ async def create_reminder(
     """Send a message in a conversation once, at send_at or delay_seconds from now, or
     again and again on a cron. Give exactly one of the three. Druks sends the body word
     for word at its first check after the reminder is due. It checks every minute. Local
-    time is the person's timezone. The answer's nextSendAt is local. Tell the person
-    that time as it is. When Druks refuses a time, ask the person rather than pick
-    another. Never make a reminder to test the time."""
+    time is the timezone that each turn opens with. The answer's nextSendAt is local.
+    Tell the person that time as it is. When Druks refuses a time, ask the person rather
+    than pick another. Never make a reminder to test the time."""
     conversation_id = conversation_id or current_conversation_id.get()
     if not conversation_id:
         raise HTTPException(422, "This call comes from no chat. Give conversation_id.")

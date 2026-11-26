@@ -110,11 +110,11 @@ async def apply_schedules(session: AsyncSession) -> None:
     for name in existing.keys() - declared:
         await DBOS.delete_schedule_async(name)
     account_timezones = {
-        schedule.schedule_name: schedule.account.timezone
+        schedule.schedule_name: schedule.account.local_timezone
         for schedule in await session.scalars(select(Schedule))
     }
     # Evaluate in the installation timezone so daily cadence follows DST.
-    # Personal display preferences must not move a shared schedule.
+    # A person's timezone must not move a shared schedule.
     timezone = get_settings().timezone
     # DBOS.apply_schedules wants the function, and its module imports this one. The client
     # takes the workflow by name.

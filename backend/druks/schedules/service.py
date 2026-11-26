@@ -30,7 +30,7 @@ async def apply_schedule(schedule: Schedule) -> None:
                 "workflow_fn": run_schedule,
                 "schedule": schedule.cron,
                 "context": {"schedule_id": schedule.id},
-                "cron_timezone": schedule.account.timezone,
+                "cron_timezone": schedule.account.local_timezone,
             }
         ]
     )

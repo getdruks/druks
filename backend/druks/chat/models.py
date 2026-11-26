@@ -568,7 +568,7 @@ class Reminder(Base, Uuid7Pk):
             reminder.next_send_at = Base.utc_now() + timedelta(seconds=delay_seconds)
         elif not send_at.tzinfo:
             # The agent writes the time that the person said, which is local.
-            reminder.next_send_at = send_at.replace(tzinfo=ZoneInfo(account.timezone))
+            reminder.next_send_at = send_at.replace(tzinfo=ZoneInfo(account.local_timezone))
         if reminder.next_send_at <= Base.utc_now():
             raise ReminderError("That time is past. Give a later one.")
         session.add(reminder)
@@ -608,12 +608,12 @@ class Reminder(Base, Uuid7Pk):
     @property
     def local_next_send_at(self) -> datetime:
         """When the reminder sends next, in the account's timezone."""
-        return self.next_send_at.astimezone(ZoneInfo(self.account.timezone))
+        return self.next_send_at.astimezone(ZoneInfo(self.account.local_timezone))
 
     def get_next_send_at(self, after: datetime) -> datetime:
         """The first time after ``after`` on the reminder's cron, which runs in the
         account's timezone."""
-        local = after.astimezone(ZoneInfo(self.account.timezone))
+        local = after.astimezone(ZoneInfo(self.account.local_timezone))
         return croniter(self.cron, local).get_next(datetime).astimezone(UTC)
 
     async def create_message(self, session: AsyncSession) -> Message:

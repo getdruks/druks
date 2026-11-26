@@ -2338,14 +2338,14 @@ async def test_a_run_keeps_its_trace_under_a_request_that_sends_none(runtime):
 
 
 async def _make_schedule(runtime, *, agent_id: str | None = None) -> Schedule:
-    account_id = await _get_or_create_account_id(runtime.engine, "op@example.com")
     async with get_session(runtime.engine) as session:
+        account = await Account.get_or_create(session, "op@example.com")
         conversation = await Conversation.create(
-            session, account_id=account_id, body="Scan payments every 2 hours", agent_id=agent_id
+            session, account_id=account.id, body="Scan payments every 2 hours", agent_id=agent_id
         )
         schedule = await Schedule.create(
             session,
-            account_id=account_id,
+            account=account,
             conversation_id=conversation.id,
             tool="field_notes_scan",
             arguments={"repo": "payments"},
@@ -2403,7 +2403,7 @@ async def test_a_schedule_needs_a_known_tool_and_a_five_field_cron_that_comes_du
     with pytest.raises(exceptions.ValidationError, match=refusal):
         await Schedule.create(
             SimpleNamespace(),
-            account_id="a",
+            account=Account(username="ana"),
             conversation_id="c",
             tool=tool,
             arguments={},

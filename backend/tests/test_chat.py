@@ -2599,8 +2599,16 @@ async def test_a_parked_run_asks_its_chat_with_its_blocks_and_where_their_work_s
     assert (value["status"]["run"], value["status"]["gate"]) == (run.id, "review")
 
 
-async def test_each_turn_opens_with_the_time_in_the_timezone_of_the_account(monkeypatch):
-    conversation = Conversation(account=Account(username="ana", timezone="Europe/Madrid"))
+@pytest.mark.parametrize(
+    "kind, timezone",
+    [(AccountKind.OPERATOR, "Europe/Madrid"), (AccountKind.BOT, "UTC")],
+    ids=["person", "number"],
+)
+async def test_each_turn_opens_with_the_local_time(kind, timezone, monkeypatch):
+    # The number's account still holds the timezone of the day the number was linked.
+    settings = SimpleNamespace(timezone="Europe/Madrid")
+    monkeypatch.setattr("druks.accounts.models.get_settings", lambda: settings)
+    conversation = Conversation(account=Account(username="ana", kind=kind, timezone=timezone))
     monkeypatch.setattr(Base, "utc_now", lambda: datetime(2026, 10, 17, 21, 14, 57, tzinfo=UTC))
     message = Message(body="Remind me in 5 minutes", transcript="", file=None)
 

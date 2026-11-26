@@ -1386,7 +1386,7 @@ async def test_a_waiting_run_asks_the_admin_and_its_end_reaches_the_chat(druks_d
 
 
 def test_a_reminder_cron_keeps_local_time_across_daylight_saving():
-    account = Account(username="ana", timezone="Europe/Madrid")
+    account = Account(username="ana", kind=AccountKind.OPERATOR, timezone="Europe/Madrid")
     mondays_at_nine = Reminder(cron="0 9 * * 1", account=account)
 
     assert mondays_at_nine.get_next_send_at(datetime(2026, 10, 15, tzinfo=UTC)) == datetime(
@@ -1398,7 +1398,7 @@ def test_a_reminder_cron_keeps_local_time_across_daylight_saving():
 
 
 async def test_a_reminder_sends_after_a_delay_or_at_a_local_or_offset_time(druks_db):
-    account = Account(username="ana", timezone="Europe/Madrid")
+    account = Account(username="ana", kind=AccountKind.OPERATOR, timezone="Europe/Madrid")
     chat = SimpleNamespace(id="c")
     before = Base.utc_now()
 

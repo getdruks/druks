@@ -702,7 +702,7 @@ async def get_turn_content(
     the words of its voice note under a marker, then its file. An image travels in the
     prompt. Audio adds nothing more. Any other file goes to the conversation's folder in
     the sandbox, and the agent gets a link to it."""
-    now = Base.utc_now().astimezone(ZoneInfo(conversation.account.timezone))
+    now = Base.utc_now().astimezone(ZoneInfo(conversation.account.local_timezone))
     content = [
         {"type": "text", "text": TIME_MESSAGE.format(now=now.isoformat(), timezone=now.tzinfo)}
     ]
