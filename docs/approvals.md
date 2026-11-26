@@ -63,7 +63,9 @@ that people wrote at a gate, newest first. Nothing waits on this page.
 - **Retire:** take a lesson out of use.
 
 The page counts the corrections of the last 30 days, the corrections for each
-build, and the marks. Any signed-in account can accept a lesson. The lessons
+build, and the marks. It also says when to judge the lessons: after 30 builds
+or a month, whichever comes first. If the corrections that repeat an accepted
+lesson are no fewer than before the lessons, stop and rethink the feature. Any signed-in account can accept a lesson. The lessons
 index holds 100 accepted lessons. When it is full, retire a lesson or merge
 two before you accept another.
 

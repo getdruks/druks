@@ -10,6 +10,7 @@ from druks.contrib.software_factory.constants import (
     CORRECTIONS_PER_BUILD_BASELINE,
     CORRECTIONS_SHOWN,
     CORRECTIONS_WINDOW_DAYS,
+    JUDGEMENT_BUILDS,
 )
 from druks.contrib.software_factory.enums import Priority, Status
 from druks.contrib.software_factory.models import Project, ProjectRepo, Ticket, WorkItem
@@ -494,6 +495,15 @@ async def lessons():
                         description=f"The index holds {LESSON_INDEX_MAX_LINES} at most.",
                     ),
                 ]
+            ),
+            ui.Callout(
+                title="When to judge",
+                text=(
+                    f"Judge the lessons after {JUDGEMENT_BUILDS} builds or a month, whichever "
+                    "comes first. If the corrections that repeat an accepted lesson are no "
+                    "fewer than before the lessons, stop and rethink the feature. "
+                    f"Builds in the last {CORRECTIONS_WINDOW_DAYS} days: {builds}."
+                ),
             ),
             ui.Section(
                 title="Corrections",
