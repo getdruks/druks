@@ -2616,7 +2616,7 @@ async def test_each_turn_opens_with_the_local_time(monkeypatch):
     ]
 
 
-async def test_the_chat_prompt_names_only_the_apps_the_member_can_use(druks_db):
+async def test_the_chat_prompt_offers_only_the_apps_the_member_can_use(druks_db):
     await Account.get_or_create(druks_db, "admin@example.com")
     member = await Account.get_or_create(druks_db, "member@example.com")
     await Team.create(druks_db, name="Notes", member_ids=[], apps=["field_notes"])
@@ -2625,8 +2625,24 @@ async def test_the_chat_prompt_names_only_the_apps_the_member_can_use(druks_db):
 
     _, prompt, _ = await service.get_agent(druks_db, conversation)
 
-    assert FieldNotes.description not in prompt
+    assert "- " + FieldNotes.description not in prompt
     assert SoftwareFactory.description in prompt
+
+
+async def test_the_chat_prompt_tells_the_agent_to_refuse_an_app_the_member_cannot_use(druks_db):
+    await Account.get_or_create(druks_db, "admin@example.com")
+    outsider = await Account.get_or_create(druks_db, "outsider@example.com")
+    member = await Account.get_or_create(druks_db, "member@example.com")
+    await Team.create(druks_db, name="Notes", member_ids=[member.id], apps=["field_notes"])
+    refusal = f"- field_notes: {FieldNotes.description}\nWhen they ask"
+    prompts = {}
+    for account in (outsider, member):
+        conversation = await Conversation.create(druks_db, account_id=account.id, body="Hi")
+        await druks_db.refresh(conversation, ["account"])
+        _, prompts[account.username], _ = await service.get_agent(druks_db, conversation)
+
+    assert refusal in prompts[outsider.username]
+    assert refusal not in prompts[member.username]
 
 
 async def test_each_agent_turn_answers_by_the_agents_instructions_at_that_turn(

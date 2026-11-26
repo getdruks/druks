@@ -39,7 +39,7 @@ from druks.notifications.models import Notification
 from druks.notifications.outbox import close_questions, queue_send
 from druks.prompts import render_prompt
 from druks.redis import get_client
-from druks.registry import get_app, service_registry
+from druks.registry import get_app, iter_apps, service_registry
 from druks.sandbox.client import sandbox_client
 from druks.sandbox.constants import SANDBOX_HOST_LEASE_SECONDS
 from druks.sandbox.datastructures import McpServer
@@ -146,16 +146,14 @@ async def get_agent(
     if account_type == AccountKind.BOT_ADMIN:
         template = ADMIN_PROMPT
     is_shared_thread = bool(conversation.thread_id) and conversation.channel.has_readable_threads
+    usable_apps = await conversation.account.list_usable_apps()
     context = {
         "source": conversation.source,
         "thread_id": conversation.thread_id,
         "is_shared_thread": is_shared_thread,
         "sign_ins": sign_ins,
-        "apps": [
-            app
-            for app in await conversation.account.list_usable_apps()
-            if app.description and not app.builtin
-        ],
+        "apps": [app for app in usable_apps if app.description and not app.builtin],
+        "unusable_apps": [app for app in iter_apps() if app not in usable_apps],
     }
     if conversation.connection:
         context.update(await conversation.channel.get_prompt_context(session, conversation))
