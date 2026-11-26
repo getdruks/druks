@@ -43,6 +43,14 @@ PARKED_MESSAGE = (
     "[Internal: Run {run} waits for an answer. The request:\n{request}\nTell the person "
     "what it waits for and where to answer it.]"
 )
+# An operator's agent reads the run's artifact with get_gate, and the operator can open
+# the run's page.
+PARKED_WITH_SUMMARY_MESSAGE = (
+    "[Internal: Run {run} waits for an answer. The request:\n{request}\nget_gate returns "
+    "the run's artifact, when it has one. Tell the person what the run waits for, with a "
+    "summary of the artifact in a few lines. Do not show all of it. Tell them where to "
+    "answer it.{page}]"
+)
 PARKED_FOR_APPROVER_MESSAGE = (
     "[Internal: Run {run} waits for an answer from {approver}. Druks asked {approver}, and "
     "only they can answer it. The request:\n{request}\nTell the person what the run waits "
