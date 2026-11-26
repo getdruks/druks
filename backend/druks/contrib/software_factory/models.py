@@ -4,7 +4,7 @@ from typing import Any
 
 import sqlalchemy as sa
 from sqlalchemy import ForeignKey, Index, String, func, select
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import CITEXT, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship, selectinload
 
 from druks.accounts import Account
@@ -108,7 +108,8 @@ class ProjectRepo(StoredSubject):
     project_id: Mapped[int] = mapped_column(
         ForeignKey("projects.id", ondelete="CASCADE"),
     )
-    full_name: Mapped[str] = mapped_column(unique=True)
+    # GitHub ignores case in owner/name, so a lookup and the unique key do too.
+    full_name: Mapped[str] = mapped_column(CITEXT, unique=True)
     # A Profile run clones the default branch.
     ref = None
     # One line on what the repo owns. Build and review prompts list it beside the repo name.
