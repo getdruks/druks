@@ -29,6 +29,8 @@ const gateControls = (id: string): Block => ({
     reason: null,
     triggeredAt: null,
     accountUsername: null,
+    phase: null,
+    phaseEndsAt: null,
   },
 })
 const gate: Gate = {

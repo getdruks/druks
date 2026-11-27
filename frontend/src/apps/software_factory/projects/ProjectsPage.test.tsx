@@ -353,7 +353,7 @@ describe('repository details', () => {
     renderPage([project({ repos: [repo()] })], [{ summary: repo(), status: {
       state, run: 'run-1', kind: 'software_factory.profile', agent: null, gate: null,
       failure: state === 'failed' ? 'GitHub access expired' : null, reason: null,
-      triggeredAt: null, accountUsername: null,
+      triggeredAt: null, accountUsername: null, phase: null, phaseEndsAt: null,
     } }])
     fireEvent.click(await screen.findByRole('button', { name: /acme\/service/ }))
     if (state === 'running') {

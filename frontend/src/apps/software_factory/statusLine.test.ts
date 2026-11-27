@@ -14,6 +14,8 @@ function status(overrides: Partial<SubjectStatus>): SubjectStatus {
     reason: null,
     triggeredAt: null,
     accountUsername: null,
+    phase: null,
+    phaseEndsAt: null,
     ...overrides,
   }
 }

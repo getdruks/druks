@@ -431,7 +431,10 @@ the word:
 
 - "needs you" while the subject waits on the operator
 - "failed", "cancelled", or "orphaned" when the work stopped, with its message
-- The `working` word while a run of the subject is scheduled or running
+- The phase of the run while it starts or waits, such as "Waiting for a sandbox
+  slot…", in the words of the run page
+- The `working` word while a run of the subject is scheduled, or while its agent
+  works
 - "idle" otherwise.
 
 `subjects()` on a block or a page gives the `(subject_type, subject_id)` of every
@@ -1672,7 +1675,7 @@ class GateControls:
 ```
 
 ```json
-{"block": "gate_controls", "subject": {"subjectType": "peer", "subjectId": "7"}, "status": {"state": "parked", "run": "run-6f0a", "kind": "reports.audit", "agent": null, "gate": "review", "failure": null, "reason": null, "triggeredAt": "2026-08-29T09:14:02Z", "accountUsername": "operator"}}
+{"block": "gate_controls", "subject": {"subjectType": "peer", "subjectId": "7"}, "status": {"state": "parked", "run": "run-6f0a", "kind": "reports.audit", "agent": null, "gate": "review", "failure": null, "reason": null, "triggeredAt": "2026-08-29T09:14:02Z", "accountUsername": "operator", "phase": null, "phaseEndsAt": null}}
 ```
 
 The author writes `ui.GateControls(peer)`. Druks adds `status`, the status that
@@ -1998,7 +2001,7 @@ class SubjectStatus:
 ```
 
 ```json
-{"value": "subject_status", "subject": {"subjectType": "target", "subjectId": "7"}, "working": "auditing", "status": {"state": "failed", "run": "run-6f0a", "kind": "reports.audit", "agent": null, "gate": null, "failure": "The crawl timed out.", "reason": null, "triggeredAt": "2026-08-29T09:14:02Z", "accountUsername": "operator"}}
+{"value": "subject_status", "subject": {"subjectType": "target", "subjectId": "7"}, "working": "auditing", "status": {"state": "failed", "run": "run-6f0a", "kind": "reports.audit", "agent": null, "gate": null, "failure": "The crawl timed out.", "reason": null, "triggeredAt": "2026-08-29T09:14:02Z", "accountUsername": "operator", "phase": null, "phaseEndsAt": null}}
 ```
 
 The author writes `ui.SubjectStatus(target, working="auditing")`. Druks adds

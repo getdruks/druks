@@ -606,10 +606,10 @@ class StatusValue(PageValue):
 
 class SubjectStatus(PageValue):
     """Where the work on one subject stands. The shell shows "needs you" when
-    the subject waits on the operator. It shows ``working`` while a run of the
-    subject is scheduled or running. Otherwise it shows what stopped the run, or
-    "idle". Druks reads ``status`` each time it serves the value. A stored value
-    keeps no status."""
+    the subject waits on the operator. It shows the phase of a run that starts or
+    waits, and ``working`` while a run is scheduled or its agent works. Otherwise
+    it shows what stopped the run, or "idle". Druks reads ``status`` each time it
+    serves the value. A stored value keeps no status."""
 
     value: Literal["subject_status"] = "subject_status"
     subject: Subject

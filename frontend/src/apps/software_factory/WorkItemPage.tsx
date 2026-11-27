@@ -197,8 +197,8 @@ function WorkItemView({ data }: { data: WorkItemDetail }) {
             />
             <TimelinePanel
               runs={runs}
-              phase={data.phase}
-              phaseEndsAt={data.phaseEndsAt}
+              phase={data.status.phase}
+              phaseEndsAt={data.status.phaseEndsAt}
               selection={selection}
               onSelect={(id) => setSelected(id)}
             />
@@ -786,7 +786,7 @@ function TranscriptBody({
           <span className="ins-infra-glyph">◍</span>
           <div className="ins-infra-text">
             <div className="ins-infra-phrase">
-              {phaseLine(data.phase, data.phaseEndsAt, timezone) ?? 'Starting up…'}
+              {phaseLine(data.status.phase, data.status.phaseEndsAt, timezone) ?? 'Starting up…'}
             </div>
             <div className="ins-infra-sub">
               no agent call yet — the transcript begins once the agent starts

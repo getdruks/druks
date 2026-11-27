@@ -58,6 +58,8 @@ const status: SubjectResponse['status'] = {
   reason: null,
   triggeredAt: null,
   accountUsername: 'operator',
+  phase: null,
+  phaseEndsAt: null,
 }
 const subject: SubjectResponse = {
   summary: { id: '7', key: 'A note' },
