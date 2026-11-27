@@ -1,6 +1,7 @@
 import pytest
 from conftest import settings_client
 from druks.apps.settings import field_kind, field_multiline
+from druks.prompts.resolver import get_template
 from druks_field_notes.app import FieldNotes
 from druks_field_notes.models import Note
 from pydantic import ValidationError
@@ -63,3 +64,8 @@ async def test_the_app_caches_a_value_until_it_clears_it(druks_redis):
     assert await FieldNotes.get_cached("gist:note-1") == {"gist": "Short."}
     await FieldNotes.clear_cached("gist:note-1")
     assert await FieldNotes.get_cached("gist:note-1") is None
+
+
+async def test_druks_finds_every_prompt_the_app_declares():
+    for agent in [*FieldNotes.instructions.all(), FieldNotes.bot]:
+        await get_template(agent.prompt, repo=None)

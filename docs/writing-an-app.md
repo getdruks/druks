@@ -533,6 +533,10 @@ class NightWatch(App):
     )
 ```
 
+The prompt name starts with the app name. The rest is the path of the file in the
+`templates/` directory of the app's package: Druks reads
+`night_watch/write_report.md` from `templates/write_report.md`.
+
 The app name and the attribute name form the instruction's id:
 `night_watch.write_report`. Settings overrides, the timeline, and the step name
 use that id.
@@ -542,7 +546,7 @@ plugin state and no MCP server:
 
 ```python
     triage = Instruction(
-        prompt="triage.md",
+        prompt="night_watch/triage.md",
         contract=TriageOutput,
         include_plugins=False,
         include_mcp=False,
