@@ -34,6 +34,8 @@ Run them with `python3 scripts/measure/<script>`.
 | `timeline.py FOLDER` | The phase table of one downloaded ticket on stdout. |
 | `analyse.py FOLDER` | For each call of one downloaded ticket: turns, context, cache writes, pauses, and tool time, on stdout. |
 | `queue-snapshot.py` | One new file in `.tmp/queue/` of this repository, and two counts on stdout. |
+| `corrections-baseline.py --since YYYY-MM-DD --until YYYY-MM-DD` | A table on stdout: builds, house-rules nudges and human gate corrections for each repository, with the share that repeat. |
+| `review-comments-baseline.py` | A summary on stdout of the reviewer comments in `review-comments-baseline.json`, with the share that repeat. It makes no request. |
 
 By default, `find-long-runs.py` uses `--app software_factory`, `--type work_item`,
 `--top 15`, and `--fetch 0`. `--tickets` takes ticket keys, separated by commas.
@@ -107,6 +109,23 @@ show, so snapshots count fewer waits than occur. The board lists only the 500 mo
 recently updated unresolved work items, and a snapshot sees only those.
 
 The script changes nothing.
+
+## The baseline for lessons
+
+`corrections-baseline.py` and `review-comments-baseline.py` give the numbers that the
+lessons are judged against (DRU-1247). A build is a run of a Software Factory work item
+in the window. A nudge is a `rule.hit` event, and it repeats when an earlier nudge came
+from the same rule. A human correction is a plan gate note or a pull request feedback item
+that triage turned into a change. A person grouped each one by hand in
+`corrections-baseline.json`, and each reviewer comment in `review-comments-baseline.json`,
+so those two files fix the groups and the numbers do not change when the scripts run
+again. A correction or comment repeats when an earlier one has a group in common.
+
+Run both with the same window to compare the builds after the lessons with the builds
+before them: `--since 2026-11-04 --until 2026-11-26` reproduces the baseline (57 builds,
+75 nudges, 16 human corrections, 91 reviewer comments). The grouping is a first pass, so
+regroup before you quote a repeat share as a measurement. New corrections need a new
+entry in the JSON file.
 
 ## Tests
 

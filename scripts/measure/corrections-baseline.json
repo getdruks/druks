@@ -1,0 +1,182 @@
+{
+ "groups": {
+  "one-commit-per-pr": "Squash to one commit per pull request",
+  "ac-contradicted": "The reviewer's design contradicts the plan's acceptance criteria",
+  "no-raw-data-in-telemetry": "Send less in events and traces: no request data, query values, userinfo or secret values",
+  "structure": "Move or rename code into the structure the reviewer wants",
+  "docs-accuracy": "Make the docs say what the code does",
+  "naming": "Rename to the reviewer's naming",
+  "scope-split": "Cut the scope or move part to a follow-up",
+  "hook-enforcement": "Enforce the rule in code, not in the prompt"
+ },
+ "corrections": [
+  {
+   "call": "68a0d170-4615-4519-b32f-9a32f3e4006d",
+   "kind": "triage",
+   "ticket": "DRU-1126",
+   "repo": "getdruks/druks",
+   "at": "2026-11-09T09:51:49.954499Z",
+   "groups": [
+    "one-commit-per-pr"
+   ]
+  },
+  {
+   "call": "b3024810-402e-4ff8-aa7d-9b62c65f0a8c",
+   "kind": "triage",
+   "ticket": "DRU-1130",
+   "repo": "getdruks/druks",
+   "at": "2026-11-10T12:51:48.127124Z",
+   "groups": [
+    "ac-contradicted"
+   ]
+  },
+  {
+   "call": "6f74f621-bc5f-44a7-8a1f-4f79e0155728",
+   "kind": "triage",
+   "ticket": "DRU-1130",
+   "repo": "getdruks/druks",
+   "at": "2026-11-10T13:56:37.048789Z",
+   "groups": [
+    "ac-contradicted"
+   ]
+  },
+  {
+   "call": "349f285c-644c-4744-835a-52d51fcc9d08",
+   "kind": "plan",
+   "ticket": "DRU-1221",
+   "repo": "getdruks/druks",
+   "at": "2026-11-17T13:28:16.007944Z",
+   "groups": [
+    "no-raw-data-in-telemetry"
+   ]
+  },
+  {
+   "call": "8d6a352d-6f96-45f8-a1d3-a11039edf4c8",
+   "kind": "plan",
+   "ticket": "DRU-1228",
+   "repo": "getdruks/druks",
+   "at": "2026-11-18T22:56:32.090891Z",
+   "groups": [
+    "hook-enforcement"
+   ]
+  },
+  {
+   "call": "7e004121-ef59-4ca2-9632-563a5a894003",
+   "kind": "triage",
+   "ticket": "CLO-174",
+   "repo": "getdruks/druks-cloud",
+   "at": "2026-11-19T09:21:00.386475Z",
+   "groups": [
+    "docs-accuracy"
+   ]
+  },
+  {
+   "call": "6849fb65-b54d-4c69-b2c4-33604710e452",
+   "kind": "triage",
+   "ticket": "DRU-1221",
+   "repo": "getdruks/druks",
+   "at": "2026-11-19T09:22:34.579781Z",
+   "groups": [
+    "no-raw-data-in-telemetry"
+   ]
+  },
+  {
+   "call": "28c53469-52a9-475b-a041-f8ecefc862e0",
+   "kind": "plan",
+   "ticket": "DRU-166",
+   "repo": "getdruks/druks",
+   "at": "2026-11-19T11:20:16.386807Z",
+   "groups": [
+    "no-raw-data-in-telemetry",
+    "scope-split"
+   ]
+  },
+  {
+   "call": "c6555cf8-86bd-46a2-b92c-f03b8c76f59d",
+   "kind": "plan",
+   "ticket": "DRU-1227",
+   "repo": "getdruks/druks",
+   "at": "2026-11-20T01:23:52.416285Z",
+   "groups": [
+    "scope-split",
+    "one-commit-per-pr"
+   ]
+  },
+  {
+   "call": "5acc6e68-5772-40a9-8625-6815f78896f8",
+   "kind": "triage",
+   "ticket": "DRU-1221",
+   "repo": "getdruks/druks",
+   "at": "2026-11-20T11:12:55.180014Z",
+   "groups": [
+    "no-raw-data-in-telemetry",
+    "ac-contradicted",
+    "structure"
+   ]
+  },
+  {
+   "call": "146c591e-bad3-4028-94d1-d2a44cba5b06",
+   "kind": "triage",
+   "ticket": "DRU-166",
+   "repo": "getdruks/druks",
+   "at": "2026-11-20T11:15:50.778598Z",
+   "groups": [
+    "no-raw-data-in-telemetry",
+    "structure"
+   ]
+  },
+  {
+   "call": "dcafb77a-679d-4c6e-a60f-b8bf7ebfba29",
+   "kind": "triage",
+   "ticket": "CLO-172",
+   "repo": "getdruks/druks-cloud",
+   "at": "2026-11-20T11:21:15.220687Z",
+   "groups": [
+    "no-raw-data-in-telemetry",
+    "ac-contradicted"
+   ]
+  },
+  {
+   "call": "ecb826a7-6e4f-4376-ac10-a7d2cdeff8b7",
+   "kind": "triage",
+   "ticket": "DRU-1227",
+   "repo": "getdruks/druks",
+   "at": "2026-11-20T11:37:06.351425Z",
+   "groups": [
+    "ac-contradicted"
+   ]
+  },
+  {
+   "call": "3ad3cc35-d439-4306-8ef8-4197f0f7c97c",
+   "kind": "triage",
+   "ticket": "CLO-174",
+   "repo": "getdruks/druks-cloud",
+   "at": "2026-11-22T11:55:38.218890Z",
+   "groups": [
+    "one-commit-per-pr",
+    "docs-accuracy"
+   ]
+  },
+  {
+   "call": "90c4e320-2699-4221-a6a4-2acfef6e809b",
+   "kind": "triage",
+   "ticket": "CLO-174",
+   "repo": "getdruks/druks-cloud",
+   "at": "2026-11-22T20:44:34.981478Z",
+   "groups": [
+    "naming"
+   ]
+  },
+  {
+   "call": "f67f31f1-5873-4095-8120-7e4a01738933",
+   "kind": "triage",
+   "ticket": "CLO-174",
+   "repo": "getdruks/druks-cloud",
+   "at": "2026-11-23T06:37:41.827578Z",
+   "groups": [
+    "ac-contradicted",
+    "structure"
+   ]
+  }
+ ]
+}
