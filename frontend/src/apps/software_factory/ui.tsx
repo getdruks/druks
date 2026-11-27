@@ -1,3 +1,4 @@
+import { AppPage } from '../../druksui/AppPage'
 import { registerAppUI, targetQuery } from '../registry'
 import { SOFTWARE_FACTORY } from './api'
 import { activity } from './activity'
@@ -33,6 +34,10 @@ registerAppUI({
     },
     { path: `/${SOFTWARE_FACTORY}/history`, render: () => <HistoryPage /> },
     { path: `/${SOFTWARE_FACTORY}/projects`, render: () => <ProjectsPage /> },
+    {
+      path: `/${SOFTWARE_FACTORY}/lessons`,
+      render: () => <AppPage app={SOFTWARE_FACTORY} page="lessons" />,
+    },
     {
       path: `/${SOFTWARE_FACTORY}/work-items/:slug/agent-calls/:callId`,
       render: ({ slug, callId }) => {

@@ -42,6 +42,10 @@ and in scope for review even on lines the diff leaves alone.
     beside a model compare) is a copy; delete it
 17. siblings share one shape: when a call gets a new form, write its siblings in
     the same hunk the same way
+18. a local variable read once: pass the expression to the call or the return, and
+    leave the name out. Keep a name for a value that the code reads twice
+19. an import that only an annotation uses: import what the code uses at runtime,
+    or leave the hint off. A real import cycle is the one exception
 
 Process: never pipe a test run that gates a commit — run tests as their own step.
 After any scripted edit, grep that it landed. As the last step before commit,
@@ -54,6 +58,8 @@ files for the tells:
 - `-> … | str` / `| None` used as ok/fail
 - `class X(BaseModel)` with one field
 - `def _helper` used once
+- a `name = expression` whose name the next lines read once
+- an import that no line uses except an annotation
 - a query (`.get(` / `.all(` / `session`) inside a `schemas.py`/DTO method
 
 # Names

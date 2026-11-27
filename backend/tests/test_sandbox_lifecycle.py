@@ -2,7 +2,9 @@ import subprocess
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 from conftest import connect_provider
@@ -216,6 +218,30 @@ async def test_push_writes_every_credential_file():
         ('{"claude": 1}', "/root/.claude/.credentials.json"),
         ('{"codex": 1}', "/root/.codex/auth.json"),
     }
+
+
+async def test_push_clears_a_directory_before_it_writes_into_it():
+    sandbox = _FakeSandbox()
+
+    await creds_module.push(
+        sandbox,  # type: ignore[arg-type]
+        Credentials(home=(HomeFile("work/memory/MEMORY.md", "- a", clears="work/memory"),)),
+    )
+
+    assert sandbox.exec_log == [(["rm", "-rf", "/root/work/memory"], 10.0)]
+    assert sandbox.secrets == [("- a", "/root/work/memory/MEMORY.md")]
+
+
+async def test_a_home_file_with_no_path_only_clears():
+    sandbox = _FakeSandbox()
+
+    await creds_module.push(
+        sandbox,  # type: ignore[arg-type]
+        Credentials(home=(HomeFile("", "", clears="work/memory"),)),
+    )
+
+    assert sandbox.exec_log == [(["rm", "-rf", "/root/work/memory"], 10.0)]
+    assert sandbox.secrets == []
 
 
 async def test_push_copies_a_host_file_under_user_home(tmp_path: Path):
@@ -969,3 +995,64 @@ async def test_set_expiry_forwards_expires_at_to_sdk_renew(
 
     assert api.renewed == [("host-xyz", expires_at)]
     assert api.deleted_ids == []
+
+
+async def test_run_command_passes_the_run_to_drukbox_and_closes_the_api(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    api = SimpleNamespace(run_command=AsyncMock(return_value="the result"), aclose=AsyncMock())
+    monkeypatch.setattr("druks.sandbox.client.Client._api", lambda self: api)
+
+    result = await sandbox_client.run_command(
+        repo_url="https://github.com/acme/app",
+        commit="abc123",
+        command="make test",
+        patch="the patch",
+        timeout_seconds=900,
+        secrets={},
+    )
+
+    assert result == "the result"
+    api.run_command.assert_awaited_once_with(
+        repo_url="https://github.com/acme/app",
+        commit="abc123",
+        command="make test",
+        patch="the patch",
+        timeout_seconds=900,
+        secrets={},
+        template=None,
+        env=None,
+    )
+    api.aclose.assert_awaited_once()
+
+
+async def test_run_command_forwards_the_template_and_env_of_the_box(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    api = SimpleNamespace(run_command=AsyncMock(return_value="the result"), aclose=AsyncMock())
+    monkeypatch.setattr("druks.sandbox.client.Client._api", lambda self: api)
+
+    await sandbox_client.run_command(
+        repo_url="https://github.com/acme/app",
+        commit="abc123",
+        command="make test",
+        patch="",
+        template="template-1",
+        env={"DATABASE_URL": "postgres://localhost/test"},
+    )
+
+    kwargs = api.run_command.await_args.kwargs
+    assert kwargs["template"] == "template-1"
+    assert kwargs["env"] == {"DATABASE_URL": "postgres://localhost/test"}
+
+
+async def test_run_command_closes_the_api_when_drukbox_refuses(monkeypatch: pytest.MonkeyPatch):
+    api = SimpleNamespace(
+        run_command=AsyncMock(side_effect=SandboxProvisioningError("down")), aclose=AsyncMock()
+    )
+    monkeypatch.setattr("druks.sandbox.client.Client._api", lambda self: api)
+
+    with pytest.raises(SandboxProvisioningError):
+        await sandbox_client.run_command(repo_url="u", commit="c", command="x", patch="p")
+
+    api.aclose.assert_awaited_once()

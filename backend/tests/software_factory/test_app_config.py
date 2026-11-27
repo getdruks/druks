@@ -29,10 +29,10 @@ class TestResolveAppConfig:
         """No org-wide .druks tier — one repo, one file, one fetch."""
         calls = _fake_fetch(
             monkeypatch,
-            {(REPO, ".druks/software_factory/config.yml"): "sandbox:\n  image: repo-image\n"},
+            {(REPO, ".druks/software_factory/config.yml"): "on_approval: merge\n"},
         )
         policy = await RepoPolicy.resolve(REPO)
-        assert policy.sandbox.image == "repo-image"
+        assert policy.on_approval == "merge"
         assert calls == [(REPO, ".druks/software_factory/config.yml")]
 
     async def test_unknown_key_fails_loudly(self, monkeypatch):
@@ -41,6 +41,107 @@ class TestResolveAppConfig:
             monkeypatch, {(REPO, ".druks/software_factory/config.yml"): "verficiation: {}\n"}
         )
         with pytest.raises(AppConfigError, match="invalid software_factory config"):
+            await RepoPolicy.resolve(REPO)
+
+    @pytest.mark.parametrize(
+        "setup",
+        [
+            "setup.sh",
+            "/etc/setup.sh",
+            ".druks/software_factory/../setup.sh",
+            ".druks/software_factory/",
+        ],
+    )
+    async def test_a_setup_script_outside_the_config_folder_fails_loudly(self, monkeypatch, setup):
+        """The folder is cleared on a push, so a change to the script rebuilds the template."""
+        _fake_fetch(
+            monkeypatch,
+            {
+                (REPO, ".druks/software_factory/config.yml"): (
+                    f"verification:\n  sandbox:\n    setup: {setup}\n"
+                )
+            },
+        )
+        with pytest.raises(AppConfigError, match="setup must be a path in"):
+            await RepoPolicy.resolve(REPO)
+
+    async def test_a_setup_script_in_the_config_folder_is_read(self, monkeypatch):
+        _fake_fetch(
+            monkeypatch,
+            {
+                (REPO, ".druks/software_factory/config.yml"): (
+                    "verification:\n  sandbox:\n    setup: .druks/software_factory/setup.sh\n"
+                )
+            },
+        )
+        policy = await RepoPolicy.resolve(REPO)
+        assert policy.verification.sandbox.setup == ".druks/software_factory/setup.sh"
+
+    async def test_a_sandbox_names_the_script_that_starts_its_box(self, monkeypatch):
+        _fake_fetch(
+            monkeypatch,
+            {
+                (REPO, ".druks/software_factory/config.yml"): (
+                    "verification:\n  sandbox:\n    setup: .druks/software_factory/setup.sh\n"
+                    "    start: .druks/software_factory/start.sh\n"
+                )
+            },
+        )
+        policy = await RepoPolicy.resolve(REPO)
+        assert policy.verification.sandbox.start == ".druks/software_factory/start.sh"
+
+    @pytest.mark.parametrize(
+        "path", ["start.sh", ".druks/software_factory/../start.sh", ".druks/software_factory/"]
+    )
+    async def test_a_start_script_outside_the_config_folder_fails_loudly(self, monkeypatch, path):
+        _fake_fetch(
+            monkeypatch,
+            {
+                (REPO, ".druks/software_factory/config.yml"): (
+                    "verification:\n  sandbox:\n    setup: .druks/software_factory/setup.sh\n"
+                    f"    start: {path}\n"
+                )
+            },
+        )
+        with pytest.raises(AppConfigError, match="start must be a path in"):
+            await RepoPolicy.resolve(REPO)
+
+    async def test_a_sandbox_with_a_start_script_and_no_setup_fails_loudly(self, monkeypatch):
+        _fake_fetch(
+            monkeypatch,
+            {
+                (REPO, ".druks/software_factory/config.yml"): (
+                    "verification:\n  sandbox:\n    start: .druks/software_factory/start.sh\n"
+                )
+            },
+        )
+        with pytest.raises(AppConfigError, match="start needs a setup script"):
+            await RepoPolicy.resolve(REPO)
+
+    async def test_a_sandbox_with_only_env_fails_loudly(self, monkeypatch):
+        _fake_fetch(
+            monkeypatch,
+            {
+                (REPO, ".druks/software_factory/config.yml"): (
+                    "verification:\n  sandbox:\n    env:\n      DATABASE_URL: postgres://x/y\n"
+                )
+            },
+        )
+        with pytest.raises(AppConfigError, match="env needs a setup script"):
+            await RepoPolicy.resolve(REPO)
+
+    @pytest.mark.parametrize("name", ["1BAD", "has-dash", "with space", "A=B"])
+    async def test_an_env_name_that_is_not_a_variable_name_fails_loudly(self, monkeypatch, name):
+        _fake_fetch(
+            monkeypatch,
+            {
+                (REPO, ".druks/software_factory/config.yml"): (
+                    "verification:\n  sandbox:\n    setup: .druks/software_factory/setup.sh\n"
+                    f'    env:\n      "{name}": "1"\n'
+                )
+            },
+        )
+        with pytest.raises(AppConfigError, match="env names must be valid variable names"):
             await RepoPolicy.resolve(REPO)
 
     async def test_no_file_yields_defaults(self, monkeypatch):
@@ -172,7 +273,7 @@ class TestLoadPolicyAndProfile:
         from druks.contrib.software_factory.models import Project, ProjectRepo
 
         async def _live(cls, repo):
-            return RepoPolicy.model_validate({"sandbox": {"image": "live"}})
+            return RepoPolicy.model_validate({"on_approval": "merge"})
 
         monkeypatch.setattr(RepoPolicy, "resolve", classmethod(_live))
 
@@ -182,7 +283,7 @@ class TestLoadPolicyAndProfile:
         await ProjectRepo.create(project_id=project.id, full_name=REPO)
 
         resolved = await self._flow(repo=REPO)._load_policy_and_profile()
-        assert RepoPolicy.model_validate(resolved["policy"]).sandbox.image == "live"
+        assert RepoPolicy.model_validate(resolved["policy"]).on_approval == "merge"
         assert resolved["profile"] == {}  # registered but not yet profiled
 
 

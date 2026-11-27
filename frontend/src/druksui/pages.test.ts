@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest'
 
 import type { Link } from '../api/types'
-import { hrefForLink } from './pages'
+import { hrefForLink, pageFilterSearch } from './pages'
 
 it('encodes the subject id of a link for an app without its own subject path', () => {
   const link: Link = {
@@ -26,4 +26,10 @@ it('gives a subject link no address outside an app', () => {
   }
   // A review context lent to an app's own frontend has no app pages around it.
   expect(hrefForLink(link, '', [])).toBe('')
+})
+
+it('keeps the filters of a page and drops the run that the shell parked', () => {
+  expect(pageFilterSearch('?run=r1&parkedAt=t1&run_id=r2&status=live')).toBe(
+    'run_id=r2&status=live',
+  )
 })

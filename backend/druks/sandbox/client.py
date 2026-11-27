@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import asyncssh
-from drukbox_sdk import Issuer, SandboxAPI, SandboxHost, Secret
+from drukbox_sdk import Issuer, SandboxAPI, SandboxHost, SandboxRun, Secret
 from drukbox_sdk.exceptions import (
     SandboxAPIError,
     SandboxCapacityError,
@@ -26,6 +26,7 @@ from druks.settings import get_settings
 
 from .constants import (
     SANDBOX_HOST_LEASE_SECONDS,
+    TEMPLATE_CREATE_TIMEOUT_SECONDS,
     WORKFLOW_HOST_LEASE_SECONDS,
     WORKFLOW_HOST_RENEW_SECONDS,
 )
@@ -169,6 +170,36 @@ class Client:
         finally:
             await api.aclose()
 
+    async def run_command(
+        self,
+        *,
+        repo_url: str,
+        commit: str,
+        command: str,
+        patch: str,
+        timeout_seconds: int | None = None,
+        secrets: dict[str, Issuer] | None = None,
+        template: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> SandboxRun:
+        """Run one command on a box that exists only for it: the repo at the commit with
+        the patch on top. ``template`` is the template that the box forks from, and ``env``
+        is set on it at creation. Drukbox deletes the box before it answers."""
+        api = self._api()
+        try:
+            return await api.run_command(
+                repo_url=repo_url,
+                commit=commit,
+                command=command,
+                patch=patch,
+                timeout_seconds=timeout_seconds,
+                secrets=secrets,
+                template=template,
+                env=env,
+            )
+        finally:
+            await api.aclose()
+
     async def list_hosts(self) -> list[SandboxHost]:
         """Every host the control plane has registered, any status."""
         api = self._api()
@@ -180,7 +211,7 @@ class Client:
     async def create_template(
         self, *, setup_script: str, provider: str | None, base_image: str | None, label: str
     ):
-        api = self._api()
+        api = self._api(timeout=TEMPLATE_CREATE_TIMEOUT_SECONDS)
         try:
             return await api.create_template(
                 setup_script=setup_script,
@@ -383,12 +414,12 @@ class Client:
         finally:
             await api.aclose()
 
-    def _api(self) -> SandboxAPI:
+    def _api(self, *, timeout: float | None = None) -> SandboxAPI:
         settings = get_settings()
         return SandboxAPI(
             base_url=settings.sandbox.service_url,
             token=settings.sandbox.service_token.get_secret_value(),
-            timeout=settings.sandbox.timeout,
+            timeout=timeout or settings.sandbox.timeout,
         )
 
 

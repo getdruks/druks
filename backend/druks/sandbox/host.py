@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import dataclasses
 import hashlib
 import json
 import logging
@@ -16,6 +17,7 @@ import asyncssh
 from drukbox_sdk import SandboxHost as SandboxHostRecord
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from druks.core.lessons.datastructures import Vault
 from druks.core.models import uuid7_str
 from druks.core.utils.time import ensure_utc
 from druks.durable.enums import AgentCallStatus
@@ -38,6 +40,7 @@ from .datastructures import (
     AgentResult,
     Credentials,
     HarnessRunResult,
+    HomeFile,
     Hook,
     McpServer,
 )
@@ -294,6 +297,9 @@ class Host:
         extra_env: dict[str, Any] | None = None,
         mcp_servers: tuple[McpServer, ...] = (),
         hooks: dict[str, Hook] | None = None,
+        resumable: bool = False,
+        resume_session: str | None = None,
+        home: tuple[HomeFile, ...] = (),
     ) -> AgentResult:
         """Run ``agent`` with ``harness`` and return a pure ``AgentResult`` —
         no database write. A failure is carried on the result's ``error``, not
@@ -326,6 +332,9 @@ class Host:
                 identity=identity,
                 include_apps=include_apps,
                 hooks=hooks,
+                home=home,
+                resumable=resumable,
+                resume_session=resume_session,
             ),
             agent=agent,
             model=harness.model,
@@ -415,10 +424,20 @@ class Host:
         identity: dict | None = None,
         include_apps: bool = False,
         hooks: dict[str, Hook] | None = None,
+        resumable: bool = False,
+        resume_session: str | None = None,
+        home: tuple[HomeFile, ...] = (),
     ) -> Any:
         """Drive one prompt through ``harness`` on this VM: the harness
-        builds the invocation and parses the result; this sandbox executes it."""
+        builds the invocation and parses the result; this sandbox executes it.
+        ``resume_session`` continues that call's session on this VM, and ``resumable`` lets
+        a later call do so; a harness that cannot resume is never given either."""
         run_id = harness.mint_run_id(call_id)
+        resume = {}
+        if resumable:
+            resume["resumable"] = True
+        if resume_session:
+            resume["resume_session"] = resume_session
         artifact_dir.mkdir(parents=True, exist_ok=True)
         persist_prompt(artifact_dir, call_id=run_id, prompt=prompt)
         persist_manifest(
@@ -441,7 +460,12 @@ class Host:
             include_apps=include_apps,
             timeout=timeout,
             hooks=hooks or (),
+            **resume,
         )
+        if home:
+            invocation = dataclasses.replace(
+                invocation, credentials=Credentials(home=(*invocation.credentials.home, *home))
+            )
         result = await self._start_run(
             invocation,
             run_id=run_id,
@@ -534,6 +558,8 @@ class Host:
             # this run downloads them without the invocation.
             "artifact_filenames": list(invocation.extra_artifact_filenames),
         }
+        if lessons := Vault.list_delivered(invocation.credentials.home):
+            metadata["lessons_delivered"] = lessons
         _write_metadata(local_dir / "metadata.json", metadata)
         return await self._watch_run(
             run,
@@ -616,10 +642,19 @@ class Host:
 
         ended_at = datetime.now(UTC)
         elapsed = (ended_at - started_at).total_seconds()
+        opened = {}
+        if delivered := metadata.get("lessons_delivered"):
+            # A record of the call must never fail the call.
+            with (
+                contextlib.suppress(OSError),
+                (local_dir / "stdout.jsonl").open(errors="replace") as transcript,
+            ):
+                opened["lessons_opened"] = Vault.list_opened(delivered, transcript)
         _write_metadata(
             local_dir / "metadata.json",
             {
                 **metadata,
+                **opened,
                 "ended_at": ended_at.isoformat(),
                 "elapsed_seconds": round(elapsed, 1),
                 "exit_code": returncode,

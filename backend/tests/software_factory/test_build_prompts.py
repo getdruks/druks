@@ -4,9 +4,12 @@ from types import SimpleNamespace
 
 import pytest
 from druks.contrib import software_factory
+from druks.contrib.software_factory.app import SoftwareFactory
 from druks.contrib.software_factory.contracts import (
     CiReport,
+    CommandCheckOutput,
     FindingOutput,
+    ImplementationOutput,
     ReviewReport,
     TriageOutput,
 )
@@ -46,6 +49,8 @@ def _build() -> SimpleNamespace:
         assignee_email=None,
         related_repos=[],
         blockers=[],
+        run_id="run-1",
+        checks=(),
         skills=[
             SimpleNamespace(
                 name="python-house-rules",
@@ -107,6 +112,27 @@ async def test_generate_plan_prompt_prioritizes_operator_note_over_reviewer_crit
     assert "Before deep code reading" not in prompt
 
 
+async def test_generate_plan_prompt_asks_for_a_change_map_from_files_it_opened():
+    prompt = await _generate_plan_prompt()
+
+    assert "End the plan with a `## Change map`" in prompt
+    assert "never from a guess" in prompt
+    assert "never by line range" in " ".join(prompt.split())
+
+
+async def test_implement_prompt_starts_from_the_plans_change_map():
+    prompt = await render_prompt(
+        "software_factory/build/implement.md",
+        build=_build(),
+        verification="VERIFICATION-BLOCK",
+        workspace=_workspace(),
+        can_resume=False,
+    )
+
+    assert "Start from the change map" in prompt
+    assert "say so in `known_risks`" in prompt
+
+
 async def test_generate_plan_prompt_without_reviewer_notes_omits_critique_instructions():
     prompt = await _generate_plan_prompt(operator_note="keep the existing endpoint")
 
@@ -136,10 +162,46 @@ async def test_verification_profile_renders_ci_provenance_per_command():
         "## Verification profile",
         "",
         "**Lint:**",
-        "- `ruff check .` — CI: `Backend / lint`",
+        "- `ruff check .` (CI job `Backend / lint` runs this too)",
         "**Tests:**",
         "- `pytest`",
     ]
+
+
+async def _implement_prompt(**build_fields) -> str:
+    build = _build()
+    for name, value in build_fields.items():
+        setattr(build, name, value)
+    return await render_prompt(
+        "software_factory/build/implement.md",
+        build=build,
+        verification="VERIFICATION-BLOCK",
+        workspace=_workspace(),
+    )
+
+
+async def test_the_implement_prompt_names_the_check_tool_and_the_run_when_checks_are_declared():
+    prompt = await _implement_prompt(run_id="run-42", checks=("make test",))
+
+    assert "`core_run_check`" in prompt
+    assert "`run_id` set to `run-42`" in prompt
+    assert "A command that you narrowed to some files is not a listed command" in prompt
+    # The agent that is told `started` ends its turn, and the result is its next message.
+    assert "or `started`: then end your turn at once" in prompt
+    assert "Your next message holds the result" in prompt
+
+
+def test_the_implementer_can_end_its_turn_for_a_check_and_be_resumed():
+    assert SoftwareFactory.implement.resumable is True
+
+
+async def test_the_implement_prompt_without_declared_checks_never_mentions_the_tool():
+    prompt = await _implement_prompt(checks=())
+
+    assert "core_run_check" not in prompt
+    # The paragraph leaves no blank line behind where it would have been.
+    assert "\n\n\n" not in prompt.split("## Delivering your work")[0].splitlines()[-1]
+    assert "\n\n## Delivering your work" in prompt
 
 
 async def test_implement_prompt_renders_the_prior_review():
@@ -172,6 +234,88 @@ async def test_implement_prompt_renders_the_prior_review():
     assert "### Round 1 — decision: request_changes" in prompt
     assert "Rename the flag." in prompt
     assert "- **high** The flag keeps its old name. (`app/flags.py:12`)" in prompt
+
+
+def _delivery(**overrides) -> ImplementationOutput:
+    fields = dict(
+        type="result",
+        status="success",
+        base_sha="1a2b3c4d",
+        head_sha="5e6f7a8b",
+        commit_sha="5e6f7a8b",
+        pr_number=7,
+        files_changed=["app/flags.py"],
+        acceptance_results=[],
+        checks=[CommandCheckOutput(command="ruff check .", status="pass", exit_code=0, reason="")],
+        known_risks=["The old flag name stays in the changelog."],
+        summary="Renamed the flag.",
+        workspace_path="/home/agent/work/repo",
+        workspace_retention=None,
+    )
+    return ImplementationOutput(**{**fields, **overrides})
+
+
+async def test_implement_prompt_hands_over_the_previous_round():
+    build = _build()
+    build.journal.add(_delivery())
+
+    prompt = await render_prompt(
+        "software_factory/build/implement.md",
+        build=build,
+        verification="VERIFICATION-BLOCK",
+        workspace=_workspace(),
+    )
+
+    assert "## Your previous round" in prompt
+    assert "You delivered `5e6f7a8b` on this branch." in prompt
+    assert "Renamed the flag." in prompt
+    assert "- `app/flags.py`" in prompt
+    assert "- `ruff check .`: pass" in prompt
+    assert "- The old flag name stays in the changelog." in prompt
+    assert (
+        "The branch may have moved since, so run `git log -1` before you rely on this head."
+        in prompt
+    )
+
+
+async def test_the_previous_round_says_none_for_a_delivery_with_no_files():
+    build = _build()
+    build.journal.add(_delivery(files_changed=[]))
+
+    prompt = await render_prompt(
+        "software_factory/build/implement.md",
+        build=build,
+        verification="VERIFICATION-BLOCK",
+        workspace=_workspace(),
+    )
+
+    assert "**Files changed:** none\n" in prompt
+    assert "**Files changed:**\n" not in prompt
+
+
+async def test_implement_prompt_reads_regions_not_whole_files():
+    prompt = await render_prompt(
+        "software_factory/build/implement.md",
+        build=_build(),
+        verification="VERIFICATION-BLOCK",
+        workspace=_workspace(),
+        can_resume=False,
+    )
+
+    flat = " ".join(prompt.split())
+    assert "Read a region with the Read tool and its line range, not a whole file" in flat
+    assert "only when the plan depends on it" in flat
+
+
+async def test_implement_prompt_has_no_previous_round_on_the_first_round():
+    prompt = await render_prompt(
+        "software_factory/build/implement.md",
+        build=_build(),
+        verification="VERIFICATION-BLOCK",
+        workspace=_workspace(),
+    )
+
+    assert "## Your previous round" not in prompt
 
 
 async def test_implement_prompt_puts_red_ci_ahead_of_older_instructions():
@@ -277,3 +421,64 @@ async def test_get_for_repo_raises_when_the_repo_was_transferred(druks_db):
     await ProjectRepo.create(project_id=project.id, full_name="czpython/druks")
     with pytest.raises(FatalError, match="renamed or transferred"):
         await ProjectRepo.get_for_repo("clawhaven/druks", raise_on_missing=True)
+
+
+async def test_the_profiler_drafts_a_setup_script_that_starts_no_service_and_creates_no_data():
+    prompt = await render_prompt(
+        "software_factory/profile/repo_profiler.md",
+        repo="acme/api",
+        workspace=_workspace(),
+        skills_catalog=[],
+    )
+
+    assert "`setup_script_draft`" in prompt
+    # The build keeps the disk and nothing in the script runs when a check starts.
+    assert "never starts a service or a daemon and never creates" in prompt
+    assert "starting it is for the start script that you draft next" in prompt
+
+
+async def test_the_profiler_drafts_a_start_script_that_is_safe_to_run_twice_without_sudo():
+    prompt = await render_prompt(
+        "software_factory/profile/repo_profiler.md",
+        repo="acme/api",
+        workspace=_workspace(),
+        skills_catalog=[],
+    )
+
+    prompt = " ".join(prompt.split())
+    assert "`start_script_draft`" in prompt
+    # It runs before every check, as the unprivileged user that runs the check.
+    assert "safe to run twice" in prompt
+    assert "can have no `sudo`" in prompt
+    assert "does not hold the check" in prompt
+    # The check starts when the script ends, so a service must be ready by then.
+    assert "waits until each service accepts" in prompt
+    # A cold database can take 10 to 15 seconds, so a few seconds would fail a healthy box.
+    assert "gives up after about 30 seconds" in prompt
+    assert "initialise a data directory only when it does not" in prompt
+    # `set -e` must not turn "already there" into a failed check on every run after the first.
+    assert "never a bare `createdb` or `initdb`" in prompt
+    assert "a `mkdir` without `-p`, an `ln -s` without `-f`" in prompt
+    assert "or a start of a service that is already running" in prompt
+    # A wait loop that only breaks ends the script with status 0, so the script must say so.
+    assert "When the loop gives up, the script must exit non-zero" in prompt
+    assert "`exit 1` if it is still down" in prompt
+    # A start script runs only on a box that a setup script built.
+    assert "a repo that needs one also needs a setup script" in prompt
+    # A script that only exits 0 does nothing, and the repo's own committed script wins.
+    assert "never a script that only runs `exit 0` or `true`" in prompt
+    assert "already commits `.druks/software_factory/start.sh`" in prompt
+
+
+async def test_the_profiler_drafts_no_setup_script_that_installs_the_box_runtimes():
+    prompt = await render_prompt(
+        "software_factory/profile/repo_profiler.md",
+        repo="acme/api",
+        workspace=_workspace(),
+        skills_catalog=[],
+    )
+
+    prompt = " ".join(prompt.split())
+    # A pinned `python3.12` package may not exist on the box's package index.
+    assert "Never install Python or Node: the box has both" in prompt
+    assert "already commits `.druks/software_factory/setup.sh`" in prompt

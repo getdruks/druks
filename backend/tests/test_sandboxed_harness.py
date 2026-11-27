@@ -823,7 +823,7 @@ async def test_claude_api_key_stays_on_the_server(
     assert result.status is AgentCallStatus.SUCCEEDED
     assert result.output == {"ok": True}
     [start] = sandbox.calls
-    assert not start.kwargs["extra_env"]
+    assert start.kwargs["extra_env"] == {"CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"}
     assert key not in " ".join(start.kwargs["cmd"])
     assert key not in start.kwargs["stdin_data"].decode()
     bundle = start.kwargs["credentials_bundle"]
@@ -881,7 +881,7 @@ async def test_claude_subscription_token_stays_on_the_server(
     [secret] = config.secret_refs
     assert secret.key == ("anthropic", config.subscription.id, (), "")
     [start] = sandbox.calls
-    assert not start.kwargs["extra_env"]
+    assert start.kwargs["extra_env"] == {"CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"}
     bundle = start.kwargs["credentials_bundle"]
     assert not any(type(entry) is HomeFile for entry in bundle.home)
     for secret in ("oat-live", "rt-secret"):
@@ -889,6 +889,68 @@ async def test_claude_subscription_token_stays_on_the_server(
         assert secret not in start.kwargs["stdin_data"].decode()
         for artifact in (ctx.artifact_dir / "call-9").iterdir():
             assert secret not in artifact.read_text()
+
+
+async def test_a_call_delivers_the_home_files_that_it_is_given(
+    ctx: SimpleNamespace, druks_db, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    await installation_key()
+    await SettingsOverride.set_agent_billing(druks_db, CONFIG_PROBE.id, "api_key")
+    config = await get_config(druks_db, CONFIG_PROBE.id, None)
+    result_event = {
+        "type": "result",
+        "subtype": "success",
+        "structured_output": {"ok": True},
+        "total_cost_usd": 0.01,
+    }
+    read = {
+        "type": "assistant",
+        "message": {
+            "content": [
+                {
+                    "type": "tool_use",
+                    "name": "Read",
+                    "input": {"file_path": "/home/exedev/work/memory/abc.md"},
+                }
+            ]
+        },
+    }
+    run = _FakeRun(
+        stdout_chunks=[
+            json.dumps(read).encode() + b"\n",
+            json.dumps(result_event).encode() + b"\n",
+        ]
+    )
+    sandbox = _fake_sandbox(run)
+    sandbox.run_prompt = functools.partial(Host.run_prompt, sandbox)
+    sandbox._start_run = functools.partial(Host._start_run, sandbox)
+    settings = SimpleNamespace(
+        harness_config_root=tmp_path / "harnesses",
+        skills_dir=tmp_path / "skills",
+    )
+    monkeypatch.setattr("druks.harnesses.claude.get_settings", lambda: settings)
+    vault = (
+        HomeFile("work/memory/MEMORY.md", "- a", clears="work/memory"),
+        HomeFile("work/memory/abc.md", "A."),
+        HomeFile("work/memory/def.md", "D."),
+    )
+
+    await _run_agent(
+        sandbox,
+        config,
+        agent="evaluate",
+        prompt="p",
+        schema={"type": "object"},
+        artifact_dir=ctx.artifact_dir,
+        call_id="call-9",
+        home=vault,
+    )
+
+    [start] = sandbox.calls
+    assert start.kwargs["credentials_bundle"].home[-3:] == vault
+    metadata = json.loads((ctx.artifact_dir / "call-9" / "metadata.json").read_text())
+    assert metadata["lessons_delivered"] == ["abc", "def"]
+    assert metadata["lessons_opened"] == ["abc"]
 
 
 async def test_codex_subscription_token_stays_on_the_server(

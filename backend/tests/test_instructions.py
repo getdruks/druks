@@ -6,8 +6,13 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from conftest import connect_provider, connect_service, installation_key, make_agent_result
-from drukbox_sdk import Secret
-from drukbox_sdk.exceptions import SandboxConflictError, SandboxValidationError
+from drukbox_sdk import SandboxRun, Secret
+from drukbox_sdk.exceptions import (
+    SandboxCapacityError,
+    SandboxConflictError,
+    SandboxUnavailableError,
+    SandboxValidationError,
+)
 from druks import workflows
 from druks.accounts.models import Account
 from druks.agents.models import Agent
@@ -15,6 +20,7 @@ from druks.apps import App
 from druks.browser import BrowserClient, BrowserSession
 from druks.browser.agent_browsers import AgentBrowser
 from druks.chat.service import report_quota_resume, report_quota_wait
+from druks.core.lessons.models import Lesson
 from druks.db import db_session
 from druks.durable import AgentCall, WorkflowError
 from druks.durable.engine import _step_engine
@@ -35,8 +41,10 @@ from druks.harnesses.exceptions import (
     Retry,
 )
 from druks.harnesses.providers import AnthropicProvider
+from druks.redis import get_client as get_redis
+from druks.redis import is_resumable, request_check, take_check_request
 from druks.sandbox.client import sandbox_client
-from druks.sandbox.datastructures import McpServer
+from druks.sandbox.datastructures import HomeFile, McpServer
 from druks.sandbox.exceptions import SandboxDownloadError
 from druks.sandbox.host import Host
 from druks.sandbox.models import SandboxIdentity, SecretRef
@@ -52,6 +60,7 @@ from druks.user_settings.models import SettingsOverride
 from druks.workspaces import Workspace
 from druks_field_notes.workflows import Summarize
 from pydantic import BaseModel, SecretStr
+from redis.exceptions import ConnectionError as RedisConnectionError
 from sqlalchemy import select
 
 
@@ -71,6 +80,9 @@ class Probes(App):
     name = "agent_probes"
     dummy = workflows.Instruction(prompt="dummy/agent.md", contract=DummyOutput)
     file = workflows.Instruction(prompt="dummy/agent.md", contract=FileOutput)
+    resumable_probe = workflows.Instruction(
+        prompt="dummy/agent.md", contract=DummyOutput, resumable=True
+    )
     browser_probe = workflows.Instruction(
         prompt="dummy/agent.md",
         contract=DummyOutput,
@@ -81,6 +93,7 @@ class Probes(App):
 
 DUMMY_INSTRUCTION = Probes.dummy
 FILE_INSTRUCTION = Probes.file
+RESUMABLE_INSTRUCTION = Probes.resumable_probe
 BROWSER_INSTRUCTION = Probes.browser_probe
 
 
@@ -384,6 +397,41 @@ async def test_a_call_without_an_agent_gets_every_enabled_skill(
 
     _, manifest = sandbox.run_agent.await_args.args
     assert manifest.skills == ("alpha",)
+
+
+async def test_a_call_reads_the_lessons_of_the_installation(
+    druks_db, tmp_path, monkeypatch, current_run
+):
+    account = await Account.get_or_create(druks_db, "owner@example.com")
+    lesson = await Lesson.accept(druks_db, text="Say why, never what.", account=account)
+    sandbox = _patch_runtime(monkeypatch, tmp_path, {"ok": True})
+    _patch_ephemeral(monkeypatch, sandbox)
+
+    await DUMMY_INSTRUCTION._run(workflow_id="wf-9", repo="acme/widget")
+
+    kwargs = sandbox.run_agent.await_args.kwargs
+    index = f"- Say why, never what. — {lesson.id}.md"
+    assert kwargs["home"] == (
+        HomeFile("work/memory/MEMORY.md", index, clears="work/memory"),
+        HomeFile(f"work/memory/{lesson.id}.md", "Say why, never what."),
+    )
+    assert kwargs["prompt"].startswith("People at this installation taught the lessons below")
+    assert "read the lesson files in ~/work/memory" in kwargs["prompt"]
+    assert index in kwargs["prompt"]
+    assert kwargs["prompt"].endswith("PROMPT:dummy/agent.md:repo=acme/widget")
+
+
+async def test_a_call_of_an_installation_with_no_lesson_changes_nothing(
+    druks_db, tmp_path, monkeypatch, current_run
+):
+    sandbox = _patch_runtime(monkeypatch, tmp_path, {"ok": True})
+    _patch_ephemeral(monkeypatch, sandbox)
+
+    await DUMMY_INSTRUCTION._run(workflow_id="wf-9", repo="acme/widget")
+
+    kwargs = sandbox.run_agent.await_args.kwargs
+    assert kwargs["home"] == ()
+    assert kwargs["prompt"] == "PROMPT:dummy/agent.md:repo=acme/widget"
 
 
 async def test_declared_plugin_choice_is_forwarded(druks_db, tmp_path, monkeypatch, current_run):
@@ -1538,3 +1586,407 @@ async def test_event_requires_an_artifact(druks_db, tmp_path, monkeypatch, curre
         await DUMMY_INSTRUCTION._run(workflow_id="wf-9")
 
     assert (await AgentCall.list_for_run(db_session(), "wf-9"))[0].status == "failed"
+
+
+def _session_result(cost_usd, output_tokens):
+    # Claude Code reports a resumed session's totals since the session began.
+    total = {"cost_usd": cost_usd, "output_tokens": output_tokens}
+    return make_agent_result(
+        {"ok": True},
+        agent=RESUMABLE_INSTRUCTION.id,
+        cost_usd=cost_usd,
+        cost_metadata={"output_tokens": output_tokens, "session_total": total},
+    )
+
+
+async def test_a_resumed_call_continues_the_last_session_on_its_box(
+    druks_db, druks_redis, tmp_path, monkeypatch, current_run
+):
+    agent = RESUMABLE_INSTRUCTION
+    sandbox = _patch_runtime(monkeypatch, tmp_path, {"ok": True})
+    sandbox.run_agent = AsyncMock(side_effect=[_session_result(1.0, 10), _session_result(1.5, 25)])
+    _patch_ephemeral(monkeypatch, sandbox)
+    seen = []
+
+    async def run_the_check(*, workspace):
+        seen.append(workspace.host_id)
+        return "Druks ran it."
+
+    await agent._run(workflow_id="wf-9")
+    await agent._run(workflow_id="wf-9", resume=run_the_check)
+
+    first_kwargs, second_kwargs = [call.kwargs for call in sandbox.run_agent.await_args_list]
+    # A test's rows share one transaction time, so the calls are found by their ids.
+    calls = {call.id: call for call in await AgentCall.list_for_run(db_session(), "wf-9")}
+    first, second = calls[first_kwargs["call_id"]], calls[second_kwargs["call_id"]]
+    assert first_kwargs["resumable"] is True
+    assert "resume_session" not in first_kwargs
+    assert second_kwargs["resume_session"] == first.id
+    assert second_kwargs["prompt"] == "Druks ran it."
+    assert seen == ["host-test"]
+    # Each call records its own cost once.
+    assert (first.cost_usd, second.cost_usd) == (1.0, 0.5)
+    assert second.cost_metadata["output_tokens"] == 15
+
+
+async def test_a_call_resumes_only_an_agent_that_declares_it(
+    druks_db, druks_redis, tmp_path, monkeypatch, current_run
+):
+    sandbox = _patch_runtime(monkeypatch, tmp_path, {"ok": True})
+    _patch_ephemeral(monkeypatch, sandbox)
+
+    async def run_the_check(*, workspace):
+        raise AssertionError("nothing to run")
+
+    with pytest.raises(WorkflowError, match="cannot resume"):
+        await DUMMY_INSTRUCTION._run(workflow_id="wf-9", resume=run_the_check)
+
+
+async def test_a_resume_with_no_finished_call_starts_over_with_the_full_prompt(
+    druks_db, druks_redis, tmp_path, monkeypatch, current_run
+):
+    sandbox = _patch_runtime(monkeypatch, tmp_path, {"ok": True})
+    _patch_ephemeral(monkeypatch, sandbox)
+
+    async def run_the_check(*, workspace):
+        raise AssertionError("there is no session to continue")
+
+    await RESUMABLE_INSTRUCTION._run(workflow_id="wf-9", resume=run_the_check)
+
+    kwargs = sandbox.run_agent.await_args.kwargs
+    assert kwargs["prompt"] == "PROMPT:dummy/agent.md:repo=None"
+    assert "resume_session" not in kwargs
+
+
+async def test_a_resume_on_a_harness_that_cannot_resume_starts_over_with_the_full_prompt(
+    druks_db, druks_redis, tmp_path, monkeypatch, current_run
+):
+    sandbox = _patch_runtime(monkeypatch, tmp_path, {"ok": True})
+    _patch_ephemeral(monkeypatch, sandbox)
+    await RESUMABLE_INSTRUCTION._run(workflow_id="wf-9")
+    monkeypatch.setattr(ClaudeHarness, "can_resume", False)
+
+    async def run_the_check(*, workspace):
+        raise AssertionError("this harness has no session to continue")
+
+    await RESUMABLE_INSTRUCTION._run(workflow_id="wf-9", resume=run_the_check)
+
+    kwargs = sandbox.run_agent.await_args.kwargs
+    assert kwargs["prompt"] == "PROMPT:dummy/agent.md:repo=None"
+    assert "resume_session" not in kwargs
+    assert "resumable" not in kwargs
+
+
+async def test_a_resume_of_a_call_with_no_session_totals_starts_over_with_the_full_prompt(
+    druks_db, druks_redis, tmp_path, monkeypatch, current_run
+):
+    sandbox = _patch_runtime(monkeypatch, tmp_path, {"ok": True})
+    _patch_ephemeral(monkeypatch, sandbox)
+    # The call was recorded before the totals were kept: its cost metadata has none.
+    await RESUMABLE_INSTRUCTION._run(workflow_id="wf-9")
+
+    async def run_the_check(*, workspace):
+        raise AssertionError("the cost of a resumed call could not be told from this one")
+
+    await RESUMABLE_INSTRUCTION._run(workflow_id="wf-9", resume=run_the_check)
+
+    kwargs = sandbox.run_agent.await_args.kwargs
+    assert kwargs["prompt"] == "PROMPT:dummy/agent.md:repo=None"
+    assert "resume_session" not in kwargs
+
+
+async def test_a_resume_on_another_box_starts_over_with_the_full_prompt(
+    druks_db, druks_redis, tmp_path, monkeypatch, current_run
+):
+    agent = RESUMABLE_INSTRUCTION
+    sandbox = _patch_runtime(monkeypatch, tmp_path, {"ok": True})
+    sandbox.run_agent = AsyncMock(return_value=_session_result(1.0, 10))
+    _patch_ephemeral(monkeypatch, sandbox)
+    await agent._run(workflow_id="wf-9")
+    # A long wait released the first box, so the retry lands on another one.
+    other = _patch_runtime(monkeypatch, tmp_path, {"ok": True})
+    other.record.id = "host-other"
+    other.run_agent = AsyncMock(return_value=_session_result(2.0, 30))
+    _patch_ephemeral(monkeypatch, other)
+
+    async def run_the_check(*, workspace):
+        raise AssertionError("the session is not on this box")
+
+    await agent._run(workflow_id="wf-9", resume=run_the_check)
+
+    kwargs = other.run_agent.await_args.kwargs
+    assert kwargs["prompt"] == "PROMPT:dummy/agent.md:repo=None"
+    assert "resume_session" not in kwargs
+    # Nothing was resumed, so the call keeps the whole cost it reports.
+    calls = {call.id: call for call in await AgentCall.list_for_run(db_session(), "wf-9")}
+    assert calls[kwargs["call_id"]].cost_usd == 2.0
+
+
+CHECK = "make test"
+
+
+async def test_a_call_that_redis_cannot_mark_resumable_is_failed_and_not_left_running(
+    druks_db, druks_redis, tmp_path, monkeypatch, current_run
+):
+    resumable = declare(prompt="dummy/agent.md", contract=DummyOutput, resumable=True)
+    sandbox = _patch_runtime(monkeypatch, tmp_path, {"ok": True})
+    _patch_ephemeral(monkeypatch, sandbox)
+    monkeypatch.setattr(
+        workflows, "set_resumable", AsyncMock(side_effect=ConnectionError("redis timed out"))
+    )
+
+    with pytest.raises(ConnectionError, match="redis timed out"):
+        await resumable._run(workflow_id="wf-9")
+
+    [call] = await AgentCall.list_for_run(db_session(), "wf-9")
+    assert call.status == "failed"
+    assert "redis timed out" in call.last_error
+
+
+async def test_a_call_that_finished_is_closed_when_redis_cannot_clear_its_mark(
+    druks_db, druks_redis, tmp_path, monkeypatch, current_run
+):
+    resumable = declare(prompt="dummy/agent.md", contract=DummyOutput, resumable=True)
+    sandbox = _patch_runtime(monkeypatch, tmp_path, {"ok": True})
+    _patch_ephemeral(monkeypatch, sandbox)
+    run_agent = sandbox.run_agent
+
+    async def redis_goes_away_during_the_call(*args, **kwargs):
+        async def refuse(*keys):
+            raise RedisConnectionError("redis timed out")
+
+        monkeypatch.setattr(get_redis(), "delete", refuse)
+        return await run_agent(*args, **kwargs)
+
+    sandbox.run_agent = redis_goes_away_during_the_call
+
+    output = await resumable._run(workflow_id="wf-9")
+
+    assert output.ok is True
+    [call] = await AgentCall.list_for_run(db_session(), "wf-9")
+    assert call.status == "succeeded"
+
+
+async def test_a_next_part_that_cannot_start_keeps_its_own_error(
+    druks_db, druks_redis, tmp_path, monkeypatch, current_run
+):
+    resumable = declare(prompt="dummy/agent.md", contract=DummyOutput, resumable=True)
+    sandbox = _patch_runtime(monkeypatch, tmp_path, {"ok": True})
+    _patch_ephemeral(monkeypatch, sandbox)
+    _ends_its_turn_for_a_check(sandbox, resumable, results=[{"ok": False}, {"ok": True}])
+
+    async def run_check(self, session, **kwargs):
+        return SandboxRun(exit_code=0, timed_out=False, output="ok\n", duration_seconds=1.0)
+
+    monkeypatch.setattr(Workspace, "run_check", run_check, raising=False)
+    start = AgentCall.start
+    started = []
+
+    async def start_once(*args, **kwargs):
+        if started:
+            raise RuntimeError("the database is gone")
+        started.append(kwargs["call_id"])
+        await start(*args, **kwargs)
+
+    monkeypatch.setattr(AgentCall, "start", start_once)
+
+    with pytest.raises(RuntimeError, match="the database is gone"):
+        await resumable._run(workflow_id="wf-9")
+
+    [call] = await AgentCall.list_for_run(db_session(), "wf-9")
+    assert call.status == "succeeded"
+
+
+async def test_a_call_runs_at_a_lower_effort_than_the_setting_and_never_a_higher_one(
+    druks_db, tmp_path, monkeypatch, current_run
+):
+    sandbox = _patch_runtime(monkeypatch, tmp_path, {"ok": True})
+    _patch_ephemeral(monkeypatch, sandbox)
+    configured = (await get_config(druks_db, DUMMY_INSTRUCTION.id, None)).effort
+
+    await DUMMY_INSTRUCTION._run(workflow_id="wf-9", effort="low")
+    await DUMMY_INSTRUCTION._run(workflow_id="wf-9", effort="max")
+
+    lower, higher = [call.args[0].effort for call in sandbox.run_agent.await_args_list]
+    assert lower == "low"
+    assert higher == configured
+
+
+def _ends_its_turn_for_a_check(sandbox, instruction, *, results):
+    """The agent's first part asks for a check, as the tool does, and ends its turn. Each part
+    after it answers with the next of ``results``. Returns what each part was called with, and
+    whether the call was marked as one that can resume while the first part ran."""
+    seen = {"calls": [], "marked": []}
+
+    async def run_agent(_harness, _manifest, **kwargs):
+        seen["calls"].append(kwargs)
+        if len(seen["calls"]) == 1:
+            seen["marked"].append(await is_resumable("wf-9"))
+            assert await request_check("wf-9", command=CHECK, timeout_seconds=30)
+        # A resumed session reports the totals since it began.
+        total = 0.5 if len(seen["calls"]) == 1 else 0.8
+        return make_agent_result(
+            results[len(seen["calls"]) - 1],
+            agent=instruction.id,
+            cost_usd=total,
+            cost_metadata={"input_tokens": 100 * len(seen["calls"])},
+        )
+
+    sandbox.run_agent = run_agent
+    return seen
+
+
+async def test_an_agent_that_ends_its_turn_for_a_check_continues_with_the_result(
+    druks_db, druks_redis, tmp_path, monkeypatch, current_run
+):
+    resumable = declare(prompt="dummy/agent.md", contract=DummyOutput, resumable=True)
+    sandbox = _patch_runtime(monkeypatch, tmp_path, {"ok": True})
+    _patch_ephemeral(monkeypatch, sandbox)
+    seen = _ends_its_turn_for_a_check(sandbox, resumable, results=[{"ok": False}, {"ok": True}])
+    checks = []
+
+    async def run_check(self, session, **kwargs):
+        checks.append(kwargs)
+        return SandboxRun(exit_code=1, timed_out=False, output="boom\n", duration_seconds=3.0)
+
+    monkeypatch.setattr(Workspace, "run_check", run_check, raising=False)
+
+    output = await resumable._run(workflow_id="wf-9")
+
+    # Only the last part's answer is the call's output: the first part's was a wait.
+    assert output.ok is True
+    assert checks == [
+        {
+            "run_id": "wf-9",
+            "account_id": current_run.account_id,
+            "command": CHECK,
+            "timeout_seconds": 30,
+        }
+    ]
+    first, second = seen["calls"]
+    assert first["resumable"] is True
+    assert "resume_session" not in first
+    assert (second["resumable"], second["resume_session"]) == (True, first["call_id"])
+    assert "exit code 1" in second["prompt"]
+    assert "boom" in second["prompt"]
+    assert seen["marked"] == [True]
+    assert not await is_resumable("wf-9")
+    assert await take_check_request("wf-9") is None
+    calls = await AgentCall.list_for_run(db_session(), "wf-9")
+    assert [call.status for call in calls] == ["succeeded", "succeeded"]
+    assert {call.id for call in calls} == {first["call_id"], second["call_id"]}
+    # Each part records its own cost once.
+    assert sorted(round(call.cost_usd, 6) for call in calls) == [0.3, 0.5]
+
+
+async def test_a_check_that_could_not_run_tells_the_agent_why(
+    druks_db, druks_redis, tmp_path, monkeypatch, current_run
+):
+    resumable = declare(prompt="dummy/agent.md", contract=DummyOutput, resumable=True)
+    sandbox = _patch_runtime(monkeypatch, tmp_path, {"ok": True})
+    _patch_ephemeral(monkeypatch, sandbox)
+    seen = _ends_its_turn_for_a_check(sandbox, resumable, results=[{"ok": False}, {"ok": True}])
+
+    async def run_check(self, session, **kwargs):
+        raise SandboxValidationError("the patch does not apply")
+
+    monkeypatch.setattr(Workspace, "run_check", run_check, raising=False)
+
+    await resumable._run(workflow_id="wf-9")
+
+    assert "did not run: the patch does not apply" in seen["calls"][1]["prompt"]
+
+
+@pytest.mark.parametrize(
+    ("error", "said"),
+    [
+        (SandboxUnavailableError("drukbox is down"), "did not run: drukbox is down"),
+        (SandboxCapacityError("no host is free", 30), "did not run: no host is free"),
+    ],
+)
+async def test_a_drukbox_that_is_down_or_full_tells_the_agent_and_fails_no_call(
+    druks_db, druks_redis, tmp_path, monkeypatch, current_run, error, said
+):
+    resumable = declare(prompt="dummy/agent.md", contract=DummyOutput, resumable=True)
+    sandbox = _patch_runtime(monkeypatch, tmp_path, {"ok": True})
+    _patch_ephemeral(monkeypatch, sandbox)
+    seen = _ends_its_turn_for_a_check(sandbox, resumable, results=[{"ok": False}, {"ok": True}])
+
+    async def run_check(self, session, **kwargs):
+        raise error
+
+    monkeypatch.setattr(Workspace, "run_check", run_check, raising=False)
+
+    await resumable._run(workflow_id="wf-9")
+
+    assert said in seen["calls"][1]["prompt"]
+    calls = await AgentCall.list_for_run(db_session(), "wf-9")
+    assert [call.status for call in calls] == ["succeeded", "succeeded"]
+
+
+async def test_a_check_that_breaks_leaves_the_finished_part_succeeded(
+    druks_db, druks_redis, tmp_path, monkeypatch, current_run
+):
+    resumable = declare(prompt="dummy/agent.md", contract=DummyOutput, resumable=True)
+    sandbox = _patch_runtime(monkeypatch, tmp_path, {"ok": True})
+    _patch_ephemeral(monkeypatch, sandbox)
+    seen = _ends_its_turn_for_a_check(sandbox, resumable, results=[{"ok": False}])
+
+    async def run_check(self, session, **kwargs):
+        raise RuntimeError("the database went away")
+
+    monkeypatch.setattr(Workspace, "run_check", run_check, raising=False)
+
+    with pytest.raises(RuntimeError, match="the database went away"):
+        await resumable._run(workflow_id="wf-9")
+
+    [call] = await AgentCall.list_for_run(db_session(), "wf-9")
+    assert call.id == seen["calls"][0]["call_id"]
+    assert call.status == "succeeded"
+
+
+async def test_the_run_shows_the_check_while_it_runs(
+    druks_db, druks_redis, tmp_path, monkeypatch, current_run
+):
+    resumable = declare(prompt="dummy/agent.md", contract=DummyOutput, resumable=True)
+    sandbox = _patch_runtime(monkeypatch, tmp_path, {"ok": True})
+    _patch_ephemeral(monkeypatch, sandbox)
+    _ends_its_turn_for_a_check(sandbox, resumable, results=[{"ok": False}, {"ok": True}])
+    phases = []
+
+    async def set_phase(phase, **_kwargs):
+        phases.append(phase)
+
+    async def run_check(self, session, **kwargs):
+        phases.append("check ran")
+        return SandboxRun(exit_code=0, timed_out=False, output="", duration_seconds=1.0)
+
+    monkeypatch.setattr(workflows, "set_run_phase", set_phase)
+    monkeypatch.setattr(Workspace, "run_check", run_check, raising=False)
+
+    await resumable._run(workflow_id="wf-9")
+
+    assert phases[-4:] == ["agent_running", "running_check", "check ran", "agent_running"]
+
+
+@pytest.mark.parametrize("declared", ["not resumable", "harness cannot resume"])
+async def test_a_call_that_cannot_resume_runs_once_and_marks_nothing(
+    druks_db, druks_redis, tmp_path, monkeypatch, current_run, declared
+):
+    resumable = declare(
+        prompt="dummy/agent.md", contract=DummyOutput, resumable=declared != "not resumable"
+    )
+    if declared == "harness cannot resume":
+        monkeypatch.setattr(ClaudeHarness, "can_resume", False)
+    sandbox = _patch_runtime(monkeypatch, tmp_path, {"ok": True})
+    _patch_ephemeral(monkeypatch, sandbox)
+    seen = _ends_its_turn_for_a_check(sandbox, resumable, results=[{"ok": True}])
+    # Without the marker the tool blocks, so no request exists in a real run. This one is
+    # left behind by the fake agent, to show that the call does not read it.
+
+    output = await resumable._run(workflow_id="wf-9")
+
+    assert output.ok is True
+    assert len(seen["calls"]) == 1
+    assert "resumable" not in seen["calls"][0]
+    assert seen["marked"] == [False]

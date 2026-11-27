@@ -666,9 +666,117 @@ reviewer approves the pull request:
 | `none` | Default. Druks marks the pull request ready for review and ends the build. The repository's own process merges it. Druks records the merge when GitHub announces it. |
 | `merge` | Druks squash-merges the pull request, or arms auto-merge when checks still run. |
 
-After each push, the build waits for CI on the head before the review, and red
-CI returns the work to the implementer. The pull request leaves draft when the review of
-a head with green CI requests no changes, or when a person approves it.
+After each push, the build waits for CI on the head before the review. When CI is
+red, Druks reruns each failed Actions run once and waits for CI again. CI that is
+still red goes back to the implementer, and so does a red that has no Actions run
+to rerun, such as `druks-house-rules`. When the implementer runs on Claude, the red
+round resumes its session with the red-CI rules, in the checkout as the agent left
+it. The build keeps the implementer's box while it waits for CI, so a build holds that
+box for the length of the wait. On another harness, or when the box is gone, the round
+starts a new call with the full prompt. When a new head is red with the same failure
+as the head before it, the build sends no more red rounds back to the implementer and
+no review revision either: the pull request goes to a person. The failure is the
+failed Actions jobs and the lines of their logs that report a failed test or an error,
+without their times. The fingerprint reads the failure lines that a test runner, a linter, a compiler or a script writes (a line that begins with `FAILED`, `FAIL:`, `ERROR`, `Error:` or `error`, pytest's assertion lines, and a diagnostic with a file, a line and a column), so a failed job whose log has none, such as a failed install step that prints only a generic exit code, is left out of it. The hash covers the last 200 of those lines and how many there were, so a head that fixes some of a long list of findings is not a repeat. A red with no failure line to read never counts as a repeat, and the pull request parks with a note that says that a repeat stopped the rounds. The
+pull request leaves draft when the review of a head with green CI requests no changes,
+or when a person approves it.
+
+A build's agent can run one of the repository's test commands in full with the
+`core_run_check` tool. The commands come from the repository's verification profile:
+the ones the profiler found, or the `verification` test commands that `config.yml`
+pins. The tool takes the id of the build's run and one command, written as the
+profile lists it, and refuses any other command. A repository with a sandbox template
+runs the command on a separate box that has the repository at the commit where the
+agent's checkout left the default branch, with the agent's uncommitted and untracked
+changes on top, and drukbox deletes it when the command ends. A repository with no
+template runs it in the agent's own checkout. The implementer ends its turn when it starts a check, and
+Druks sends it the result as its next message, in the same session. The call keeps
+the model's prompt cache for an hour. A harness that cannot resume, such as Codex,
+waits for the result inside its turn. A build holds the tool for
+every tracker. When Druks has no address for a box to reach it (`urls.mcp_url`,
+`urls.webhook_host` or `urls.endpoint`), a build whose tracker is not the Druks
+board declares no commands, and runs as before.
+
+A repository can also set the commands that the agent runs to check its work, in
+a `verification:` block:
+
+```yaml
+verification:
+  test_commands: ["make test"]
+  lint_commands: []
+```
+
+The repository profiler detects the lint, typecheck, and test commands of a
+repository. A list that `verification:` writes replaces the detected list, even
+an empty one. A list that it leaves out stays as detected. A command that the
+block writes keeps the CI check that the profiler found for it. A key that
+`config.yml` does not know fails the build with an error that names it.
+
+A repository can also describe the computer that its checks run on:
+
+```yaml
+verification:
+  sandbox:
+    setup: .druks/software_factory/setup.sh
+    start: .druks/software_factory/start.sh
+    env:
+      DATABASE_URL: postgres://localhost/test
+```
+
+The profiler drafts such a script when a verification command needs a tool that the
+default box lacks, and the repository's page shows the draft with a button to copy
+it. It also drafts a start script, for the services and the dependency sync that each
+check needs, and the page shows that below it. Druks never runs a draft: a person reads
+it, commits it, and sets `setup` or `start`.
+
+The script is a path in `.druks/software_factory/`, and Druks reads it from the
+default branch, so a pull request cannot change the sandbox that its own checks
+run on. When the repository profiler runs, Druks asks drukbox for a template
+built from the script, with the lockfiles at the root of the repository
+(`uv.lock`, `package-lock.json`, and the like) added to its key. The profile
+shows the template as `sandbox_template`, and the run shows `sandbox_building`
+while drukbox builds it. Drukbox builds a given script once. When a build fails,
+Druks keeps the last good template and logs the reason. A push to
+`.druks/software_factory/` on the default branch runs the profiler again. A push
+that changes only a lockfile does not, so a new lockfile reaches the template at
+the next profile.
+
+The box that runs a check with `core_run_check` is made from that template, with
+the `env` set on it when the box is created. `env` and `start` need `setup`, and a
+config that sets either alone fails the build with an error that names it. A template
+is built once and keeps its disk, so nothing that `setup` starts is running when a
+check begins. The `start` script is for that: a path in `.druks/software_factory/`,
+read from the default branch like `setup`, that runs on the check box before each
+check. Put in it what a boot needs, such as the services that the tests use and a
+dependency sync. It runs as the user that runs the check, which can have no `sudo`, so
+it starts services in that user's own directory. It runs before every check, so it must
+be safe to run twice. A script that succeeds shows the last 20 lines of its output, and at most 2,000
+characters, ahead of the output of the check, so a long log of installs, or a progress bar
+on one line, does not push the check's own output out of what the service keeps. It has its own time, half of the check's up to 300
+seconds, so a start that never ends cannot use the whole budget. A service that it leaves
+running does not hold the check. A script that fails ends the check with its own exit
+code, the last 6,000 characters of its output, and the line "The start script of the check box failed with exit
+code N", and the command does not run. One that outlives its time ends the check with
+exit code 124 and the line "The start script of the check box timed out after N seconds".
+A script that exits 124 sooner than that is a failure like any other. The profiler
+fails when the file is missing from the default branch. A repository with no
+template has no check box, because the default image holds none of the repository's
+tools: its checks run in the agent's own checkout, on the agent's box, which already
+has them. The agent still ends its turn and gets the result in the same session. The
+command runs in the checkout as the agent left it, uncommitted work included, as the
+agent's user, with the agent's environment: a command that prints its environment shows
+it to the agent. A command that outlives its timeout is stopped on the box with the
+processes that it started, except one that it detached into a session of its own,
+which stays. A repository that sets `setup` has no template until the profiler has
+built it, and until then its checks run on the agent's own box without the `env` and
+without the `start` script: Druks logs a warning each time. A check
+on the check box that still exits with 127, for a tool that `setup` did not install,
+comes back with a sentence that says the box is the likely cause. A name
+in `env` must be a valid variable name. The values come from
+`config.yml`, a file of the repository, so they are not secrets: a secret reaches a
+box through the vault. Druks reads `env` from the default branch, like `setup`. The
+size of the sandbox is not read, and a `verification.sandbox` key other than `setup`,
+`start` and `env` fails the build with an error that names it.
 
 When Druks receives a push to the default branch that changes `config.yml`, the
 next build uses the new file. When a team lists Software Factory, this happens
@@ -1140,6 +1248,11 @@ Pi do not read it.
 
 The default harness, model, billing, effort, and timeout live in **Settings →
 Instructions**. Each instruction can override each of them on its app's page.
+Software Factory's planner sizes each change as small, medium or large. A small or
+medium change runs its implement call at `high` effort, and a large one at the
+effort in Settings. The setting is the ceiling: a build never runs above it, so an
+instruction set to `medium` stays at `medium`.
+
 **Unattended runs use** names the default account.
 
 Shared execution settings select subscription or API key billing. Subscription
@@ -1412,6 +1525,29 @@ the agent's sandbox. An agent on OpenCode gets none. Druks removes from the
 sandbox each skill that it copied earlier and that the agent no longer gets. A skill
 that an admin removed from Druks is one of them. A chat without an agent gets no
 skills.
+
+## Lessons
+
+A person turns a correction at a gate into a lesson on the
+[Lessons page](approvals.md#keep-a-correction-as-a-lesson) of Software Factory.
+Each agent call then reads the accepted lessons. There is no setting for this.
+
+Before a call starts, Druks writes the lessons into the call's sandbox at
+`~/work/memory`. `MEMORY.md` has one line for each lesson, and each lesson has a
+file of its own. Druks removes `~/work/memory` first, so a lesson that a person
+retired is gone on the next call, also on a sandbox that served an earlier
+call. The repo's clone is at `~/work/repo` and is not touched. The prompt opens
+with a note that carries the index and tells the agent to read the lessons that
+apply to its task. The agent does not change them. An installation with no
+lesson gets no note and no file.
+
+Claude Code's own memory is off in these calls, so the lessons are the one
+memory in the sandbox.
+
+`metadata.json` of each call lists the lessons that the call received
+(`lessons_delivered`) and the ones that its transcript opened
+(`lessons_opened`). The prompt carries the first line of each lesson, so a
+lesson that was received and not opened reached the agent as that line only.
 
 ## Credential custody and secrets at rest
 

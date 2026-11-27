@@ -66,6 +66,14 @@ def test_extract_claude_cost_sums_the_tokens_of_every_model():
         "cache_read_input_tokens": 300,
         "model": "claude-opus-4-7",
         "duration_ms": 12345,
+        # The session's totals, for a call that resumes it to take off.
+        "session_total": {
+            "input_tokens": 1520,
+            "output_tokens": 605,
+            "cache_creation_input_tokens": 100,
+            "cache_read_input_tokens": 300,
+            "cost_usd": 0.0423,
+        },
     }
 
 
@@ -111,6 +119,13 @@ def test_failed_claude_call_writes_cost_before_raising(tmp_path: Path):
         "output_tokens": 20,
         "cache_creation_input_tokens": 30,
         "cache_read_input_tokens": 400,
+        "session_total": {
+            "input_tokens": 100,
+            "output_tokens": 20,
+            "cache_creation_input_tokens": 30,
+            "cache_read_input_tokens": 400,
+            "cost_usd": 190.25,
+        },
     }
 
 
@@ -149,6 +164,13 @@ def test_killed_claude_call_records_the_cost_state_of_its_transcript(tmp_path: P
             "output_tokens": 188,
             "cache_creation_input_tokens": 10258,
             "cache_read_input_tokens": 11873,
+            "session_total": {
+                "input_tokens": 1215,
+                "output_tokens": 188,
+                "cache_creation_input_tokens": 10258,
+                "cache_read_input_tokens": 11873,
+                "cost_usd": 0.0024,
+            },
         },
     )
 

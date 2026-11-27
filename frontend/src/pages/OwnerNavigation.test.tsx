@@ -82,7 +82,7 @@ const item: WorkItemDetail = {
 }
 
 function mount(page: 'subject' | 'work', path: string) {
-  const location = memoryLocation({ path })
+  const location = memoryLocation({ path, record: true })
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(
     <QueryClientProvider client={client}>
@@ -101,6 +101,27 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
+})
+
+describe('remember this', () => {
+  it('opens the Lessons page for a run that has ended', async () => {
+    vi.mocked(buildApi.workItem).mockResolvedValue({
+      ...item,
+      timeline: [{ ...run('done'), state: 'finished', gate: null, inputRequest: null }],
+    })
+    const location = mount('work', '/software_factory/work-items/7-a-task')
+
+    fireEvent.click(await screen.findByRole('button', { name: 'remember this' }))
+
+    expect(location.history.at(-1)).toBe('/software_factory/lessons?run_id=done')
+  })
+
+  it('offers nothing while the run is parked', async () => {
+    mount('work', '/software_factory/work-items/7-a-task')
+
+    await screen.findByTestId('gate')
+    expect(screen.queryByRole('button', { name: 'remember this' })).toBeNull()
+  })
 })
 
 describe('owner navigation', () => {

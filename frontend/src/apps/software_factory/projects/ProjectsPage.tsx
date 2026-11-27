@@ -240,6 +240,31 @@ function ProjectSection({ project }: { project: Project }) {
   )
 }
 
+function ScriptDraft({ title, lead, caution, script, file, setting }: { title: string; lead: string; caution?: string; script: string; file: string; setting: string }) {
+  const [isCopyRefused, setCopyRefused] = useState(false)
+  async function copy() {
+    // A page that is not served over HTTPS has no clipboard, and a browser can refuse it.
+    try {
+      await navigator.clipboard.writeText(script)
+      setCopyRefused(false)
+    } catch {
+      setCopyRefused(true)
+    }
+  }
+  return (
+    <div className="pj-profile-line">
+      <h3>{title}</h3>
+      <div>
+        <p>{lead} An agent wrote it from the files of the repo, and Druks never runs it. Read it, then commit it as <code>{file}</code> if the repo has none, and set <code>{setting}</code> in <code>config.yml</code>.</p>
+        {caution && <p>{caution}</p>}
+        <pre className="pj-profile-script"><code>{script}</code></pre>
+        <button type="button" className="pj-text-button druks-button druks-button--quiet druks-button--compact" onClick={() => void copy()}>Copy {title.toLowerCase()} script</button>
+        {isCopyRefused && <p className="pj-error" role="alert">The browser refused the copy. Select the script and copy it by hand.</p>}
+      </div>
+    </div>
+  )
+}
+
 function RepoRow({ projectId, repo }: { projectId: number; repo: ProjectRepo }) {
   const queryClient = useQueryClient()
   const runs = useRepoRuns()
@@ -293,6 +318,11 @@ function RepoRow({ projectId, repo }: { projectId: number; repo: ProjectRepo }) 
     ...(repo.profile.verification?.typecheck_commands ?? []),
   ].map((entry) => entry.command))]
   const skills = repo.profile.recommended_skills ?? []
+  // A repo with a template has a setup script already, so the draft has nothing to offer.
+  const setupDraft = repo.profile.sandbox_template ? '' : repo.profile.setup_script_draft ?? ''
+  // A template does not mean that the repo has a start script, so a template does not hide
+  // this draft. The profiler returns null when the repo already commits one.
+  const startDraft = repo.profile.start_script_draft ?? ''
   const summary = repo.profile.stack_summary ?? ''
   const isLongSummary = summary.length > 280
 
@@ -383,6 +413,25 @@ function RepoRow({ projectId, repo }: { projectId: number; repo: ProjectRepo }) 
               </div>
             )}
             {skills.length > 0 && <div className="pj-profile-line"><h3>Skills</h3><p className="mono">{skills.join(' · ')}</p></div>}
+            {setupDraft && (
+              <ScriptDraft
+                title="Setup"
+                lead="A draft for the box that checks run on."
+                script={setupDraft}
+                file=".druks/software_factory/setup.sh"
+                setting="verification.sandbox.setup"
+              />
+            )}
+            {startDraft && (
+              <ScriptDraft
+                title="Start"
+                lead="A draft of the script that starts the box before each check: the services and the dependency sync that the tests need. A start script runs only on a box that a setup script built, so the repo needs a setup script too."
+                caution="It runs on every check, in the checkout of the change, so a pull request controls the files that its dependency sync reads. Before you commit it, check that it makes no network call except to install the packages that the repo names, reads no environment variable, key or token file, and pipes nothing from the network into a shell."
+                script={startDraft}
+                file=".druks/software_factory/start.sh"
+                setting="verification.sandbox.start"
+              />
+            )}
           </div>
         </div>
       </div>

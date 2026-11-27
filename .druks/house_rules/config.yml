@@ -17,7 +17,6 @@ R16:
     - druks.contrib.** -> druks.mcp.inbound
     - druks.contrib.** -> druks.models
     - druks.contrib.** -> druks.sandbox
-    - druks.contrib.** -> druks.sandbox.datastructures
     - druks.contrib.** -> druks.sandbox.host
     - druks.contrib.** -> druks.sandbox.layout
     - druks.contrib.** -> druks.services

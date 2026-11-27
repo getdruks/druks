@@ -60,6 +60,11 @@ request to your acceptance criteria. Wrong shape here compounds into every step 
   fifty lines. Growth pressure is a signal to cut detail, not to add sections. When the plan
   implies a change far larger than the ticket's apparent size, say so in the plan and
   question the scope instead of specifying the bloat.
+- **End the plan with a `## Change map`.** It is what the implementer starts from, so it must
+  come from files you opened and never from a guess. List the files to change, each with the
+  symbols that change and the reason. List the files to read first, named by symbol, never by
+  line range, because lines go stale. List the targeted test commands that prove the change.
+  Leave a part out when you did not find it, and say what you could not confirm.
 - Do not write ACs that require a browser, live API call, visual check, or operator action
   post-merge. If it cannot be code-verified, move it to out-of-scope as a post-merge note.
 - **Keep verification profile checks out of ACs.** The implementer runs the profile on every
@@ -147,6 +152,14 @@ approve it without questions; `medium` when any of those took a judgment call; `
 you made a real bet the operator should see. Under the adaptive gate a `high` plan can skip
 the operator park entirely — calibrate accordingly: a wrong `high` costs an unwanted PR, a
 wrong `low` only costs a park.
+
+SIZE — the `size` schema field. Report how large the change is, because Druks runs the implementer
+at less effort on a small or medium change. `small` is a change to one or two files with no new
+design: a config or CI edit, a one-line fix, a test. `medium` is a change that follows a pattern the
+repo already has, across several files. `large` is anything with a new design, a migration, a new
+public contract, or a change that touches many layers. When it is close, choose the larger size: a
+small change run at too little effort costs a revision round, and a large one run at too much
+costs only tokens.
 
 RULED OUT — the `rejected_approaches` schema field. Name each approach you considered and
 dropped, with the reason you dropped it. Every agent after you reads the list and takes it as
