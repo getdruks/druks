@@ -889,10 +889,12 @@ async def test_body_level_invalid_output_retries_once_then_reraises(
     current_run._reap_run = AsyncMock()
     _, sleep = _inline_agent_steps
 
-    with pytest.raises(HarnessInvalidOutputError):
+    with pytest.raises(HarnessInvalidOutputError) as excinfo:
         await DUMMY_INSTRUCTION()
 
     assert sandbox.run_agent.await_count == 2
+    # Both attempts return the same payload, so they fail with the same message.
+    assert str(excinfo.value) in sandbox.run_agent.await_args.kwargs["prompt"]
     sleep.assert_awaited_once_with(0.0)
     current_run._reap_run.assert_not_awaited()
     calls = await AgentCall.list_for_run(db_session(), "wf-9")
@@ -1170,12 +1172,11 @@ async def test_body_level_never_retry_errors_run_once(
 
 @pytest.mark.usefixtures("in_step")
 async def test_in_step_transient_retry_uses_asyncio_sleep(monkeypatch, current_run):
-    attempts = 0
+    last_failures = []
 
-    async def run_agent(_self, **_context):
-        nonlocal attempts
-        attempts += 1
-        if attempts == 1:
+    async def run_agent(_self, *, last_failure, **_context):
+        last_failures.append(last_failure)
+        if len(last_failures) == 1:
             raise HarnessOverloadedError("overloaded")
         return DummyOutput(ok=True)
 
@@ -1189,7 +1190,7 @@ async def test_in_step_transient_retry_uses_asyncio_sleep(monkeypatch, current_r
     result = await DUMMY_INSTRUCTION()
 
     assert result == DummyOutput(ok=True)
-    assert attempts == 2
+    assert last_failures == ["", "overloaded"]
     memory_sleep.assert_awaited_once_with(HarnessOverloadedError.retry_delays[0])
     durable_sleep.assert_not_awaited()
 
