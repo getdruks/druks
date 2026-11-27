@@ -651,7 +651,7 @@ message to a conversation by its sender:
 | Sender | Owner | Prompt | Tools |
 | --- | --- | --- | --- |
 | An operator's paired phone, on a private number | The operator's account | The Bot's `prompt` | The whole Druks toolkit |
-| The number's admin, on a public number | The number's bot admin account | Druks's admin prompt | The Bot's `admin_tools`, `answer_gate`, `chat_resume_conversation`, the [reminder](#reminders) tools |
+| The number's admin, on a public number | The number's bot admin account | Druks's admin prompt | The Bot's `admin_tools`, `get_gate`, `answer_gate`, `chat_resume_conversation`, the [reminder](#reminders) tools |
 | Anyone else, on a public number | The number's bot account | The Bot's `prompt` | The Bot's `user_tools` |
 
 The agents of a public number have no shell, file, or web tools. Their harness,
@@ -745,8 +745,10 @@ in. The only text that Druks reads in a message is an open one-time code.
 A run records the conversation whose tool call started it. When such a run
 parks with an in-app question, Druks adds an internal message to the admin's
 conversation. The message holds the request, the person that it is about, the run ID,
-and when the run started to wait. The admin's agent asks the admin, and answers
-with `answer_gate`. When two questions are open, the run ID tells them apart.
+and when the run started to wait. The admin's agent reads the question with
+`get_gate`. Its artifact holds what the run made, such as a preview link. The
+agent asks the admin, and answers with `answer_gate`. When two questions are
+open, the run ID tells them apart.
 
 Only the number's admin can answer a question that came from the number's
 chats. The dashboard, `answer_gate`, and notification buttons all refuse

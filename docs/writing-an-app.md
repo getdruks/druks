@@ -785,8 +785,8 @@ class Helpdesk(App):
   prompt.
 - `user_tools` are the tools of each person who writes to the connection.
 - `admin_tools` are the tools of the number's admin. The admin also gets
-  Druks's admin prompt, `answer_gate`, `chat_resume_conversation`, and the
-  [reminder](chat.md#reminders) tools.
+  Druks's admin prompt, `get_gate`, `answer_gate`, `chat_resume_conversation`,
+  and the [reminder](chat.md#reminders) tools.
 
 `source` is the conversation's source, `web` or `whatsapp`. `thread_id` names the
 WhatsApp group of a group conversation. It is empty in a direct chat.
