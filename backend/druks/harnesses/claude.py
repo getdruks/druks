@@ -29,6 +29,8 @@ from .providers import AnthropicProvider
 
 logger = logging.getLogger(__name__)
 
+_NO_WAITING_HOOK = Path(__file__).parent / "hooks" / "druks-no-waiting.sh"
+
 
 class ClaudeHarness(Harness):
     # Claude streams its rollout as JSONL on stdout
@@ -42,6 +44,7 @@ class ClaudeHarness(Harness):
     reply_command = (command, "-p")
     no_ask_mode = "bypassPermissions"
     skills_folder = ".claude/skills"
+    can_resume = True
 
     @classmethod
     def get_acp_session(
@@ -147,28 +150,36 @@ class ClaudeHarness(Harness):
         include_apps: bool = False,
         timeout: int = Harness.default_timeout,
         hooks: Collection[str] = (),
+        resumable: bool = False,
+        resume_session: str | None = None,
     ) -> AgentInvocation:
         in_vm_run_dir = f"{get_runs_root(ssh_username)}/{run_id}"
         in_vm_debug = f"{in_vm_run_dir}/debug.log"
         in_vm_session = f"{in_vm_run_dir}/session.jsonl"
-        settings_hooks: dict[str, object] = {}
+        in_vm_no_waiting_hook = f"{in_vm_run_dir}/{_NO_WAITING_HOOK.name}"
+        # The guard denies a long sleep and --watch.
+        no_waiting_command = f"sh {in_vm_no_waiting_hook}"
+        pre_tool_use: list[dict[str, object]] = [
+            {
+                "matcher": "Bash",
+                "hooks": [{"type": "command", "command": no_waiting_command}],
+            }
+        ]
         write_hook = ""
         if "after_agent" in hooks:
             # Claude Code ignores a Stop hook in a structured run.
             command = f"sh {self.after_agent_hook_path(in_vm_run_dir)}"
-            settings_hooks = {
-                "PreToolUse": [
-                    {
-                        "matcher": "StructuredOutput",
-                        "hooks": [{"type": "command", "command": command, "timeout": timeout}],
-                    }
-                ]
-            }
+            pre_tool_use.append(
+                {
+                    "matcher": "StructuredOutput",
+                    "hooks": [{"type": "command", "command": command, "timeout": timeout}],
+                }
+            )
             write_hook = f"{self.write_after_agent_hook(in_vm_run_dir)} && "
         # Prompt rides as stdin (SFTP-uploaded) to avoid the SSH exec
         # channel's per-request size limit.
         claude_argv = [
-            *self._command_args(settings_hooks),
+            *self._command_args({"PreToolUse": pre_tool_use}),
             "--print",
             "--output-format",
             "stream-json",
@@ -181,6 +192,9 @@ class ClaudeHarness(Harness):
             self.no_ask_mode,
             "--debug-file",
             in_vm_debug,
+            # The fork gives the resumed part its own session id, so the call's transcript
+            # and cost are found by its own run id.
+            *(("--resume", resume_session, "--fork-session") if resume_session else ()),
             "--session-id",
             run_id,
             "--disallowedTools",
@@ -197,6 +211,8 @@ class ClaudeHarness(Harness):
         claude_cmdline = " ".join(shlex.quote(a) for a in claude_argv)
         run_dir_q = shlex.quote(in_vm_run_dir)
         session_q = shlex.quote(in_vm_session)
+        no_waiting_body_q = shlex.quote(_NO_WAITING_HOOK.read_text())
+        no_waiting_hook_q = shlex.quote(in_vm_no_waiting_hook)
         # Drukbox delivers the placeholder as ANTHROPIC_AUTH_TOKEN, and Claude Code loads no
         # connectors from there. A run that loads the person's subscription apps needs
         # CLAUDE_CODE_OAUTH_TOKEN, which ANTHROPIC_API_KEY, set by docker-sbx in every box,
@@ -211,6 +227,7 @@ class ClaudeHarness(Harness):
             )
         wrapper = (
             f"mkdir -p {run_dir_q} && "
+            f"printf %s {no_waiting_body_q} > {no_waiting_hook_q} && "
             f"{write_hook}"
             # The kill stops claude, and the wrapper lives on to copy.
             "trap : TERM && "
@@ -222,12 +239,18 @@ class ClaudeHarness(Harness):
             f"cp $HOME/.claude/projects/*/{run_id}.jsonl {session_q} 2>/dev/null; "
             "exit $ec"
         )
+        env = extra_env
+        if resumable or resume_session:
+            # A pause for a check outlasts the default five-minute cache, and the resumed
+            # call would pay to write the whole context again. The first call must write
+            # the context with the long lifetime for the resume to read it.
+            env = {**(extra_env or {}), "CLAUDE_CODE_PROMPT_CACHE_TTL": "1h"}
         return AgentInvocation(
             name="claude",
             args=("sh", "-c", wrapper),
             stdin=prompt.encode("utf-8"),
             credentials=_get_credentials(manifest, include_plugins=include_plugins),
-            env=extra_env,
+            env=env,
             extra_artifact_filenames=("debug.log", "session.jsonl"),
         )
 
@@ -299,6 +322,10 @@ class ClaudeHarness(Harness):
                 entry: dict[str, object] = {"type": "http", "url": server.url}
                 if headers:
                     entry["headers"] = headers
+                if server.tool_timeout_seconds:
+                    # Claude Code aborts a call that is silent for a while, and a hard limit
+                    # per call. This key raises both for this server.
+                    entry["timeout"] = server.tool_timeout_seconds * 1000
                 entries[server.name] = entry
             return ("--mcp-config", json.dumps({"mcpServers": entries}))
         return ()
@@ -308,6 +335,27 @@ class ClaudeHarness(Harness):
         # The catalog entry puts the placeholder in ANTHROPIC_AUTH_TOKEN, which
         # the CLI sends as a bearer. It never refreshes a token from there.
         return [SecretRef(name=AnthropicProvider.id, secret_id=subscription.id)]
+
+    @classmethod
+    def get_own_cost(
+        cls,
+        cost_usd: float | None,
+        cost_metadata: dict | None,
+        parent_cost_usd: float | None,
+        parent_metadata: dict | None,
+    ) -> tuple[float | None, dict | None]:
+        """A resumed session reports the totals of every call since the session began, so
+        the parent's totals are what the calls before this one already recorded. Take them
+        off, so each call records its own cost once."""
+        if cost_usd is not None and parent_cost_usd is not None:
+            cost_usd = max(cost_usd - parent_cost_usd, 0.0)
+        if not cost_metadata or not parent_metadata:
+            return cost_usd, cost_metadata
+        own = dict(cost_metadata)
+        for key in _MODEL_USAGE_FIELDS:
+            if key in own:
+                own[key] = max(own[key] - parent_metadata.get(key, 0), 0)
+        return cost_usd, own
 
     @classmethod
     def get_after_agent_reply(cls, text: str) -> str:
@@ -439,4 +487,11 @@ def extract_claude_cost_from_envelope(
     duration_ms = envelope.get("duration_ms")
     if isinstance(duration_ms, int | float):
         metadata["duration_ms"] = duration_ms
+    # A resumed session reports the totals of every call since the session began, so the
+    # totals ride along for a later call that resumes this one to take off.
+    session_total = {key: metadata[key] for key in _MODEL_USAGE_FIELDS if key in metadata}
+    if cost_usd is not None:
+        session_total["cost_usd"] = cost_usd
+    if session_total:
+        metadata["session_total"] = session_total
     return cost_usd, metadata if (cost_usd is not None or len(metadata) > 1) else None

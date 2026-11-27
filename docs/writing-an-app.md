@@ -228,6 +228,13 @@ template. A workflow with no declaration uses the platform base unchanged.
 The content hash of the base and the script identifies the template. App authors do
 not name provider images.
 
+A script that is not a file beside a module, such as one that a repository
+holds, goes in `script`. `Sandbox(setup=".druks/software_factory/setup.sh",
+script=text)` keys the template on `text`, and `setup` names where it came from.
+`await sandbox.build(label=...)` returns the available template, and waits in
+the sandbox-building phase while drukbox builds it. A build that fails raises
+`TemplateUnavailable`, which `druks.sandbox` exports.
+
 Use provider idempotency keys for writes. An interrupted operation can run again.
 DBOS reuses completed checkpoints on recovery. Keep decisions in replayable
 control flow. Keep I/O inside steps. See
@@ -512,7 +519,9 @@ An instruction belongs to the app class. The operator chooses the CLI that runs
 it, the model, the login that it bills, and the effort. The defaults are in
 **Settings → Instructions**. The app's own page overrides them for one
 instruction. `timeout` is the one setting that the app declares, because how long
-a step can run is a fact about the task.
+a step can run is a fact about the task. A call can pass `effort="high"` to run at a
+lower effort than the setting for that one call. The setting is the ceiling: a call
+never runs above it.
 
 ```python
 from druks.workflows import Instruction, InstructionOutput
@@ -552,6 +561,10 @@ plugin state and no MCP server:
 A workflow that sets `steps_reuse_sandbox = True` keeps one sandbox for all its
 instructions. The sandbox takes its entries from the agent call that creates it.
 Give such a workflow instructions that all include MCP servers, or none that do.
+
+A Claude agent's Bash call cannot sleep for over two minutes in total or use
+`--watch`. The guard reads one command at a time. It does not read a loop, and it
+does not stop a command that follows a log or a socket, such as `tail -f`.
 
 Call an instruction only inside a workflow:
 
@@ -935,8 +948,66 @@ those. A request then cannot select another repo or identity.
 
 A workspace defines the box from the subject alone, before the box
 exists. It does so through `get_secrets(subject)`, `get_mcp_servers(subject)`,
-and `get_skills(subject)`. `get_skills(subject)` names the skills that the box
-gets beside the enabled catalog.
+`get_skills(subject)`, `get_checks(subject)`, and `get_check_box(subject)`. `get_skills(subject)` names
+the skills that the box gets beside the enabled catalog.
+
+`get_checks(subject)` names the commands that an agent may run on another box.
+It returns a tuple of commands, empty by default. The agent calls the
+`core_run_check` tool with the id of its run and one of the commands, written as
+you declare it. Druks refuses any other command. The tool needs a `RepoWorkspace`
+and a subject with a `repo`. It reads the repo, the commit where the agent's
+checkout left the default branch, and the agent's uncommitted and untracked
+changes from the agent's box. Drukbox then clones the repo at that commit,
+applies the changes, runs the command, and deletes its box. The agent's own box
+is not touched. A command that exits with 127 on that box comes back with a sentence
+that names the box as the likely cause.
+
+`get_check_box(subject)` describes the box that the check runs on. It returns a
+dict, empty by default, with the fields that Druks gives the sandbox when it makes
+the box: `template`, the template that the box forks from, and `env`, the
+variables set on it. It can also carry `start`, the text of a script that Druks runs on
+the box before the command, with the output kept in a file so a service that the script
+leaves running does not hold the check: a script that fails ends the check with its own
+exit code. Without a `template`, the default image would hold none of the
+repo's tools, so Druks makes no box: the command runs in the agent's own checkout,
+on the agent's box, and the agent still ends its turn and gets the result.
+
+An instruction that declares `resumable=True`, on a harness that can resume
+(Claude), does not wait for the check inside its turn. The tool answers
+`started`, and the agent ends its turn. Druks runs the check, and sends the exit
+code and the end of the output as the agent's next message, in the same session on
+the same box. That turn and the ones after it are calls of their own, each with its
+own cost, and the output of the last one is the output of the instruction: the
+answer of the turn that ended for a check is discarded. The first call writes the
+model's prompt cache for an hour, so that the resumed call reads it. An
+instruction that is not resumable, or a harness that cannot resume (Codex), keeps
+the tool that waits for the end of the command and answers with the exit code, the
+end of the output, and the duration. A restart during a check runs the instruction
+again from its start. The answer of the turn that ends for a check is discarded, but
+the agent still has to produce it, so the contract of a resumable instruction must
+accept empty values in its required fields.
+
+A call can also continue the instruction's last call in the run, as the same
+conversation: pass `resume=` a function that takes `workspace=` and returns the
+next message. Druks calls it with the checkout as the agent left it, on the box
+that ran the last call. When the harness cannot resume, the run has no finished call, its box was released,
+or the last call recorded no session totals, the call starts over with its full prompt
+and never calls the function. A resumed call records only its own cost.
+
+```python
+class BuildWorkspace(RepoWorkspace):
+    @classmethod
+    async def get_checks(cls, subject) -> tuple[str, ...]:
+        return ("make test", "make lint")
+
+    @classmethod
+    async def get_check_box(cls, subject) -> dict:
+        return {"env": {"DATABASE_URL": "postgres://localhost/test"}}
+```
+
+Druks raises the wait for the tool call to 90 minutes in the harnesses that take
+a setting for it (Claude Code and Codex). OpenCode and Pi keep their own limit,
+which can end a check that runs longer than it allows.
 
 `prepare()` readies the box when the box runs:
 read rows, call a service, upload a file, write a wrapper, run a command on
@@ -1370,7 +1441,9 @@ review = await self.wait("review.completed", label="Waiting for the review")
 ```
 
 The run stays running. The run page shows the label. Druks sends no
-notification and keeps the warm sandbox. When the wait is longer than
+notification and keeps the warm sandbox. The sandbox's lease lapses after about 30
+minutes, so a wait whose caller needs the sandbox afterwards passes `hold_box=True`,
+which renews the lease for the wait. When the wait is longer than
 `ttl_seconds`, the workflow fails with `WaitTimeout`. Without `ttl_seconds`,
 the limit is 14 days, as for a gate.
 
@@ -3015,7 +3088,7 @@ Import from concern namespaces, not from `druks.durable` or internal modules:
 | `druks.browser` | `BrowserClient`, `BrowserCommandError`, `BrowserSession`, `BrowserSessionSignedOutError`, `BrowserSessionStatus` |
 | `druks.chat` | `Bot`, `BotUser` |
 | `druks.workflows` | `Workflow`, `Instruction`, `InstructionOutput`, `Gate`, `YesNo`, `GateTimeout`, `WaitTimeout`, `WaitFailed`, `step`, `task`, `Journal`, `Subject`, `SubjectSummary`, `SubjectStatus`, `OperatorReply`, `RunResponse`, `AgentCall`, `AgentCallResponse`, `AgentCallStatus`, `WorkflowEvent`, `WorkflowError`, `FatalError` |
-| `druks.sandbox` | `Sandbox`, `SandboxMcpServer`, `SandboxSecret` |
+| `druks.sandbox` | `Sandbox`, `SandboxMcpServer`, `SandboxSecret`, `TemplateUnavailable` |
 | `druks.workspaces` | `Workspace`, `RepoWorkspace` |
 | `druks.db` | `Model`, `StoredSubject`, `atomic`, `db_session` |
 | `druks.db.fields` | `EncryptedJsonField`, `EncryptedTextField`, `Secret`, `SecretsMapping` |
@@ -3027,6 +3100,6 @@ Import from concern namespaces, not from `druks.durable` or internal modules:
 | `druks.files` | `File`, `FileField` |
 | `druks.prompts` | `render_prompt` |
 | `druks.webhooks` | `Webhook`, `InvalidWebhookError`, `verify_hmac_sha256` |
-| `druks.testing` | `run_workflow`, `seed_run`, `seed_call`, `init_db`, `asgi_client`, and the fixtures that the plugin registers |
+| `druks.testing` | `run_workflow`, `seed_run`, `seed_call`, `init_db`, `asgi_client`, `worker_name`, and the fixtures that the plugin registers |
 
 The root `druks` package deliberately exports only its version.

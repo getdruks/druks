@@ -8,9 +8,10 @@ from unittest.mock import AsyncMock
 import druks.workflows as workflow_module
 import pytest
 from druks.exceptions import ObjectNotFound
+from druks.sandbox import client as client_module
 from druks.sandbox import datastructures, templates
 from druks.sandbox.client import Client
-from druks.sandbox.constants import WORKFLOW_HOST_LEASE_SECONDS
+from druks.sandbox.constants import TEMPLATE_CREATE_TIMEOUT_SECONDS, WORKFLOW_HOST_LEASE_SECONDS
 from druks.sandbox.datastructures import Sandbox
 from druks.sandbox.exceptions import TemplateNotFound, TemplateUnavailable
 from druks.workflows import Workflow
@@ -162,10 +163,15 @@ async def test_prepare_sandbox_templates_waits_for_each_build_and_reports_a_fail
 ):
     sandbox = Sandbox(setup="sandboxes/setup.sh")
     object.__setattr__(sandbox, "module", "druks_notes.workflows")
-    create_template = AsyncMock(return_value=SimpleNamespace(status="building", base_image="base"))
+    script_hash = hashlib.sha256(b"setup").hexdigest()
+    create_template = AsyncMock(
+        return_value=SimpleNamespace(
+            status="building", base_image="base", setup_script_hash=script_hash
+        )
+    )
     get_template = AsyncMock(
         side_effect=[
-            SimpleNamespace(status="building"),
+            SimpleNamespace(status="building", base_image="base", setup_script_hash=script_hash),
             SimpleNamespace(status="failed", last_error="OSError: builder crashed"),
         ]
     )
@@ -192,9 +198,7 @@ async def test_prepare_sandbox_templates_waits_for_each_build_and_reports_a_fail
         await templates.prepare_sandbox_templates()
 
     assert sleep.await_count == 2
-    get_template.assert_awaited_with(
-        base_image="base", setup_script_hash=hashlib.sha256(b"setup").hexdigest()
-    )
+    get_template.assert_awaited_with(base_image="base", setup_script_hash=script_hash)
 
 
 async def test_get_template_id_uses_available_template(monkeypatch):
@@ -221,9 +225,12 @@ async def test_get_template_id_uses_available_template(monkeypatch):
 
 async def test_get_template_id_waits_with_visible_phase(monkeypatch):
     sandbox = Sandbox(setup="sandboxes/setup.sh")
+    script_hash = hashlib.sha256(b"setup").hexdigest()
     get_template = AsyncMock(
         side_effect=[
-            SimpleNamespace(id="template-1", status="building"),
+            SimpleNamespace(
+                id="template-1", status="building", base_image="base", setup_script_hash=script_hash
+            ),
             SimpleNamespace(id="template-1", status="available"),
         ]
     )
@@ -407,7 +414,7 @@ async def test_client_template_primitives_use_sdk_contract(monkeypatch):
 
     api = FakeAPI()
     client = Client()
-    monkeypatch.setattr(Client, "_api", lambda self: api)
+    monkeypatch.setattr(Client, "_api", lambda self, **_: api)
 
     assert (
         await client.create_template(
@@ -423,3 +430,112 @@ async def test_client_template_primitives_use_sdk_contract(monkeypatch):
         setup_script="setup", provider=None, base_image="base", label="notes"
     )
     assert api.aclose.await_count == 4
+
+
+def _repo_template(monkeypatch, *, created, polled=()):
+    """A drukbox that answers ``create_template`` with ``created``, and each poll of
+    ``get_template`` with the next of ``polled``."""
+    create_template = AsyncMock(return_value=created)
+    get_template = AsyncMock(side_effect=list(polled))
+    set_run_phase = AsyncMock()
+    sleep = AsyncMock()
+    monkeypatch.setattr(
+        datastructures,
+        "get_settings",
+        lambda: SimpleNamespace(sandbox=SimpleNamespace(image="base")),
+    )
+    monkeypatch.setattr(
+        templates,
+        "sandbox_client",
+        SimpleNamespace(create_template=create_template, get_template=get_template),
+    )
+    monkeypatch.setattr(templates, "set_run_phase", set_run_phase)
+    monkeypatch.setattr(templates.asyncio, "sleep", sleep)
+    return SimpleNamespace(
+        create_template=create_template, get_template=get_template, set_run_phase=set_run_phase
+    )
+
+
+def _repo_sandbox(script: str = "#!/bin/sh\n") -> Sandbox:
+    return Sandbox(setup=".druks/software_factory/setup.sh", script=script)
+
+
+def test_a_sandbox_with_a_script_reads_it_and_keys_the_template_on_it():
+    sandbox = _repo_sandbox("#!/bin/sh\nmake\n")
+
+    assert sandbox.read_setup_script() == b"#!/bin/sh\nmake\n"
+    assert sandbox.setup_script_hash == hashlib.sha256(b"#!/bin/sh\nmake\n").hexdigest()
+
+
+async def test_build_template_asks_drukbox_for_the_script_on_the_installation_image(monkeypatch):
+    drukbox = _repo_template(
+        monkeypatch, created=SimpleNamespace(id="template-1", status="available")
+    )
+
+    template = await _repo_sandbox().build(label="acme/widget:setup")
+
+    assert template.id == "template-1"
+    drukbox.create_template.assert_awaited_once_with(
+        setup_script="#!/bin/sh\n", provider=None, base_image="base", label="acme/widget:setup"
+    )
+    drukbox.set_run_phase.assert_not_awaited()
+
+
+async def test_build_template_shows_the_build_and_waits_for_it(monkeypatch):
+    building = SimpleNamespace(
+        id="template-1", status="building", base_image="base", setup_script_hash="abc"
+    )
+    drukbox = _repo_template(
+        monkeypatch,
+        created=building,
+        polled=[SimpleNamespace(id="template-1", status="available")],
+    )
+
+    template = await _repo_sandbox().build(label="acme/widget:setup")
+
+    assert template.status == "available"
+    drukbox.set_run_phase.assert_awaited_once_with("sandbox_building")
+    drukbox.get_template.assert_awaited_once_with(base_image="base", setup_script_hash="abc")
+
+
+async def test_build_template_raises_the_reason_a_build_failed(monkeypatch):
+    _repo_template(
+        monkeypatch,
+        created=SimpleNamespace(status="failed", last_error="apt-get: no such package"),
+    )
+
+    with pytest.raises(TemplateUnavailable, match="acme/widget:setup.*apt-get: no such package"):
+        await _repo_sandbox().build(label="acme/widget:setup")
+
+
+async def test_a_template_create_waits_for_the_base_image_pull_and_other_calls_do_not(
+    monkeypatch,
+):
+    timeouts = []
+
+    class FakeAPI:
+        def __init__(self, **kwargs):
+            timeouts.append(kwargs["timeout"])
+            self.create_template = AsyncMock(return_value=SimpleNamespace(status="building"))
+            self.list_templates = AsyncMock(return_value=[])
+            self.aclose = AsyncMock()
+
+    monkeypatch.setattr(client_module, "SandboxAPI", FakeAPI)
+    monkeypatch.setattr(
+        client_module,
+        "get_settings",
+        lambda: SimpleNamespace(
+            sandbox=SimpleNamespace(
+                service_url="http://drukbox",
+                service_token=SimpleNamespace(get_secret_value=lambda: "t"),
+                timeout=180.0,
+            )
+        ),
+    )
+    client = Client()
+
+    await client.create_template(setup_script="setup", provider=None, base_image=None, label="x")
+    with pytest.raises(TemplateNotFound):
+        await client.get_template(setup_script_hash="h")
+
+    assert timeouts == [TEMPLATE_CREATE_TIMEOUT_SECONDS, 180.0]

@@ -6,6 +6,7 @@ const PHASE_LINES: Record<string, string> = {
   provisioning_vm: 'Provisioning sandbox VM…',
   queued_for_vm: 'Waiting for a sandbox slot…',
   sandbox_building: 'Building sandbox…',
+  running_check: 'Running a test command…',
   waiting_for_quota: 'Waiting for the usage window…',
 }
 

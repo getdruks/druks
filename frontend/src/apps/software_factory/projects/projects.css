@@ -48,6 +48,7 @@
 .pj-profile-line { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 20px; align-items: baseline; }
 .pj-profile-line h3 { margin: 0; }
 .pj-profile-line p { font-size: 13px; line-height: 1.8; color: var(--druks-color-text-secondary); overflow-wrap: anywhere; }
+.pj-profile-script { margin: 8px 0; padding: 12px; max-height: 240px; overflow: auto; font-family: var(--font-mono); font-size: 12px; line-height: 1.6; border: 1px solid var(--druks-color-border-default); border-radius: 6px; }
 .pj-profile-commands { display: grid; gap: 8px; list-style: none; margin: 0; padding: 0 0 0 16px; border-left: 1px solid var(--druks-color-border-default); }
 .pj-profile-commands li { display: flex; gap: 12px; min-width: 0; }
 .pj-profile-commands li::before { content: '$'; color: var(--druks-color-text-tertiary); font-family: var(--font-mono); font-size: 13px; }

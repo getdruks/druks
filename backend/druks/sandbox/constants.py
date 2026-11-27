@@ -1,6 +1,9 @@
 MAX_AGENT_TIMEOUT_SECONDS = 120 * 60  # 120 min — a build's test-and-fix loop can pass an hour
 SANDBOX_HOST_LEASE_SECONDS = 270 * 60
 WORKFLOW_HOST_LEASE_SECONDS = 30 * 60
+# Drukbox pulls the template's base image inside the create request, before it answers 202.
+# On a host that never pulled it, that outlasts the service's usual request timeout.
+TEMPLATE_CREATE_TIMEOUT_SECONDS = 30 * 60
 WORKFLOW_HOST_RENEW_SECONDS = 5 * 60
 
 # The per-connection rotation gate in Redis: the flag that shuts the gate while

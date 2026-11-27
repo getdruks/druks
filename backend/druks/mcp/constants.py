@@ -5,6 +5,11 @@ import re
 TOKEN_ENV_PREFIX = "MCP_"
 TOKEN_ENV_SUFFIX = "_TOKEN"
 
+# How long an agent waits on one call to Druks' own server, for every tool of it. The longest
+# call is a check that runs on another box and answers when it ends: up to an hour of
+# command, and the host and the clone before it.
+DRUKS_TOOL_TIMEOUT_SECONDS = 5400
+
 # A server name is one identifier reused as the MCP config key (a bare TOML path
 # segment for codex, a JSON object key for claude) and the stem of the bearer env
 # var — a lowercase shell/TOML-safe token, letter-led so no rendering breaks and

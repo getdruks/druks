@@ -1,12 +1,13 @@
 import asyncio
 import contextlib
+import dataclasses
 import hashlib
 import inspect
 import json
 import random
 import subprocess
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager, nullcontext
+from contextlib import AsyncExitStack, asynccontextmanager, nullcontext
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -35,6 +36,7 @@ from dbos import (
 from dbos import error as dbos_error
 from dbos._dbos import _get_or_create_dbos_registry
 from drukbox_sdk import Secret
+from drukbox_sdk.exceptions import SandboxAPIError, SandboxUnavailableError
 from opentelemetry import trace
 from pydantic import BaseModel, Field, create_model
 from sqlalchemy import select
@@ -104,7 +106,7 @@ from druks.files.datastructures import File
 from druks.files.exceptions import FileUnavailableError
 from druks.files.models import FileRecord
 from druks.harnesses.artifacts import normalize_token_usage
-from druks.harnesses.config import AgentConfig, get_config
+from druks.harnesses.config import AgentConfig, cap_effort, get_config
 from druks.harnesses.exceptions import (
     HarnessError,
     HarnessInvalidOutputError,
@@ -117,6 +119,7 @@ from druks.notifications.models import Notification
 from druks.notifications.outbox import queue_status_send, send_notification
 from druks.notifications.services import create_park_notification
 from druks.prompts.resolver import get_template
+from druks.redis import clear_resumable, set_resumable, take_check_request
 from druks.registry import get_app, get_app_by_module, get_app_name, get_instruction
 from druks.sandbox import gate as sandbox_gate
 from druks.sandbox.client import provisioning_key, sandbox_client
@@ -1267,15 +1270,33 @@ class Workflow:
                 "account to a team that lists the app, or name another approver."
             )
 
-    async def wait(self, topic: str, *, label: str, ttl_seconds: float = GATE_TTL_SECONDS) -> dict:
+    async def wait(
+        self,
+        topic: str,
+        *,
+        label: str,
+        ttl_seconds: float = GATE_TTL_SECONDS,
+        hold_box: bool = False,
+    ) -> dict:
         """Wait for the facts that ``answer`` delivers on ``topic``, and return them. The run
         stays running, shows ``label``, and keeps its warm sandbox. When ``answer``
-        delivers a failure instead, the wait raises ``WaitFailed``."""
+        delivers a failure instead, the wait raises ``WaitFailed``. The sandbox's lease
+        lapses after about 30 minutes, so ``hold_box=True`` renews it for the wait, for a
+        caller that needs the box afterwards."""
         # The wait takes answers before its label shows. An answer sent after the label
         # shows thus arrives.
         await DBOS.set_event_async(_WAITING_ON_EVENT, topic)
         await set_run_phase(label)
-        facts = await DBOS.recv_async(topic, timeout_seconds=ttl_seconds)
+        async with AsyncExitStack() as stack:
+            if hold_box and self._host:
+                # A lease renews only while something holds it, and the box would expire
+                # in the middle of a long wait.
+                try:
+                    await stack.enter_async_context(sandbox_client.lease(host_id=self._host.id))
+                except HarnessSandboxProvisioningError:
+                    # The box is already gone. A call after the wait provisions another.
+                    await self._reap_run()
+            facts = await DBOS.recv_async(topic, timeout_seconds=ttl_seconds)
         await DBOS.set_event_async(_WAITING_ON_EVENT, value="")
         if facts is None:
             raise WaitTimeout(topic)
@@ -1941,6 +1962,11 @@ class Instruction:
     # ``include_mcp=False`` gives the call no MCP server and its sandbox no
     # server entry, for an instruction that reads untrusted content.
     include_mcp: bool = True
+    # True lets the agent end its turn to have a declared check run on another box, and the
+    # call continue the same session with the result. The call then writes the model's prompt
+    # cache for an hour, not five minutes, so that the resume reads it after the check. A
+    # harness that cannot resume keeps the blocking tool.
+    resumable: bool = False
     # The service secrets that the call's sandbox holds, ``(Acme.fields.api_key,)``.
     # Each is a placeholder that the secrets proxy replaces with the secret at the host of
     # the service.
@@ -2033,6 +2059,8 @@ class Instruction:
         *,
         contract: type[InstructionOutput] | None = None,
         agent_id: str | None = None,
+        effort: str | None = None,
+        resume: Callable[..., Awaitable[str]] | None = None,
         **context: object,
     ):
         """Run the instruction as a durable step in the current workflow, and return its
@@ -2042,7 +2070,14 @@ class Instruction:
 
         ``contract`` overrides the output contract for this call, including schema
         generation and validation. ``agent_id`` runs the call as that saved agent: with
-        its instructions, its model, its billing, and only its skills."""
+        its instructions, its model, its billing, and only its skills. ``effort`` runs the call at
+        a lower effort than the operator's setting; the setting is the ceiling, and a higher
+        ``effort`` runs at the setting. ``resume`` continues the instruction's last call in
+        this run, on its box, as the same conversation: Druks calls ``resume(workspace=...)``
+        with the checkout as the agent left it, and sends the text it returns as the agent's
+        next message. The instruction must be ``resumable``. When the call cannot continue
+        the session, because its harness cannot resume, it has no finished call, or its box
+        was released, it starts over with its full prompt and never calls ``resume``."""
         if not self.id:
             # A loose instruction belongs to no App. Its settings, its registry entry and the
             # record of its call then all key on nothing.
@@ -2063,6 +2098,8 @@ class Instruction:
                     workflow_id=workflow.workflow_id,
                     contract=contract,
                     agent_id=agent_id,
+                    effort=effort,
+                    resume=resume,
                     **context,
                 )
 
@@ -2210,6 +2247,8 @@ class Instruction:
         workflow_id: str,
         contract: type[InstructionOutput] | None = None,
         agent_id: str | None = None,
+        effort: str | None = None,
+        resume: Callable[..., Awaitable[str]] | None = None,
         **context,
     ):
         """The raw execution: read what the call needs, provision or attach a host,
@@ -2243,6 +2282,20 @@ class Instruction:
             running_call = await AgentCall.lookup_running(
                 session, run_id=workflow_id, agent=self.id
             )
+            previous = None
+            if resume:
+                if not self.resumable:
+                    raise WorkflowError(
+                        f"instruction {self.id!r} cannot resume: declare it resumable"
+                    )
+                if (
+                    config.harness_class.can_resume
+                    and not self.browser
+                    and not _in_after_agent.get()
+                ):
+                    previous = await AgentCall.lookup_last_succeeded(
+                        session, run_id=workflow_id, agent=self.id
+                    )
         model = config.model
         span.set_attributes({"druks.harness": config.harness, "druks.model": model})
         subscription_id = config.subscription.id if config.subscription else None
@@ -2312,7 +2365,9 @@ class Instruction:
                 # The override lookup reads the repository's credential from a row.
                 template = await get_template(self.prompt, repo=prompt_context.get("repo"))
                 harness = config.harness_class(
-                    model=config.model, fast_mode=config.fast_mode, effort=config.effort
+                    model=config.model,
+                    fast_mode=config.fast_mode,
+                    effort=cap_effort(config.effort, effort),
                 )
                 agent_instructions = ""
                 if agent_id:
@@ -2363,6 +2418,18 @@ class Instruction:
                 else:
                     resume_from = None
 
+                # The session is a file on the box that ran it, and that box holds the checkout
+                # as the agent left it. A resume that cannot continue it starts over with the
+                # full prompt: a harness that cannot resume, a run with no finished call, or a
+                # box that was released, whose session and checkout went with it.
+                # A call recorded without the session's totals, by a deploy that came before
+                # this, cannot say what to take off the resumed call's cost, so it starts over.
+                resuming = (
+                    bool(previous)
+                    and previous.sandbox_host_id == runner.host_id
+                    and bool((previous.cost_metadata or {}).get("session_total"))
+                )
+
                 context_on_box = await self._upload_files(
                     context=prompt_context, host=runner.host, call_id=call_id
                 )
@@ -2379,6 +2446,14 @@ class Instruction:
                         prompt=prompt,
                         workspace=runner,
                     )
+                # An agent browser's call and an after-agent hook's call have no session to
+                # resume: their box belongs to the call.
+                can_resume = (
+                    self.resumable
+                    and harness.can_resume
+                    and not self.browser
+                    and not _in_after_agent.get()
+                )
                 if resume_from:
                     await set_run_phase("agent_running")
                     attempt = runner.host.resume_agent(
@@ -2391,7 +2466,15 @@ class Instruction:
                         hooks=hooks,
                     )
                 else:
-                    await runner.prepare()
+                    session_options = {}
+                    if can_resume:
+                        session_options["resumable"] = True
+                    if resuming:
+                        # Preparing the workspace would discard the agent's uncommitted work.
+                        prompt = await resume(workspace=runner)
+                        session_options["resume_session"] = previous.id
+                    else:
+                        await runner.prepare()
                     await set_run_phase("agent_running")
                     await AgentCall.start(
                         engine,
@@ -2417,12 +2500,82 @@ class Instruction:
                         include_plugins=self.include_plugins,
                         mcp_servers=mcp_servers,
                         hooks=hooks,
+                        **session_options,
                     )
                 try:
+                    # Inside the try: the call has started, so a Redis that fails here must
+                    # fail the call and not leave it running.
+                    if can_resume:
+                        await set_resumable(
+                            workflow_id, ttl_seconds=(config.timeout or harness.default_timeout) * 2
+                        )
                     result = await attempt
+                    # An agent that ended its turn for a check gets the result as its next
+                    # message, in the same session on this box. Each part is a call of its
+                    # own, and only the last part's output is the call's output.
+                    parent = None
+                    if resuming:
+                        # The session reports the totals since it began, so the parent's
+                        # totals come off this call's.
+                        totals = (previous.cost_metadata or {}).get("session_total")
+                        if totals:
+                            parent = (totals.get("cost_usd"), totals)
+                    while True:
+                        reported = (result.cost_usd, result.cost_metadata)
+                        if parent:
+                            cost_usd, cost_metadata = harness.get_own_cost(*reported, *parent)
+                            result = dataclasses.replace(
+                                result, cost_usd=cost_usd, cost_metadata=cost_metadata
+                            )
+                        request = None
+                        if can_resume and not result.error:
+                            request = await take_check_request(workflow_id)
+                        if not request:
+                            break
+                        await AgentCall.finish(engine, call_id=call_id, result=result)
+                        # The part is closed. An error from here on is not its.
+                        previous_call_id, call_id = call_id, None
+                        await set_run_phase("running_check")
+                        message = await self._run_check(runner, workflow, request)
+                        parent = reported
+                        part_id = harness.mint_run_id(None)
+                        await AgentCall.start(
+                            engine,
+                            call_id=part_id,
+                            run_id=workflow_id,
+                            model=model,
+                            agent=self.id,
+                            host_id=runner.host_id,
+                            subscription_id=subscription_id,
+                            api_key_id=api_key_id,
+                        )
+                        # Only a part that has a row can be failed.
+                        call_id = part_id
+                        await set_run_phase("agent_running")
+                        result = await runner.run_agent(
+                            harness=harness,
+                            manifest=manifest,
+                            timeout=config.timeout,
+                            identity=config.identity,
+                            include_apps=config.include_apps,
+                            agent=self.id,
+                            prompt=message,
+                            schema=contract.model_json_schema(),
+                            artifact_dir=artifact_dir,
+                            call_id=call_id,
+                            include_plugins=self.include_plugins,
+                            mcp_servers=mcp_servers,
+                            hooks=hooks,
+                            resumable=True,
+                            resume_session=previous_call_id,
+                        )
                 except BaseException as error:
-                    await AgentCall.fail(engine, call_id=call_id, error=error)
+                    if call_id:
+                        await AgentCall.fail(engine, call_id=call_id, error=error)
                     raise
+                finally:
+                    if can_resume:
+                        await clear_resumable(workflow_id)
                 if usage := normalize_token_usage(result.cost_metadata):
                     span.set_attributes(
                         {f"druks.usage.{name}": count for name, count in usage.items()}
@@ -2461,6 +2614,29 @@ class Instruction:
                     **artifact,
                 )
         return output.to_result()
+
+    async def _run_check(self, runner: Workspace, workflow: "Workflow", request: dict) -> str:
+        """Run the check the agent asked for, and return the message that continues its
+        session: the exit code and the end of the output, or why the check did not run."""
+        command = request["command"]
+        try:
+            async with step_session() as session:
+                result = await runner.run_check(
+                    session,
+                    run_id=workflow.workflow_id,
+                    account_id=workflow.account_id,
+                    command=command,
+                    timeout_seconds=request["timeout_seconds"],
+                )
+        except (SandboxAPIError, SandboxUnavailableError) as error:
+            # Drukbox refused, or is down or full. The agent can still run the command on its
+            # own box, or say that it could not.
+            return f"The check {command!r} did not run: {error}"
+        if result.timed_out:
+            outcome = f"timed out after {request['timeout_seconds']} seconds"
+        else:
+            outcome = f"finished with exit code {result.exit_code}"
+        return f"The check {command!r} {outcome}.\n\nThe end of its output:\n\n{result.output}"
 
     async def _upload_files(self, context: dict, host: "Host", call_id: str) -> dict:
         # Druks uploads each File argument to the call's directory on the box. The context then

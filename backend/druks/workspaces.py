@@ -1,18 +1,29 @@
+import asyncio
+import base64
 import functools
+import hashlib
+import json
 import logging
+import shlex
 import subprocess
+import time
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any, ClassVar
 from urllib.parse import urlsplit
 
+import asyncssh
+from drukbox_sdk import SandboxRun
+from drukbox_sdk.exceptions import SandboxUnavailableError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from druks.accounts.context import current_account_id
 from druks.accounts.models import Account
 from druks.core.services import Github
+from druks.database import session_scope
 from druks.durable.engine import step_session
 from druks.durable.exceptions import WorkflowError
 from druks.mcp import models as mcp_models
-from druks.mcp.constants import TOKEN_ENV_PREFIX
+from druks.mcp.constants import DRUKS_SERVER_NAME, DRUKS_TOOL_TIMEOUT_SECONDS, TOKEN_ENV_PREFIX
 from druks.mcp.enums import Credential, IdentityMode, Toolkit
 from druks.mcp.exceptions import MissingGrantError, MissingTokenError
 from druks.mcp.helpers import get_bearer_token_env_var
@@ -28,7 +39,7 @@ from druks.sandbox.datastructures import (
 )
 from druks.sandbox.exceptions import ExecFailed
 from druks.sandbox.layout import get_repo_root, get_work_root
-from druks.sandbox.models import SecretRef
+from druks.sandbox.models import SandboxIdentity, SecretRef
 
 if TYPE_CHECKING:
     from druks.harnesses.base import Harness
@@ -36,6 +47,17 @@ if TYPE_CHECKING:
     from druks.sandbox.host import Host
 
 logger = logging.getLogger(__name__)
+
+
+async def _revoke(identity_id: str) -> None:
+    # The check has run by now, and its result is the answer. A revoke that fails leaves an
+    # identity that expires with the box lease, so it is a log line and not an error.
+    try:
+        async with session_scope() as session:
+            identity = await session.get(SandboxIdentity, identity_id)
+            await identity.revoke()
+    except Exception:
+        logger.exception("could not revoke the identity of a check box: %s", identity_id)
 
 
 class Workspace:
@@ -52,6 +74,19 @@ class Workspace:
     async def get_skills(cls, subject: Any) -> tuple[str, ...]:
         # The skills the box gets beside the enabled catalog; the manifest records them.
         return ()
+
+    @classmethod
+    async def get_checks(cls, subject: Any) -> tuple[str, ...]:
+        # The commands an agent may run on another box through the run tool, each
+        # written as the agent passes it. Read from the subject alone. Base: none.
+        return ()
+
+    @classmethod
+    async def get_check_box(cls, subject: Any) -> dict[str, Any]:
+        # The fields of the box that a check runs on, as ``run_check`` hands them to the
+        # sandbox: ``template`` to fork from, ``env`` to set. Read from the subject alone.
+        # Base: none. Without a template, the check runs on the agent's own box.
+        return {}
 
     async def prepare(self) -> None:
         """Put on the box what the agent needs: an upload, a clone, a wrapper.
@@ -157,7 +192,14 @@ class Workspace:
         for server in workspace_servers:
             variable = get_bearer_token_env_var(server.name)
             servers.append(
-                McpServer(name=server.name, url=server.url, bearer_token_env_var=variable)
+                McpServer(
+                    name=server.name,
+                    url=server.url,
+                    bearer_token_env_var=variable,
+                    tool_timeout_seconds=(
+                        DRUKS_TOOL_TIMEOUT_SECONDS if server.name == DRUKS_SERVER_NAME else None
+                    ),
+                )
             )
             if server.secret_id:
                 secret_id = server.secret_id
@@ -238,6 +280,69 @@ class Workspace:
         return tuple(servers), refs
 
 
+# What the service keeps of a check's output: the end of it.
+CHECK_OUTPUT_CHARS = 20_000
+# How long a check that outlived its timeout has to stop on a TERM before it is killed.
+CHECK_KILL_GRACE_SECONDS = 30
+
+# The lines that a check ends with when the start script of its box fails or runs too long.
+START_SCRIPT_FAILED = "The start script of the check box failed with exit code"
+START_SCRIPT_TIMED_OUT = "The start script of the check box timed out after"
+# A start script gets this long, or half of the check's time when that is less, so a start that
+# never ends cannot use the whole budget of the check.
+START_SCRIPT_TIMEOUT_SECONDS = 300
+START_KILL_GRACE_SECONDS = 10
+# How much of the output of a start script the check shows: the last lines, and no more than
+# this many characters, for a script that succeeded; the last characters of one that failed.
+START_OUTPUT_LINES = 20
+START_OUTPUT_CHARS = 2000
+START_FAILED_OUTPUT_CHARS = 6000
+
+# Exit code 127 is the shell's "command not found". On a check box the cause is the box.
+COMMAND_NOT_FOUND_HINT = (
+    "Exit code 127 means the shell found no such command. The check box holds only what "
+    "the repo's sandbox setup installs. If your change did not touch that tool, the box is "
+    "the likely cause: run the command on your own box to confirm."
+)
+
+
+def _run_after_start(command: str, script: str, start_timeout: int) -> str:
+    """``command``, run after ``script`` has run and succeeded. The script's output goes to a
+    file, so a service that it starts in the background holds the file and not the channel of
+    the check, which would wait for it to exit. A script that succeeds shows the end of its
+    output, by lines and by characters, so a long log of installs or a progress bar on one line
+    does not push the output of the check out of what the service keeps. A script that fails
+    or outlives ``start_timeout`` seconds ends the check, with the end of its output, its own
+    exit code and a line that says it was the start script. An exit code of 124 that came
+    sooner than ``start_timeout`` is the script's own, and is a failure like any other."""
+    encoded = base64.b64encode(script.encode()).decode()
+    return "sh -c " + shlex.quote(
+        f"""f=$(mktemp); o=$(mktemp)
+printf %s {encoded} | base64 -d > "$f"
+began=$(date +%s)
+timeout -k {START_KILL_GRACE_SECONDS} {start_timeout} sh "$f" > "$o" 2>&1 < /dev/null
+code=$?
+took=$(( $(date +%s) - began ))
+if [ "$code" -eq 0 ]; then
+  tail -n {START_OUTPUT_LINES} "$o" | tail -c {START_OUTPUT_CHARS}
+else
+  tail -c {START_FAILED_OUTPUT_CHARS} "$o"
+fi
+[ -z "$(tail -c 1 "$o")" ] || echo
+rm -f "$f" "$o"
+if [ "$code" -eq 124 ] && [ "$took" -ge {start_timeout} ]; then
+  echo "{START_SCRIPT_TIMED_OUT} {start_timeout} seconds" >&2
+  exit 124
+fi
+if [ "$code" -ne 0 ]; then
+  echo "{START_SCRIPT_FAILED} $code" >&2
+  exit "$code"
+fi
+{command}
+"""
+    )
+
+
 class RepoWorkspace(Workspace):
     """A VM with the subject's ``repo`` cloned at its ``ref``, the default branch
     when None, re-cloned before every agent call. The box holds a placeholder in
@@ -261,6 +366,10 @@ class RepoWorkspace(Workspace):
         ]
 
     @property
+    def repo_url(self) -> str:
+        return f"https://github.com/{self.subject.repo}"
+
+    @property
     def repo_path(self) -> str:
         return get_repo_root(self.host.ssh_username)
 
@@ -270,7 +379,7 @@ class RepoWorkspace(Workspace):
         ensure = functools.partial(
             checkout.ensure,
             self.host,
-            repo_url=f"https://github.com/{repo}",
+            repo_url=self.repo_url,
             ref=ref,
             target_path=self.repo_path,
         )
@@ -309,6 +418,19 @@ class RepoWorkspace(Workspace):
         await self.clone()
         return await self.host.exec(command, cwd=self.repo_path, timeout=timeout)
 
+    async def get_base_commit(self) -> str:
+        """The commit the checkout's change starts from: where it left the default branch."""
+        result = await self.host.exec(
+            ["git", "merge-base", "HEAD", "origin/HEAD"], cwd=self.repo_path, timeout=30.0
+        )
+        if result.returncode:
+            raise ExecFailed(
+                f"failed to read the workspace base commit: "
+                f"exit={result.returncode} stderr={result.stderr.strip()}",
+                exit_code=result.returncode,
+            )
+        return result.stdout.strip()
+
     async def get_diff(self, *, binary: bool = False) -> str:
         """The checkout's changes since it diverged from the default branch,
         including untracked files.
@@ -333,6 +455,115 @@ class RepoWorkspace(Workspace):
                 exit_code=result.returncode,
             )
         return result.stdout
+
+    async def run_check(
+        self,
+        session: AsyncSession,
+        *,
+        run_id: str,
+        account_id: str,
+        command: str,
+        timeout_seconds: int,
+    ) -> SandboxRun:
+        """Run ``command`` on a separate box that holds the repo at the commit this checkout
+        started from, with its uncommitted and untracked changes on top. The box is made from
+        the workspace's ``get_check_box`` fields, and is deleted when the command ends. The
+        SDK's errors reach the caller. Without a template in those fields, the box would be
+        the default image, which holds none of the repo's tools, so the command runs in this
+        checkout, on the agent's own box."""
+        box = await type(self).get_check_box(self.subject)
+        # Druks runs the start script itself, ahead of the command: it is no field of the box.
+        start = box.pop("start", None)
+        if "template" not in box:
+            if box.get("env") or start:
+                logger.warning(
+                    "the env and the start script of the check box of %s are not used: it has "
+                    "no template yet, so the check runs on the agent's box",
+                    self.subject.repo,
+                )
+            return await self._run_check_here(command, timeout_seconds)
+        if start:
+            start_timeout = min(START_SCRIPT_TIMEOUT_SECONDS, max(timeout_seconds // 2, 1))
+            command = _run_after_start(command, start, start_timeout)
+        patch = await self.get_diff(binary=True)
+        commit = await self.get_base_commit()
+        refs = await type(self).get_secret_refs(self.subject)
+        digest = hashlib.sha256(json.dumps([ref.secret_id for ref in refs]).encode()).hexdigest()
+        # The box that runs the check fetches the repo's GitHub token like an agent box does.
+        # It never binds to a box id, so nothing sweeps it: it ends here.
+        identity, entries = await SandboxIdentity.create(
+            session,
+            account_id=account_id,
+            run_id=run_id,
+            scoped_to="check",
+            secret_refs=refs,
+            secrets_hash=digest,
+        )
+        try:
+            result = await sandbox_client.run_command(
+                repo_url=self.repo_url,
+                commit=commit,
+                command=command,
+                patch=patch,
+                timeout_seconds=timeout_seconds,
+                secrets=entries,
+                **box,
+            )
+        finally:
+            # A caller that is cancelled still revokes, on a session of its own.
+            await asyncio.shield(_revoke(identity.id))
+        # A start script that is the one missing a tool says so itself: the hint is about the
+        # command of the check, and sends the agent to its own box for nothing.
+        if result.exit_code == 127 and START_SCRIPT_FAILED not in result.output:
+            result = replace(result, output=f"{result.output}\n\n{COMMAND_NOT_FOUND_HINT}")
+        return result
+
+    async def _run_check_here(self, command: str, timeout_seconds: int) -> SandboxRun:
+        """Run ``command`` in the checkout as it stands. It does not call ``exec`` of this
+        class: that clones first, and a clone of a checkout that exists resets its branch to
+        the remote and drops the agent's uncommitted and unpushed work."""
+        started = time.monotonic()
+        # The remote command must stop by itself: the SSH timeout closes the channel and
+        # signals nothing, so a timed-out check would leave its processes on the agent's box.
+        # stderr joins stdout in the order it came, as on the check box.
+        guarded = [
+            "timeout",
+            "-k",
+            str(CHECK_KILL_GRACE_SECONDS),
+            str(timeout_seconds),
+            "sh",
+            "-c",
+            f"exec 2>&1; {command}",
+        ]
+        try:
+            done = await self.host.exec(
+                guarded,
+                cwd=self.repo_path,
+                timeout=timeout_seconds + 2 * CHECK_KILL_GRACE_SECONDS,
+            )
+        except TimeoutError:
+            return SandboxRun(
+                exit_code=None,
+                timed_out=True,
+                output="",
+                duration_seconds=time.monotonic() - started,
+            )
+        except (asyncssh.Error, OSError, ExecFailed) as error:
+            # The callers map the SDK's errors for a box that did not run the check.
+            raise SandboxUnavailableError(
+                f"the agent's box could not run the check: {error}"
+            ) from error
+        duration = time.monotonic() - started
+        # ``timeout`` exits 124 when it stopped the command, and 137 when it had to kill it.
+        timed_out = done.returncode == 124 or (
+            done.returncode == 137 and duration >= timeout_seconds
+        )
+        return SandboxRun(
+            exit_code=None if timed_out else done.returncode,
+            timed_out=timed_out,
+            output=done.stdout[-CHECK_OUTPUT_CHARS:],
+            duration_seconds=duration,
+        )
 
     async def set_git_identity(self) -> None:
         """Commits in the repo are authored as the operator's bot user, with a

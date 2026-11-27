@@ -114,7 +114,9 @@ async def test_a_member_outside_the_apps_team_sees_none_of_its_activity(druks_db
     topics = (await druks_client.get("/api/events/topics")).json()
     destinations = await druks_client.get(f"/api/events/{hidden}/destinations")
     request = Mock(headers={}, is_disconnected=AsyncMock(return_value=False))
-    stream = await stream_feed(request, engine=druks_db.bind, account=member)
+    # A snapshot older than every transaction: the test's own open transaction is newer
+    # than it whatever else commits in the cluster, as under pytest-xdist.
+    stream = await stream_feed(request, engine=druks_db.bind, cursor="1:1:", account=member)
     streamed = await anext(stream.body_iterator)
     await stream.body_iterator.aclose()
 
