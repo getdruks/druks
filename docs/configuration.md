@@ -222,7 +222,7 @@ timezone = "Europe/Madrid"
 ```
 
 Use an IANA timezone. The default is `UTC`. Restart Druks after a change to
-apply it to all schedules.
+apply it. A schedule that a person asked for keeps that person's timezone.
 
 The first account becomes the default account, including in header and JWT modes.
 Unattended calls use its subscriptions. The default account has no extra
@@ -242,8 +242,11 @@ notification destinations. A member can change personal preferences,
 subscriptions, API tokens, and per-person connections and keys. A member can
 also pair a phone with a private Bot's number in **Settings → Phones**.
 
-The installation timezone controls schedules and operational day boundaries.
-Your personal timezone controls timestamp display. Gate notifications use the
+The installation timezone controls the schedules that workflows declare,
+operational day boundaries, and local time in the chats of a number's bot and bot
+admin accounts. Your personal timezone controls timestamp display and
+local time in your chats: the time that an agent reads, your reminders, and the
+schedules that you ask an agent for. Gate notifications use the
 run account's preferences. Unattended runs record the default account.
 Druks refuses to start a run before account setup.
 
@@ -254,7 +257,7 @@ automatically. Custom cron input saves when you press Enter or leave the field.
 enabled state. App settings show the same fields.
 
 The page shows the installation timezone. Account timezone preferences do not
-change schedule timing. A failed save keeps your edits. A read refresh also
+change the timing of these schedules. A failed save keeps your edits. A read refresh also
 preserves unsaved edits. If you leave the page with unsaved edits, Druks asks
 first. The `?app=` filter selects one installed app.
 

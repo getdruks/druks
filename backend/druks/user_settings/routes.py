@@ -4,11 +4,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from druks.accounts.dependencies import current_account, current_admin_account
 from druks.accounts.models import Account
 from druks.api.dependencies import SessionDep
+from druks.chat.models import Reminder
 from druks.durable.engine import apply_schedules
 from druks.harnesses.base import Harness
 from druks.harnesses.config import check_config
 from druks.harnesses.exceptions import AgentConfigError
 from druks.harnesses.registry import get_harnesses
+from druks.models import Base
 from druks.notifications.services import list_notification_channels
 from druks.registry import (
     channel_registry,
@@ -19,6 +21,8 @@ from druks.registry import (
     iter_bots,
     iter_instructions,
 )
+from druks.schedules.models import Schedule
+from druks.schedules.service import apply_schedule
 from druks.teams.dependencies import require_named_app_access
 from druks.workflows import Instruction
 
@@ -98,6 +102,7 @@ async def update_settings(session: SessionDep, body: UpdateSettingsRequest) -> I
 
 @router.patch("/personal", response_model=PersonalSettingsResponse, response_model_by_alias=True)
 async def update_personal_settings(
+    session: SessionDep,
     body: UpdatePersonalSettingsRequest,
     account: Account = Depends(current_account),
 ) -> Account:
@@ -114,6 +119,14 @@ async def update_personal_settings(
         fields["notification_channel_id"] = channel_id or None
     if fields:
         await account.update_preferences(**fields)
+    if "timezone" in fields:
+        # Move the account's schedules to the new timezone immediately, not at the next launch.
+        for schedule in await Schedule.list_for_account(session, account.id):
+            await apply_schedule(schedule)
+        # A reminder holds its next time, which the old timezone gave.
+        for reminder in await Reminder.list_for_account(session, account.id):
+            if reminder.cron:
+                reminder.next_send_at = reminder.get_next_send_at(Base.utc_now())
     return account
 
 
