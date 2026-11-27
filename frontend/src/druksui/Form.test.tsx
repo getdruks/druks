@@ -500,6 +500,36 @@ describe('submitting a form', () => {
     })
   })
 
+  it('draws the title of a prose form as a text area that holds one line', async () => {
+    renderBlocks([
+      form([BODY], action({ refresh: 'none' }), { submit: 'change', layout: 'prose' }),
+    ])
+    const title = screen.getByLabelText(/Note/)
+
+    expect(title.tagName).toBe('TEXTAREA')
+    fireEvent.change(title, { target: { value: 'Fan\nnoise.' } })
+    fireEvent.blur(title)
+
+    await waitFor(() => expect(callOperation).toHaveBeenCalled())
+    expect(callOperation).toHaveBeenCalledWith('POST', '/api/field_notes/notes', {
+      body: 'Fan noise.',
+    })
+  })
+
+  it('sends a prose form on Enter in its title, and adds no line', async () => {
+    renderBlocks([form([BODY], action({ refresh: 'none' }), { layout: 'prose' })])
+    const title = screen.getByLabelText(/Note/)
+
+    fireEvent.change(title, { target: { value: 'Fan noise.' } })
+    const added = fireEvent.keyDown(title, { key: 'Enter' })
+
+    expect(added).toBe(false)
+    await waitFor(() => expect(callOperation).toHaveBeenCalled())
+    expect(callOperation).toHaveBeenCalledWith('POST', '/api/field_notes/notes', {
+      body: 'Fan noise.',
+    })
+  })
+
   it('does not send a live form that nobody changed', () => {
     renderBlocks([
       form([BODY], action({ refresh: 'none' }), { submit: 'change', layout: 'prose' }),
