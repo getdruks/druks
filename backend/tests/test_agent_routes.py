@@ -154,7 +154,7 @@ async def test_review_request_returns_the_run_id_start_hands_back(
     responses = [
         client.post(
             "/api/software_factory/reviews",
-            json={"repo": "acme/app", "prNumber": 7, "note": "Mind the upgrade path."},
+            json={"repo": "Acme/App", "prNumber": 7, "note": "Mind the upgrade path."},
         )
         for _ in range(2)
     ]
@@ -298,6 +298,18 @@ def test_software_factory_start_reports_a_tracker_refusal(client: TestClient, mo
         "code": "TRACKER_REFUSED",
         "message": "The ticket tracker refused the request: linear fell over",
         "retryable": False,
+    }
+
+
+def test_review_request_refuses_a_repo_that_is_not_registered(client: TestClient):
+    response = client.post(
+        "/api/software_factory/reviews", json={"repo": "acme/nowhere", "prNumber": 7}
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {
+        "error": "HTTP_404",
+        "detail": "No project repo with full_name acme/nowhere",
     }
 
 

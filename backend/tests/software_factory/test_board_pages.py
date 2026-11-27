@@ -28,10 +28,10 @@ async def _open_repo(druks_client, *, project="Acme", repo="acme/druks"):
     return added.json()
 
 
-async def _open_ticket(druks_client, repo_id, **fields):
+async def _open_ticket(druks_client, repo, **fields):
     created = await druks_client.post(
         _TICKETS,
-        json={"title": "one", "repo_id": int(repo_id), **fields},
+        json={"title": "one", "repo": repo, **fields},
     )
     assert created.status_code == 201
     return created.json()
@@ -65,12 +65,12 @@ async def test_an_empty_board_shows_its_columns_and_what_creates_a_ticket(druks_
         assert cards["cards"] == []
     create = page["controls"][0]
     assert (create["label"], create["operation"]) == ("New ticket", "create_ticket")
-    repos = next(field for field in create["fields"] if field["name"] == "repo_id")
+    repos = next(field for field in create["fields"] if field["name"] == "repo")
     assert [(option["group"], option["label"]) for option in repos["options"]] == [
         ("Acme", "acme/one"),
         ("Beta", "beta/app"),
     ]
-    assert repos["options"][0]["value"] == str(one["id"])
+    assert repos["options"][0]["value"] == one["fullName"]
     me = (await druks_client.get("/api/auth/me")).json()["account"]["id"]
     assignee = next(field for field in create["fields"] if field["name"] == "assignee_id")
     assert assignee["value"] == me
@@ -78,7 +78,7 @@ async def test_an_empty_board_shows_its_columns_and_what_creates_a_ticket(druks_
 
 async def test_a_new_ticket_shows_on_the_board_as_a_card_that_opens_and_drags(druks_client):
     repo = await _open_repo(druks_client)
-    ticket = await _open_ticket(druks_client, repo["id"], title="Ship the board")
+    ticket = await _open_ticket(druks_client, repo["fullName"], title="Ship the board")
 
     board = (await druks_client.get(f"{_PAGES}/board")).json()
 
@@ -94,8 +94,8 @@ async def test_a_new_ticket_shows_on_the_board_as_a_card_that_opens_and_drags(dr
 
 async def test_a_filter_narrows_the_cards_and_keeps_the_columns(druks_client):
     repo = await _open_repo(druks_client)
-    await _open_ticket(druks_client, repo["id"], title="live")
-    stuck = await _open_ticket(druks_client, repo["id"], title="stuck")
+    await _open_ticket(druks_client, repo["fullName"], title="live")
+    stuck = await _open_ticket(druks_client, repo["fullName"], title="stuck")
     await druks_client.post(
         f"{_TICKETS}/{stuck['identifier']}/status",
         json={"status": "blocked"},
@@ -118,7 +118,7 @@ async def test_a_filter_narrows_the_cards_and_keeps_the_columns(druks_client):
 
 async def test_the_ticket_page_saves_in_place_and_opens_its_build(druks_client):
     repo = await _open_repo(druks_client)
-    created = await _open_ticket(druks_client, repo["id"], title="Follow me")
+    created = await _open_ticket(druks_client, repo["fullName"], title="Follow me")
     item = await make_test_work_item(
         repo="acme/druks",
         source="druks",
@@ -126,7 +126,7 @@ async def test_the_ticket_page_saves_in_place_and_opens_its_build(druks_client):
         title="Follow me",
     )
 
-    blocker = await _open_ticket(druks_client, repo["id"], title="Go first")
+    blocker = await _open_ticket(druks_client, repo["fullName"], title="Go first")
     await druks_client.patch(
         f"{_TICKETS}/{created['identifier']}", json={"blocked_by": [blocker["identifier"]]}
     )
@@ -155,10 +155,11 @@ async def test_the_ticket_page_saves_in_place_and_opens_its_build(druks_client):
         "status",
         "priority",
         "assignee_id",
-        "repo_id",
+        "repo",
         "blocked_by",
     ]
     assert all(form["submit"] == "change" for form in sidebar[:-1])
+    assert sidebar[3]["fields"][0]["value"] == "acme/druks"
     blockers_field = sidebar[4]["fields"][0]
     assert [option["value"] for option in blockers_field["options"]] == [blocker["identifier"]]
     assert blockers_field["value"] == [blocker["identifier"]]
