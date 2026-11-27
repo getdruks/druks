@@ -1679,7 +1679,14 @@ async def test_only_the_operator_reaches_the_connected_mcp_servers_and_holds_the
                 "meta": {
                     "claudeCode": {
                         "options": {
-                            "disallowedTools": ["AskUserQuestion"],
+                            "disallowedTools": [
+                                "AskUserQuestion",
+                                "CronCreate",
+                                "CronDelete",
+                                "CronList",
+                                "Monitor",
+                                "ScheduleWakeup",
+                            ],
                             "model": "claude-opus-4-7",
                             "extraArgs": {"system-prompt-snapshot": "off"},
                             "systemPrompt": {
@@ -1708,7 +1715,14 @@ async def test_only_the_operator_reaches_the_connected_mcp_servers_and_holds_the
                 "meta": {
                     "claudeCode": {
                         "options": {
-                            "disallowedTools": ["AskUserQuestion"],
+                            "disallowedTools": [
+                                "AskUserQuestion",
+                                "CronCreate",
+                                "CronDelete",
+                                "CronList",
+                                "Monitor",
+                                "ScheduleWakeup",
+                            ],
                             "model": "claude-opus-4-7",
                             "extraArgs": {"system-prompt-snapshot": "off"},
                             "systemPrompt": "Be kind.",

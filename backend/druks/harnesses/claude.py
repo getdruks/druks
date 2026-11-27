@@ -61,7 +61,7 @@ class ClaudeHarness(Harness):
         # The CLI records the system prompt on a conversation's first request and sends
         # that record on every resume, so a reloaded session would keep its old instructions.
         options: dict[str, object] = {
-            "disallowedTools": ["AskUserQuestion"],
+            "disallowedTools": ["AskUserQuestion", *CLAUDE_DISALLOWED_TOOLS],
             "model": model_id,
             "extraArgs": {"system-prompt-snapshot": "off"},
         }
