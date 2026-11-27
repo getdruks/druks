@@ -94,7 +94,7 @@ function SubjectDetail({
 
   const data = query.data!
   const runs = [...data.timeline].reverse()
-  const now = phaseLine(data.phase, data.phaseEndsAt, timezone)
+  const now = phaseLine(data.status.phase, data.status.phaseEndsAt, timezone)
   const crumb = (
     <div className="ins-crumb">
       <Link href={`/${app}`} className="ins-crumb-back">

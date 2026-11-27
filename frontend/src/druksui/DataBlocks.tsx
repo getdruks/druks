@@ -14,6 +14,8 @@ import type {
   Value,
 } from '../api/types'
 import { RelTime } from '../components/RelTime'
+import { phaseLine } from '../lib/phase'
+import { useTimezone } from '../lib/preferences'
 import { ActionButton } from './Form'
 import { LinkControl } from './LinkControl'
 import { HasTextFormContext } from './pages'
@@ -69,20 +71,25 @@ const STOPPED = ['failed', 'cancelled', 'orphaned']
 const WORKING = ['scheduled', 'running']
 
 function subjectStatusWord(
-  { state, gate }: NonNullable<SubjectStatusValue['status']>,
+  { state, gate, phase, phaseEndsAt }: NonNullable<SubjectStatusValue['status']>,
   working: string,
+  timezone: string,
 ): [string, StatusValue['tone']] {
   if (gate) return ['needs you', 'warning']
   if (state && STOPPED.includes(state)) return [state, 'danger']
-  if (state && WORKING.includes(state)) return [working, 'active']
+  if (state && WORKING.includes(state)) {
+    return [phaseLine(phase, phaseEndsAt, timezone) ?? working, 'active']
+  }
   return ['idle', 'neutral']
 }
 
 /** The state of the work on one subject. It shows the shell's word for the run,
- * the app's verb while it works, and the message of a run that stopped. */
+ * the phase of a run that starts or waits, the app's verb while the agent works,
+ * and the message of a run that stopped. */
 function SubjectStatus({ value: { status, working } }: { value: SubjectStatusValue }) {
+  const timezone = useTimezone()
   if (!status) return null
-  const [label, tone] = subjectStatusWord(status, working)
+  const [label, tone] = subjectStatusWord(status, working, timezone)
   const word = <span className={`dui-status dui-status-${tone}`}>{label}</span>
   if (!status.failure) return word
   return (

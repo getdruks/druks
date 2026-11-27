@@ -27,6 +27,17 @@ workflow_status = sa.Table(
     sa.Column("forked_from", sa.String),
 )
 
+# Read-only handle on the events a run sets, such as its live phase. DBOS owns and
+# migrates the real table.
+workflow_events = sa.Table(
+    "workflow_events",
+    sa.MetaData(schema=DBOS_SYSTEM_SCHEMA),
+    sa.Column("workflow_uuid", sa.String),
+    sa.Column("key", sa.String),
+    sa.Column("value", sa.Text),
+    sa.Column("serialization", sa.String),
+)
+
 
 def subject_filter(
     run_id: sa.ColumnElement, subject_type: str, subject_id: str
@@ -119,6 +130,24 @@ def subject_attribute_expression(run_id: sa.ColumnElement, name: str) -> sa.Colu
         sa.select(workflow_status.c.attributes[name].as_string())
         .where(workflow_status.c.workflow_uuid == run_id)
         .correlate_except(workflow_status)
+        .scalar_subquery()
+    )
+
+
+def event_expression(run_id: sa.ColumnElement, key: str) -> sa.ColumnElement:
+    """The text of the event ``key`` that this run set as portable JSON."""
+    # SQL cannot read DBOS's default pickle, so the read skips a pickled value.
+    value = sa.cast(workflow_events.c.value, JSONB).op("#>>", return_type=sa.Text)(
+        sa.literal_column("'{}'")
+    )
+    return (
+        sa.select(value)
+        .where(
+            workflow_events.c.workflow_uuid == run_id,
+            workflow_events.c.key == key,
+            workflow_events.c.serialization == "portable_json",
+        )
+        .correlate_except(workflow_events)
         .scalar_subquery()
     )
 

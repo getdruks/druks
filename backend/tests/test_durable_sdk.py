@@ -620,7 +620,8 @@ async def test_wait_takes_only_the_facts_of_its_topic(runtime, declared_workflow
     subject = Widget(id=770770)
     workflow_id = await WaitFlow.start(subject=subject)
     await _wait_for_phase(workflow_id, "Waiting for checks")
-    assert (await _get_run(runtime.engine, workflow_id)).state == RunState.RUNNING
+    waiting = await _get_run(runtime.engine, workflow_id)
+    assert (waiting.state, waiting.phase) == (RunState.RUNNING, "Waiting for checks")
     async with session_scope(runtime.engine):
         await WaitFlow.answer(subject, "review.completed", decision="approve")
         await WaitFlow.answer(subject, "checks.finished", conclusion="success")
