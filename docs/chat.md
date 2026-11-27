@@ -363,7 +363,10 @@ denies the file, shell, and web tools.
 
 A run that the agent starts with a tool records its conversation. When the run
 parks with a question, Druks adds an internal message with the request to that
-conversation. On a WhatsApp number with an admin, the admin answers instead: see
+conversation. In an operator's conversation, the message also holds the address
+of the run's page, when the installation has an endpoint. The agent gives you that
+address and a short summary of the run's artifact, which it reads with `get_gate`.
+On a WhatsApp number with an admin, the admin answers instead: see
 [Confirmation](#confirmation). A question that names an
 [approver](writing-an-app.md#wait-for-input) asks the approver instead, on any
 source. The conversation gets no buttons, because only the approver can answer.

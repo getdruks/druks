@@ -10,7 +10,7 @@ from uuid import uuid4
 
 import asyncssh
 import pytest
-from conftest import FORM_TEXT, connect_anthropic_subscription
+from conftest import FORM_TEXT, connect_anthropic_subscription, set_endpoint
 from druks import ui
 from druks.accounts.context import current_conversation_id
 from druks.accounts.enums import AccountKind
@@ -2536,10 +2536,12 @@ async def test_a_parked_run_asks_the_chat_that_started_it(druks_db, conversation
     run.conversation_id = conversation.id
     run.input_requested_at = Base.utc_now()
 
+    set_endpoint("https://druks.example")
+
     assert await bot_service.ask_for_answer(druks_db, run) == conversation.id
     *_, ask = await list_messages(druks_db, conversation)
     assert ask.is_internal
-    assert run.id in ask.body
+    assert f"https://druks.example/runs/{run.id}" in ask.body
     assert "Approve the plan" in ask.body
 
 
