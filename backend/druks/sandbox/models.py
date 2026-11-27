@@ -5,7 +5,7 @@ from secrets import token_urlsafe
 from typing import TYPE_CHECKING
 
 from drukbox_sdk import Issuer
-from sqlalchemy import ForeignKey, LargeBinary, select, update
+from sqlalchemy import ForeignKey, ForeignKeyConstraint, Index, LargeBinary, select, update
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column, relationship, selectinload
@@ -53,10 +53,75 @@ class SecretRef(Base):
 
     identity: Mapped["SandboxIdentity"] = relationship(back_populates="secret_refs", lazy="raise")
     secret: Mapped[VaultSecret] = relationship(lazy="selectin")
+    issues: Mapped[list["SecretIssue"]] = relationship(
+        order_by="SecretIssue.id", viewonly=True, lazy="raise"
+    )
 
     @property
     def key(self) -> tuple[str, str, tuple[str, ...], str]:
         return (self.name, self.secret_id, tuple(self.resources or ()), self.host or "")
+
+
+class SecretIssue(Base, Uuid7Pk):
+    """One answer of the issuer to a box for one of its secrets: the facts of the token
+    that the box got, never the value, or the reason that it got none. An answer that
+    repeats the last one adds no row, so the rows of a secret are its changes in order."""
+
+    __tablename__ = "sandbox_secret_issues"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["identity_id", "name"],
+            ["sandbox_secret_refs.identity_id", "sandbox_secret_refs.name"],
+            ondelete="CASCADE",
+        ),
+        Index("ix_sandbox_secret_issues_ref", "identity_id", "name"),
+    )
+
+    identity_id: Mapped[str]
+    name: Mapped[str]
+    issued_at: Mapped[datetime] = mapped_column(default=Base.utc_now)
+    # The first 8 hex characters of the SHA-256 of the token, so that two runs can be
+    # compared. Empty for a value with no expiry: a pasted value can be short enough
+    # for a guess to be checked against it.
+    fingerprint: Mapped[str] = mapped_column(default="")
+    expires_at: Mapped[datetime | None]
+    # The audience of the vault row that keeps the token, and when that row was written.
+    # A token minted for a GitHub App installation names the installation there. Empty
+    # for a token that the vault does not keep.
+    audience: Mapped[str] = mapped_column(default="")
+    minted_at: Mapped[datetime | None]
+    # Why the box got no token.
+    error: Mapped[str] = mapped_column(default="")
+
+    @classmethod
+    async def record(
+        cls,
+        session: AsyncSession,
+        identity_id: str,
+        name: str,
+        *,
+        value: str = "",
+        expires_at: datetime | None = None,
+        error: str = "",
+    ) -> None:
+        issue = cls(identity_id=identity_id, name=name, expires_at=expires_at, error=error)
+        if expires_at:
+            issue.fingerprint = hashlib.sha256(value.encode()).hexdigest()[:8]
+            if kept := await VaultSecret.find_token(session, value, expires_at):
+                issue.audience, issue.minted_at = kept.audience, kept.updated_at
+        last = await session.scalar(
+            select(cls)
+            .where(cls.identity_id == identity_id, cls.name == name)
+            .order_by(cls.id.desc())
+            .limit(1)
+        )
+        if not last or last.facts != issue.facts:
+            session.add(issue)
+            await session.flush()
+
+    @property
+    def facts(self) -> tuple[str, datetime | None, str]:
+        return (self.fingerprint, self.expires_at, self.error)
 
 
 class SandboxIdentity(Base, Uuid7Pk):
@@ -246,6 +311,18 @@ class SandboxIdentity(Base, Uuid7Pk):
             )
         )
         return [identity for identity in rows if identity.run and not identity.run.is_active]
+
+    @classmethod
+    async def list_for_run(cls, session: AsyncSession, run_id: str) -> list["SandboxIdentity"]:
+        """The identities that the run created, oldest first, with the issues of each
+        secret. A row stays after its box is gone."""
+        rows = await session.scalars(
+            select(cls)
+            .options(selectinload(cls.secret_refs).selectinload(SecretRef.issues))
+            .where(cls.run_id == run_id)
+            .order_by(cls.id)
+        )
+        return list(rows)
 
     @classmethod
     async def set_expiry_for_host(cls, engine, host_id: str, expires_at: datetime) -> None:

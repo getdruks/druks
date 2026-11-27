@@ -187,6 +187,30 @@ export interface RunDetail {
   run: RunSummary
 }
 
+// One answer of Druks to a box for a secret. It holds no secret value.
+export interface SecretIssue {
+  issuedAt: string
+  // The first 8 hex characters of the SHA-256 of the token. Empty for a value with no expiry.
+  fingerprint: string
+  expiresAt: string | null
+  // The vault row that keeps the token, and when Druks wrote it. Empty for a token
+  // that the vault does not keep.
+  audience: string
+  mintedAt: string | null
+  // Why the box got no token.
+  error: string
+}
+
+// One box of a run with the secrets that it fetches from Druks. It holds no secret value.
+export interface RunSandbox {
+  // "workflow" for the box that a run keeps for all its steps. A step name otherwise.
+  scopedTo: string
+  isLive: boolean
+  // ``secretId`` is the vault row that answers for the secret. ``issues`` holds the
+  // answers that changed, oldest first.
+  secrets: { name: string; secretId: string; kind: string; resources: string[]; issues: SecretIssue[] }[]
+}
+
 // One row of the active board. It holds the subject summary and the lifecycle status.
 export interface SubjectRow<S extends SubjectSummary = SubjectSummary> {
   summary: S

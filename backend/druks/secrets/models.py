@@ -236,6 +236,21 @@ class VaultSecret(Base, Uuid7Pk):
         return
 
     @classmethod
+    async def find_token(
+        cls, session: AsyncSession, value: str, expires_at: datetime
+    ) -> "VaultSecret | None":
+        """The row that keeps the token ``value``. A token is kept with its expiry, so
+        the expiry narrows the read to the rows worth opening."""
+        rows = await session.scalars(
+            select(cls).where(
+                cls.kind == SecretKind.STATIC,
+                cls.expires_at == expires_at,
+                cls.revoked_at.is_(None),
+            )
+        )
+        return next((row for row in rows if row.secrets.get("value") == value), None)
+
+    @classmethod
     async def get_or_mint_token(
         cls,
         session: AsyncSession,

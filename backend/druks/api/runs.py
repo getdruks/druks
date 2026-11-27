@@ -18,6 +18,7 @@ from druks.api.schemas import (
     ResumeRequest,
     RetryRunResponse,
     RunDetailResponse,
+    SandboxResponse,
 )
 from druks.durable.enums import RunState, WorkflowEvent
 from druks.durable.models import Run
@@ -25,6 +26,7 @@ from druks.durable.reads import get_run_response
 from druks.events.models import Event
 from druks.notifications.exceptions import AnswerNotAllowedError, InvalidChoiceError
 from druks.notifications.services import validate_in_app_answer
+from druks.sandbox.models import SandboxIdentity
 from druks.teams.dependencies import require_run_access
 
 router = APIRouter(prefix="/api/runs", tags=["runs"])
@@ -45,6 +47,23 @@ async def get_run(
         subject=await run.get_subject(),
         run=await get_run_response(run),
     )
+
+
+@router.get(
+    "/{run}/sandboxes",
+    response_model=list[SandboxResponse],
+    dependencies=[Depends(require_run_access)],
+)
+async def list_run_sandboxes(
+    session: SessionDep, run_id: Annotated[str, Path(alias="run")]
+) -> list[SandboxResponse]:
+    """The boxes of the run, each with the secrets that it fetches from Druks."""
+    if not await session.get(Run, run_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "run not found")
+    return [
+        SandboxResponse.from_identity(identity)
+        for identity in await SandboxIdentity.list_for_run(session, run_id)
+    ]
 
 
 @router.post(
