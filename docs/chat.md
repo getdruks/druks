@@ -354,7 +354,8 @@ and tells it where you connect a missing one. A Bot's sandbox never holds a sign
 A build still acts as the App: see [GitHub](configuration.md#github).
 
 The agent can change Druks through those tools. Chat has no permission dialog
-or proposal mode. Claude runs in bypass mode and cannot call `AskUserQuestion`.
+or proposal mode. Claude runs in bypass mode and cannot call `AskUserQuestion`,
+`CronCreate`, `CronDelete`, `CronList`, `Monitor`, or `ScheduleWakeup`.
 Codex runs in full-access mode for an operator. For a Bot it runs in read-only
 mode without shell, web, or image tools. OpenCode runs its default agent with
 every permission allowed for an operator. For a Bot it runs an agent that
