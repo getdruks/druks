@@ -85,6 +85,7 @@ export function Form({
               }
             : undefined
         }
+        layout={layout}
       />
       {run.problem && (
         <div className="dui-form-error" role="alert">

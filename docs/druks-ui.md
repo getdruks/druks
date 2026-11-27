@@ -1517,9 +1517,11 @@ Druks refuses the form when the page function builds it.
 ```
 
 `submit="change"` sends the form when a select changes or a text field blurs.
-The shell draws no button. `layout="prose"` is a title and a body. `layout="row"`
-is a labeled property. A form cannot both submit on change and set `confirm`
-or `extra_actions`.
+The shell draws no button. `layout="prose"` is a title and a body. When the
+first field is a `TextField`, it is the title. A long title wraps over several
+lines. A person cannot add a line break to it. `layout="row"` is a labeled
+property. A form cannot both submit on change and set `confirm` or
+`extra_actions`.
 
 ### Timeline
 
