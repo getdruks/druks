@@ -44,8 +44,12 @@ x-druks: &druks
 # configuration changes between shapes. That configuration comes from .env:
 # DEFAULT_HOST_PROVIDER and the [sandbox.<provider>] values that druks setup
 # renders.
+#
+# This image and the drukbox-proxy image default to one Drukbox build, the
+# build that Druks is tested with. Move both tags in one commit. Move them when
+# a drukbox-python-sdk upgrade needs a newer Drukbox.
 x-drukbox: &drukbox
-  image: ${DRUKS_SANDBOX_SERVICE_IMAGE:-ghcr.io/czpython/drukbox:latest}
+  image: ${DRUKS_SANDBOX_SERVICE_IMAGE:-ghcr.io/getdruks/drukbox:sha-7aadd53}
   restart: unless-stopped
   network_mode: host
   # The docker provider uses the mounted socket: for sandboxes on the local
@@ -157,7 +161,7 @@ services:
   # CA lives in a volume. It survives a restart, so a sandbox that installed it
   # still trusts the proxy.
   drukbox-proxy:
-    image: ${DRUKS_SECRETS_PROXY_IMAGE:-ghcr.io/czpython/drukbox/proxy:latest}
+    image: ${DRUKS_SECRETS_PROXY_IMAGE:-ghcr.io/getdruks/drukbox/proxy:sha-7aadd53}
     profiles: ["proxy"]
     restart: unless-stopped
     network_mode: host
