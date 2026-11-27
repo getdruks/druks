@@ -169,18 +169,13 @@ def main() -> None:
     if args.command == "sandboxes":
         import asyncio
 
-        from .browser.sessions import BrowserSession
         from .chat.bridge import Bridge
         from .registry import iter_apps
         from .sandbox.templates import prepare_sandbox_templates
 
         for app in iter_apps():
             app.discover()
-        asyncio.run(
-            prepare_sandbox_templates(
-                extra=(Bridge.sandbox, BrowserSession.sandbox), labels=args.labels
-            )
-        )
+        asyncio.run(prepare_sandbox_templates(extra=(Bridge.sandbox,), labels=args.labels))
         return
 
     raise AssertionError(f"Unhandled command: {args.command}")

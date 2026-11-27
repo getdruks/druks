@@ -8,7 +8,10 @@ import httpx
 import pytest
 from conftest import connect_service
 from druks import doctor
+from druks.apps import App
+from druks.chat.bridge import Bridge
 from druks.db import db_session
+from druks.sandbox import templates
 from druks.sandbox.exceptions import TemplateNotFound
 from druks.secrets.models import VaultSecret
 from druks.testing import make_settings
@@ -239,6 +242,24 @@ async def test_declared_sandboxes_pass_when_none_are_declared(
         ok=True,
         detail="no declared sandboxes",
     )
+
+
+async def test_declared_sandboxes_skip_the_browser_when_no_app_declares_a_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    declared_apps,
+) -> None:
+    class Notebook(App):
+        name = "notebook"
+
+    lookup = AsyncMock(return_value=SimpleNamespace(status="available"))
+    monkeypatch.setattr(templates, "iter_apps", lambda: [Notebook])
+    monkeypatch.setattr(doctor, "sandbox_client", SimpleNamespace(get_template=lookup))
+    settings = make_settings(tmp_path, sandbox={"service_url": "http://drukbox"})
+
+    await doctor.check_declared_sandboxes(settings)
+
+    lookup.assert_awaited_once_with(setup_script_hash=Bridge.sandbox.setup_script_hash)
 
 
 @pytest.mark.parametrize(
