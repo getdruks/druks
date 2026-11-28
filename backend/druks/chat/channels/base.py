@@ -133,6 +133,7 @@ class Channel:
     async def create_room_conversation(
         cls, session: AsyncSession, conversation: Conversation, *, room: str
     ) -> Conversation:
-        """A conversation at the top of a room on the channel, under the conversation's
-        account and with its agent. Each reply there is a new message in the room."""
+        """The internal conversation at the top of a room on the channel, under the
+        conversation's account and with its agent. Each reply there is a new message in
+        the room."""
         raise NotImplementedError

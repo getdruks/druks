@@ -330,9 +330,9 @@ class SlackChannel(Channel):
     async def create_room_conversation(
         cls, session: AsyncSession, conversation: Conversation, *, room: str
     ) -> Conversation:
-        """The conversation at the top of the Slack channel that ``room`` names by id or by
-        name. The bot and the person must both be members: Druks posts in a channel for
-        nobody who is not in it."""
+        """The internal conversation at the top of the Slack channel that ``room`` names by
+        id or by name. The bot and the person must both be members: Druks posts in a
+        channel for nobody who is not in it."""
         sign_ins = await VaultSecret.list_account_connections(
             session, audience=Audience.service(Slack.slug), account_id=conversation.account_id
         )
@@ -370,6 +370,7 @@ class SlackChannel(Channel):
             agent_id=conversation.agent_id,
         )
         created.title = f"#{found_room['name']}"
+        created.is_internal = True
         return created
 
     @classmethod

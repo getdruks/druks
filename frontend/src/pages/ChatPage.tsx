@@ -265,7 +265,7 @@ function ConversationThread({ id, account, showMilestone, summary, onPin, pinPen
         const summary: ConversationSummary = {
           id: action.id, title: action.title, source: action.source, userId: action.userId,
           userName: action.userName, createdAt: action.createdAt,
-          isPinned: action.isPinned, lastMessageAt: action.lastMessageAt,
+          isPinned: action.isPinned, isInternal: action.isInternal, lastMessageAt: action.lastMessageAt,
           messageCount: action.messageCount, activeMessageId: action.activeMessageId,
           agentId: action.agentId, agentName: action.agentName,
         }
@@ -484,7 +484,9 @@ function ConversationThread({ id, account, showMilestone, summary, onPin, pinPen
     {(error || state.error) && <div className="chat-error" role="alert">
       <p>{error || state.error?.detail}</p>
     </div>}
-    <form className="chat-composer" onSubmit={(event) => { event.preventDefault(); void send() }}>
+    {conversation?.isInternal
+      ? <p className="chat-notice">A schedule reports here. You cannot write in this chat.</p>
+      : <form className="chat-composer" onSubmit={(event) => { event.preventDefault(); void send() }}>
       <div className="chat-composer-controls">
         <textarea
           ref={composer}
@@ -510,7 +512,7 @@ function ConversationThread({ id, account, showMilestone, summary, onPin, pinPen
         {!id && apps.isSuccess && <p className="chat-apps">{apps.data.length} installed {apps.data.length === 1 ? 'app' : 'apps'}{apps.data.length > 0 && <> · {apps.data.map((app) => appLabel(app.name)).join(', ')}</>}</p>}
         <p id="chat-send-help">Enter to send · Shift + Enter for a new line</p>
       </div>
-    </form>
+    </form>}
   </section>
 }
 

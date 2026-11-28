@@ -336,8 +336,8 @@ async def test_an_agent_lists_the_schedules_set_in_its_conversations(tmp_path: P
             conversation = await Conversation.create(
                 druks_db, account_id=owner.id, body="Scan payments", agent_id=agent_id
             )
-            # The schedule reports at the top of a room.
-            conversation.thread_id, conversation.title = "C1", "#eng"
+            # The schedule reports in the internal conversation of a room.
+            conversation.is_internal, conversation.title = True, "#eng"
             schedule = await Schedule.create(
                 druks_db,
                 account=owner,

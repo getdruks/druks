@@ -1493,7 +1493,7 @@ def member_rooms(monkeypatch, rooms: dict) -> None:
 
 
 @pytest.mark.usefixtures("tmp_data_dir")
-async def test_a_schedule_reports_at_the_top_of_a_room_that_its_agent_created_a_conversation_in(
+async def test_a_schedule_with_a_room_reports_in_the_rooms_internal_conversation(
     druks_db, tmp_path, slack, monkeypatch
 ):
     monkeypatch.setattr("druks.schedules.routes.apply_schedule", AsyncMock())
@@ -1512,36 +1512,40 @@ async def test_a_schedule_reports_at_the_top_of_a_room_that_its_agent_created_a_
     brief = {"tool": "list_schedules", "arguments": {}, "cron": "0 8 * * 1"}
 
     async with asgi_client(api) as client:
-        created = await client.post(
-            "/api/chat/rooms/conversations", json={"room": "#eng"}, headers=headers
-        )
-        again = await client.post(
-            "/api/chat/rooms/conversations", json={"room": "C1"}, headers=headers
-        )
-        made = await client.post(
-            "/api/schedules",
-            json={**brief, "conversation_id": created.json()["id"]},
+        made = await client.post("/api/schedules", json={**brief, "room": "#eng"}, headers=headers)
+        again = await client.post("/api/schedules", json={**brief, "room": "C1"}, headers=headers)
+        in_chat = await client.post("/api/schedules", json=brief, headers=headers)
+        listed = await client.get("/api/chat/conversations", headers=headers)
+        written = await client.post(
+            f"/api/chat/conversations/{made.json()['conversationId']}/messages",
+            json={"body": "What did you post?"},
             headers=headers,
         )
-    room = await druks_db.get(Conversation, created.json()["id"])
+    room = await druks_db.get(Conversation, made.json()["conversationId"])
     reply = await room.create_message(druks_db, "Three merges.", role=MessageRole.ASSISTANT)
     await SlackChannel.send_reply(druks_db, room, reply)
 
-    assert (created.status_code, again.json()["id"]) == (201, room.id)
-    assert (room.title, room.thread_id, room.user_id, room.agent_id) == (
+    assert (made.status_code, again.json()["conversationId"]) == (201, room.id)
+    assert in_chat.json()["conversationId"] == chat.id
+    assert (room.title, room.thread_id, room.agent_id, room.is_internal) == (
         "#eng",
         "C1",
-        ANA,
         agent.id,
+        True,
     )
-    assert made.json()["conversationId"] == room.id
+    assert {each["id"]: each["isInternal"] for each in listed.json()} == {
+        room.id: True,
+        chat.id: False,
+    }
+    assert written.status_code == 409
     posts = [(sent["channel"], sent.get("thread_ts"), sent.get("username")) for _, sent in slack]
     assert posts == [("C1", None, "Scout")]
 
 
-async def test_a_room_conversation_needs_the_bot_and_the_person_in_the_room(
+async def test_a_schedule_takes_only_a_room_that_the_bot_and_its_owner_are_in(
     card, druks_db, tmp_path, monkeypatch
 ):
+    monkeypatch.setattr("druks.schedules.routes.apply_schedule", AsyncMock())
     member_rooms(monkeypatch, {"": [ENG, LEADERSHIP], ANA: [ENG]})
     ana = await Account.get_or_create(druks_db, "ana@example.com")
     chat = await Conversation.create(druks_db, account_id=ana.id, body="Brief us")
@@ -1551,33 +1555,33 @@ async def test_a_room_conversation_needs_the_bot_and_the_person_in_the_room(
         authenticated=False,
     )
     headers = {"X-User": "ana@example.com", CONVERSATION_HEADER: chat.id}
+    brief = {"tool": "list_schedules", "arguments": {}, "cron": "0 8 * * 1"}
 
     async with asgi_client(api) as client:
         unknown = await client.post(
-            "/api/chat/rooms/conversations", json={"room": "#eng"}, headers=headers
+            "/api/schedules", json={**brief, "room": "#eng"}, headers=headers
         )
         await link_person(druks_db, ana)
         without_bot = await client.post(
-            "/api/chat/rooms/conversations", json={"room": "#ops"}, headers=headers
+            "/api/schedules", json={**brief, "room": "#ops"}, headers=headers
         )
-        without_person = await client.post(
-            "/api/chat/rooms/conversations", json={"room": "#leadership"}, headers=headers
+        without_owner = await client.post(
+            "/api/schedules", json={**brief, "room": "#leadership"}, headers=headers
         )
-        from_no_chat = await client.post(
-            "/api/chat/rooms/conversations",
-            json={"room": "#eng"},
-            headers={"X-User": "ana@example.com"},
+        # A schedule that Druks refuses leaves no conversation in the room.
+        bad_cron = await client.post(
+            "/api/schedules", json={**brief, "cron": "soon", "room": "#eng"}, headers=headers
         )
 
     assert [unknown.json()["detail"], without_bot.json()["detail"]] == [
         "Druks does not know the person's Slack account. Ask them to connect Slack in Druks first.",
         "The bot is not in #ops. Invite it to the channel first.",
     ]
-    assert without_person.json()["detail"] == (
+    assert without_owner.json()["detail"] == (
         "The person is not in #leadership. Ask them to join the channel first, or choose a "
         "channel that they are in."
     )
-    assert from_no_chat.status_code == 409
+    assert bad_cron.status_code == 422
     assert await Conversation.list_for_connection(druks_db, card.id) == []
 
 

@@ -32,7 +32,7 @@ class Schedule(Base, Uuid7Pk):
         ForeignKey("chat_conversations.id", ondelete="CASCADE")
     )
     # Where the runs that its calls start report: the chat where the person asked, or
-    # another of their conversations.
+    # the internal conversation of a room.
     conversation: Mapped[Conversation] = relationship(lazy="joined")
     # The tool's name and arguments, as the agent calls it.
     tool: Mapped[str]
@@ -66,23 +66,13 @@ class Schedule(Base, Uuid7Pk):
         await session.flush()
         return schedule
 
-    def change(
-        self,
-        *,
-        tool: str,
-        arguments: dict,
-        cron: str,
-        conversation_id: str,
-        tool_names: Collection[str],
-    ) -> None:
-        """Set the tool, its arguments, the cron and the conversation that its runs report
-        to."""
+    def change(self, *, tool: str, arguments: dict, cron: str, tool_names: Collection[str]) -> None:
+        """Set the tool, its arguments and the cron."""
         self._check_tool(tool, tool_names)
         self._check_cron(cron)
         self.tool = tool
         self.arguments = arguments
         self.cron = cron
-        self.conversation_id = conversation_id
 
     @staticmethod
     def _check_tool(tool: str, tool_names: Collection[str]) -> None:

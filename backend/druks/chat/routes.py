@@ -20,7 +20,6 @@ from druks.durable.schemas import ActiveRunResponse
 from druks.exceptions import PermissionDenied
 from druks.notifications.models import Notification
 from druks.redis import get_client
-from druks.registry import channel_registry
 from druks.sandbox.constants import SANDBOX_HOST_LEASE_SECONDS
 from druks.sandbox.exceptions import SandboxUploadError
 
@@ -189,6 +188,8 @@ async def create_message(
         raise HTTPException(404, "Conversation not found.")
     if not body.strip():
         raise HTTPException(422, "Write a message.")
+    if conversation.is_internal:
+        raise HTTPException(409, "A schedule reports in this chat. Write in another chat.")
     message = await conversation.create_message(session, body)
     await session.commit()
     await publish(conversation.id, {"type": "messages"})
@@ -489,39 +490,6 @@ async def start_conversation(
 
 
 @router.post(
-    "/rooms/conversations",
-    operation_id="create_room_conversation",
-    status_code=201,
-    tags=["agent"],
-    response_model=ConversationResponse,
-    response_model_by_alias=True,
-)
-async def create_room_conversation(
-    session: SessionDep,
-    room: Annotated[
-        str,
-        Body(
-            embed=True,
-            description="A Slack channel. Give its id, such as C0123ABCD: a mention "
-            "<#C0123ABCD|eng> holds it. With no id, give its name, such as #eng.",
-        ),
-    ],
-) -> Conversation:
-    """Create a conversation at the top of a room. Then your schedules and your reminders
-    can reach it. Each message that Druks sends there is a new message in the room, and
-    everyone in the room reads it. The bot and the person must both be members of the
-    room. Druks sends nothing until a schedule or a reminder does."""
-    if conversation_id := current_conversation_id.get():
-        conversation = await session.get(Conversation, conversation_id)
-        (channel,) = [channel for channel in channel_registry.all() if channel.has_room_messaging]
-        created = await channel.create_room_conversation(session, conversation, room=room)
-        await session.commit()
-        await session.refresh(created)
-        return created
-    raise HTTPException(409, "This call comes from no chat. Create the conversation from a chat.")
-
-
-@router.post(
     "/reminders",
     operation_id="create_reminder",
     status_code=201,
@@ -535,10 +503,9 @@ async def create_reminder(
     conversation_id: Annotated[
         str,
         Body(
-            description="Where to send: a conversation from chat_list_conversations, a "
-            "chat you start with chat_start_conversation for someone who has none, or the "
-            "top of a room that chat_create_room_conversation gives. Leave it out to send in "
-            "this chat."
+            description="Where to send: a conversation from chat_list_conversations, or a "
+            "chat you start with chat_start_conversation for someone who has none. Leave it "
+            "out to send in this chat."
         ),
     ] = "",
     send_at: Annotated[

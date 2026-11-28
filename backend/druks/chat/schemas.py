@@ -23,6 +23,8 @@ class ConversationResponse(Schema):
     id: str
     title: str | None
     is_pinned: bool
+    # Druks made the conversation for reports. Its person cannot write in it.
+    is_internal: bool
     source: ConversationSource
     user_id: str | None
     user_name: str
