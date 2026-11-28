@@ -679,6 +679,45 @@ async def test_a_recovered_call_resumes_the_agent_its_box_still_runs(
         sandbox.resume_agent.assert_not_awaited()
 
 
+@pytest.mark.parametrize("has_session", [True, False])
+async def test_a_later_call_continues_the_session_of_the_call_before_it(
+    druks_db, tmp_path, monkeypatch, current_run, has_session
+):
+    """A later call of an instruction in a run is the next message of the session of the
+    last call that finished. A call whose session Druks does not hold is not continued:
+    the later call starts a session of its own."""
+    sandbox = _patch_runtime(monkeypatch, tmp_path, {"ok": True})
+    _patch_ephemeral(monkeypatch, sandbox)
+    config = await get_config(
+        db_session(), agent_name=DUMMY_INSTRUCTION.id, account_id=current_run.account_id
+    )
+    await AgentCall.start(
+        _step_engine(),
+        call_id="call-first",
+        run_id="wf-9",
+        model=config.model,
+        agent=DUMMY_INSTRUCTION.id,
+        host_id="host-gone",
+        subscription_id=config.subscription.id,
+        api_key_id=None,
+    )
+    await AgentCall.finish(
+        _step_engine(),
+        call_id="call-first",
+        result=make_agent_result({"ok": True}, agent=DUMMY_INSTRUCTION.id),
+    )
+    session = tmp_path / "run-wf-9" / "call-first" / ClaudeHarness.session_filename
+    if has_session:
+        session.parent.mkdir(parents=True)
+        session.write_text("")
+
+    assert await DUMMY_INSTRUCTION._run(workflow_id="wf-9") == DummyOutput(ok=True)
+
+    harness = sandbox.run_agent.await_args.args[0]
+    assert harness.continued_session == (session if has_session else None)
+    assert sandbox.run_agent.await_args.kwargs["prompt"] == "PROMPT:dummy/agent.md:repo=None"
+
+
 async def test_provisioning_failure_records_no_call(druks_db, tmp_path, monkeypatch, current_run):
     """A failure before the agent starts, such as no VM capacity, records no agent call.
     The row exists only once the call has a host to run on."""
@@ -889,10 +928,12 @@ async def test_body_level_invalid_output_retries_once_then_reraises(
     current_run._reap_run = AsyncMock()
     _, sleep = _inline_agent_steps
 
-    with pytest.raises(HarnessInvalidOutputError):
+    with pytest.raises(HarnessInvalidOutputError) as excinfo:
         await DUMMY_INSTRUCTION()
 
     assert sandbox.run_agent.await_count == 2
+    # Both attempts return the same payload, so they fail with the same message.
+    assert str(excinfo.value) in sandbox.run_agent.await_args.kwargs["prompt"]
     sleep.assert_awaited_once_with(0.0)
     current_run._reap_run.assert_not_awaited()
     calls = await AgentCall.list_for_run(db_session(), "wf-9")
@@ -1170,12 +1211,11 @@ async def test_body_level_never_retry_errors_run_once(
 
 @pytest.mark.usefixtures("in_step")
 async def test_in_step_transient_retry_uses_asyncio_sleep(monkeypatch, current_run):
-    attempts = 0
+    last_failures = []
 
-    async def run_agent(_self, **_context):
-        nonlocal attempts
-        attempts += 1
-        if attempts == 1:
+    async def run_agent(_self, *, last_failure, **_context):
+        last_failures.append(last_failure)
+        if len(last_failures) == 1:
             raise HarnessOverloadedError("overloaded")
         return DummyOutput(ok=True)
 
@@ -1189,7 +1229,7 @@ async def test_in_step_transient_retry_uses_asyncio_sleep(monkeypatch, current_r
     result = await DUMMY_INSTRUCTION()
 
     assert result == DummyOutput(ok=True)
-    assert attempts == 2
+    assert last_failures == ["", "overloaded"]
     memory_sleep.assert_awaited_once_with(HarnessOverloadedError.retry_delays[0])
     durable_sleep.assert_not_awaited()
 

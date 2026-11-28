@@ -313,9 +313,10 @@ async def require_tag(
         bool, Body(embed=True, description="True to require a tag, false to stop requiring one.")
     ],
 ) -> None:
-    """Require a tag in the thread of the conversation this call comes from, or stop
-    requiring one. While you require a tag, the person's untagged replies in the thread
-    do not reach you. Their tagged messages always do."""
+    """Require a tag from the person in the thread of the conversation this call comes
+    from, or stop requiring one. A tag is required until the person asks otherwise.
+    While none is required, their untagged replies in the thread reach the agent that
+    owns the thread. Everyone else in the thread still tags the bot."""
     conversation_id = current_conversation_id.get()
     if not conversation_id:
         raise HTTPException(
@@ -324,7 +325,7 @@ async def require_tag(
     conversation = await session.get(Conversation, conversation_id)
     if not conversation.thread_id:
         raise HTTPException(409, "This conversation has no thread. Every message reaches you.")
-    conversation.is_tag_required = is_required
+    await conversation.set_tag_required(session, is_required)
     await session.commit()
 
 
@@ -517,9 +518,9 @@ async def create_reminder(
     """Send a message in a conversation once, at send_at or delay_seconds from now, or
     again and again on a cron. Give exactly one of the three. Druks sends the body word
     for word at its first check after the reminder is due. It checks every minute. Local
-    time is the installation timezone. The answer's nextSendAt is local. Tell the person
-    that time as it is. When Druks refuses a time, ask the person rather than pick
-    another. Never make a reminder to test the time."""
+    time is the timezone that each turn opens with. The answer's nextSendAt is local.
+    Tell the person that time as it is. When Druks refuses a time, ask the person rather
+    than pick another. Never make a reminder to test the time."""
     conversation_id = conversation_id or current_conversation_id.get()
     if not conversation_id:
         raise HTTPException(422, "This call comes from no chat. Give conversation_id.")
@@ -530,7 +531,7 @@ async def create_reminder(
         reminder = Reminder.create(
             session,
             conversation,
-            account.id,
+            account,
             body=body,
             send_at=send_at,
             delay_seconds=delay_seconds,

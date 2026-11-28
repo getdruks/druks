@@ -28,6 +28,7 @@ from druks.core.models import Uuid7Pk
 from druks.database import get_session
 from druks.durable.constants import NOTIFICATIONS_QUEUE, RUN_QUEUE, TASK_QUEUE
 from druks.durable.dbos_state import (
+    event_expression,
     retry_chain,
     retry_from_expression,
     state_expression,
@@ -104,6 +105,12 @@ class Run(Base):
         subject_attribute_expression(id, "subject_key")
     )
     retry_from: Mapped[str | None] = column_property(retry_from_expression(id))
+    # The step that the run last pushed with set_run_phase, and when a timed one ends.
+    # A run keeps its last phase after it stops running.
+    phase: Mapped[str | None] = column_property(event_expression(id, "phase"))
+    phase_ends_at: Mapped[datetime | None] = column_property(
+        sqlalchemy.cast(event_expression(id, "phase_ends_at"), sqlalchemy.DateTime(timezone=True))
+    )
     account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id", ondelete="RESTRICT"))
     account: Mapped[Account] = relationship(lazy="joined", foreign_keys=[account_id])
     # The chat conversation whose tool call started the run. Druks tells it how the

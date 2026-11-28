@@ -74,6 +74,8 @@ const status: SubjectResponse['status'] = {
   reason: null,
   triggeredAt: null,
   accountUsername: 'operator',
+  phase: null,
+  phaseEndsAt: null,
 }
 
 function mount(page: 'subject' | 'work', path: string) {

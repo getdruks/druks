@@ -260,7 +260,7 @@ Drukbox services put the value into the request:
 - `drukbox-exchange` runs `python -m secrets_exchange` from the Drukbox image
   on every shape. It keeps each issuer value in memory. It binds
   `127.0.0.1:8781`, so only the proxy and the Drukbox API reach it.
-- `drukbox-proxy` runs `ghcr.io/czpython/drukbox/proxy` under the `proxy`
+- `drukbox-proxy` runs `ghcr.io/getdruks/drukbox/proxy` under the `proxy`
   profile. A sandbox sends its HTTPS through it. The proxy swaps the
   placeholder for the value. It binds port 8880 at the host of
   `[sandbox].proxy_url` and no other address. A proxy on a public address
@@ -301,14 +301,15 @@ Drukbox doctor checks the exchange, and `druks doctor` shows that result in
 its `drukbox` check.
 
 Drukbox encrypts the secret entries of each sandbox with `SECRETS_KEY`. The
-installer generates `SECRETS_KEY` in `.env` for the API and the exchange. Pin
-the proxy image with
-`DRUKS_SECRETS_PROXY_IMAGE` in `[env]`, at the tag of
-`DRUKS_SANDBOX_SERVICE_IMAGE`.
+installer generates `SECRETS_KEY` in `.env` for the API and the exchange.
 
 An install from before these services has `SECRETS_KEY` in `[env]` or in
 `[sandbox.<provider>]`. Move that value to the `SECRETS_KEY` line in the secrets
 section of `.env`, set `[sandbox].proxy_url`, and run the installer again.
+
+`deploy/compose.yaml` pins the Drukbox service image and the proxy image to one
+Drukbox build. To run another build, set `DRUKS_SANDBOX_SERVICE_IMAGE` and
+`DRUKS_SECRETS_PROXY_IMAGE` in `[env]`. Give both the same tag.
 
 ### The issuer listener
 
@@ -346,8 +347,9 @@ After every deploy, build the sandbox images:
 docker compose exec web druks sandboxes build
 ```
 
-The command asks Drukbox to prepare each declared sandbox, including Chat and
-the browser. It prints a label for each template. To build only some templates,
+The command asks Drukbox to prepare each declared sandbox. It always includes
+Chat. It includes the browser only when an installed app declares a browser
+session. It prints a label for each template. To build only some templates,
 give their labels: `druks sandboxes build druks.chat.bridge:sandboxes/chat.sh`.
 Drukbox pulls the base image and reuses a template only when its digest and
 setup script match. A changed digest starts a new template build. Docker

@@ -1144,7 +1144,13 @@ async def test_operator_turns_use_the_apps_prompt_and_settings_without_a_timeout
     bot = helpdesk.bot if app == "helpdesk" else Chat.bot
     assert bot_id == bot.id
     render_prompt.assert_awaited_once_with(
-        bot.prompt, source=source, thread_id="", is_shared_thread=False, sign_ins=(), apps=ANY
+        bot.prompt,
+        source=source,
+        thread_id="",
+        is_shared_thread=False,
+        sign_ins=(),
+        apps=ANY,
+        unusable_apps=[],
     )
     assert tools == Toolkit.ALL
     [start] = [call.kwargs for call in request.await_args_list if call.args[0] == "start"]
@@ -1385,10 +1391,9 @@ async def test_a_waiting_run_asks_the_admin_and_its_end_reaches_the_chat(druks_d
     assert '"granted":true' in chat.messages[-1].body
 
 
-def test_a_reminder_cron_keeps_local_time_across_daylight_saving(monkeypatch):
-    settings = SimpleNamespace(timezone="Europe/Madrid")
-    monkeypatch.setattr("druks.chat.models.get_settings", lambda: settings)
-    mondays_at_nine = Reminder(cron="0 9 * * 1")
+def test_a_reminder_cron_keeps_local_time_across_daylight_saving():
+    account = Account(username="ana", kind=AccountKind.OPERATOR, timezone="Europe/Madrid")
+    mondays_at_nine = Reminder(cron="0 9 * * 1", account=account)
 
     assert mondays_at_nine.get_next_send_at(datetime(2026, 10, 15, tzinfo=UTC)) == datetime(
         2026, 10, 19, 7, tzinfo=UTC
@@ -1398,16 +1403,15 @@ def test_a_reminder_cron_keeps_local_time_across_daylight_saving(monkeypatch):
     )
 
 
-async def test_a_reminder_sends_after_a_delay_or_at_a_local_or_offset_time(druks_db, monkeypatch):
-    settings = SimpleNamespace(timezone="Europe/Madrid")
-    monkeypatch.setattr("druks.chat.models.get_settings", lambda: settings)
+async def test_a_reminder_sends_after_a_delay_or_at_a_local_or_offset_time(druks_db):
+    account = Account(username="ana", kind=AccountKind.OPERATOR, timezone="Europe/Madrid")
     chat = SimpleNamespace(id="c")
     before = Base.utc_now()
 
-    in_five = Reminder.create(druks_db, chat, "a", body="Trash", delay_seconds=300)
-    local = Reminder.create(druks_db, chat, "a", body="Trash", send_at=datetime(2099, 1, 1, 9))
+    in_five = Reminder.create(druks_db, chat, account, body="Trash", delay_seconds=300)
+    local = Reminder.create(druks_db, chat, account, body="Trash", send_at=datetime(2099, 1, 1, 9))
     offset = Reminder.create(
-        druks_db, chat, "a", body="Trash", send_at=datetime(2099, 1, 1, 9, tzinfo=UTC)
+        druks_db, chat, account, body="Trash", send_at=datetime(2099, 1, 1, 9, tzinfo=UTC)
     )
 
     five_minutes = timedelta(seconds=300)
@@ -1435,7 +1439,7 @@ async def test_a_reminder_needs_exactly_one_later_time_or_cron(
         Reminder.create(
             druks_db,
             SimpleNamespace(id="c"),
-            "a",
+            Account(username="ana"),
             body="Stock count",
             send_at=send_at,
             delay_seconds=delay_seconds,
@@ -1443,9 +1447,7 @@ async def test_a_reminder_needs_exactly_one_later_time_or_cron(
         )
 
 
-async def test_a_reminder_sends_in_the_calling_chat_unless_told_where(
-    druks_db, monkeypatch, tmp_path
-):
+async def test_a_reminder_sends_in_the_calling_chat_unless_told_where(druks_db, tmp_path):
     configure_app_for_test(settings=make_settings(tmp_path), authenticated=False)
     api = FastAPI(dependencies=[Depends(request_session)])
     api.add_api_route(
@@ -1457,9 +1459,8 @@ async def test_a_reminder_sends_in_the_calling_chat_unless_told_where(
         response_model_by_alias=True,
         dependencies=[Depends(current_conversation)],
     )
-    settings = SimpleNamespace(timezone="Europe/Madrid")
-    monkeypatch.setattr("druks.chat.models.get_settings", lambda: settings)
     operator = await Account.get_or_create(druks_db, "op@example.com")
+    await operator.update_preferences(timezone="Europe/Madrid")
     chat = await Conversation.create(druks_db, account_id=operator.id, body="Hi")
     other = await Conversation.create(druks_db, account_id=operator.id, body="Hello")
     _, token = await PersonalAccessToken.create(druks_db, account_id=operator.id, name="chat")
@@ -1492,7 +1493,12 @@ async def test_a_due_reminder_sends_once_as_written(druks_db, waha):
         druks_db, connection, admin_id, **{**user(ANA), "thread_id": GROUP}
     )
     reminder = Reminder.create(
-        druks_db, group_chat, admin_id, body="Stock count today 🧮", send_at=None, cron="0 9 * * *"
+        druks_db,
+        group_chat,
+        await druks_db.get(Account, admin_id),
+        body="Stock count today 🧮",
+        send_at=None,
+        cron="0 9 * * *",
     )
     reminder.next_send_at = Base.utc_now() - timedelta(minutes=1)
     await druks_db.commit()

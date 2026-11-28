@@ -208,6 +208,11 @@ class SubjectStatus(Schema):
     # has only the driving run, which is what everything above already comes from.
     triggered_at: datetime | None = None
     account_username: str | None = None
+    # The driving run's live phase while it runs: a start-up step, a wait, or the
+    # agent at work. The shell supplies the words. A timed phase carries the time
+    # when it ends separately.
+    phase: str | None = None
+    phase_ends_at: datetime | None = None
 
     @property
     def is_active(self) -> bool:
@@ -240,10 +245,6 @@ class SubjectResponse(Schema):
     status: SubjectStatus
     # The subject's runs, oldest first, each with its agent calls — the timeline.
     timeline: list[RunResponse] = Field(default_factory=list)
-    # The driving run's live phase while it starts or waits. The shell supplies
-    # the words. A timed phase carries the time when it ends separately.
-    phase: str | None = None
-    phase_ends_at: datetime | None = None
 
 
 class TranscriptChunk(Schema):

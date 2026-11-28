@@ -78,8 +78,8 @@ def test_extract_claude_cost_returns_none_when_envelope_lacks_cost():
 
 def test_failed_claude_call_writes_cost_before_raising(tmp_path: Path):
     message = (
-        "You've hit your org's monthly spend limit · ask your admin to raise it · "
-        "your session limit resets 2:20pm"
+        "You've hit your org's monthly spend limit · visit "
+        "https://claude.ai/admin-settings/usage to raise it"
     )
     stdout = (
         json.dumps(
@@ -584,3 +584,47 @@ def test_crashed_claude_call_with_a_last_line_cut_inside_a_character_reports_its
             artifact_dir=tmp_path,
             run_id="crashed-call",
         )
+
+
+def test_a_continued_claude_call_records_only_its_own_cost(tmp_path: Path):
+    """Claude Code reports the totals of a session since it began. The totals of the
+    session that the call continues come off."""
+    totals = {
+        "type": "cost-state",
+        "totalCostUSD": 0.75,
+        "modelUsage": {"claude-opus-4-7": _model_usage(100, 20, 30, 400)},
+    }
+    continued_session = tmp_path / "session.jsonl"
+    # Claude Code writes compact JSON.
+    continued_session.write_text(json.dumps(totals, separators=(",", ":")) + "\n")
+    stdout = _stream(
+        {
+            "type": "result",
+            "total_cost_usd": 1.0,
+            "modelUsage": {"claude-opus-4-7": _model_usage(150, 50, 40, 1000)},
+            "structured_output": {"ok": True},
+        }
+    )
+    harness = ClaudeHarness(
+        model="anthropic/claude-opus-4-7",
+        fast_mode=False,
+        effort=None,
+        continued_session=continued_session,
+    )
+
+    harness.parse(
+        HarnessRunResult(returncode=0, stdout=stdout, stderr=b""),
+        artifact_dir=tmp_path,
+        run_id="next-call",
+    )
+
+    assert read_cost(tmp_path / "next-call") == (
+        0.25,
+        {
+            "provider": "anthropic",
+            "input_tokens": 50,
+            "output_tokens": 30,
+            "cache_creation_input_tokens": 10,
+            "cache_read_input_tokens": 600,
+        },
+    )

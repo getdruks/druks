@@ -431,7 +431,10 @@ the word:
 
 - "needs you" while the subject waits on the operator
 - "failed", "cancelled", or "orphaned" when the work stopped, with its message
-- The `working` word while a run of the subject is scheduled or running
+- The phase of the run while it starts or waits, such as "Waiting for a sandbox
+  slot…", in the words of the run page
+- The `working` word while a run of the subject is scheduled, or while its agent
+  works
 - "idle" otherwise.
 
 `subjects()` on a block or a page gives the `(subject_type, subject_id)` of every
@@ -1517,9 +1520,11 @@ Druks refuses the form when the page function builds it.
 ```
 
 `submit="change"` sends the form when a select changes or a text field blurs.
-The shell draws no button. `layout="prose"` is a title and a body. `layout="row"`
-is a labeled property. A form cannot both submit on change and set `confirm`
-or `extra_actions`.
+The shell draws no button. `layout="prose"` is a title and a body. When the
+first field is a `TextField`, it is the title. A long title wraps over several
+lines. A person cannot add a line break to it. `layout="row"` is a labeled
+property. A form cannot both submit on change and set `confirm` or
+`extra_actions`.
 
 ### Timeline
 
@@ -1672,7 +1677,7 @@ class GateControls:
 ```
 
 ```json
-{"block": "gate_controls", "subject": {"subjectType": "peer", "subjectId": "7"}, "status": {"state": "parked", "run": "run-6f0a", "kind": "reports.audit", "agent": null, "gate": "review", "failure": null, "reason": null, "triggeredAt": "2026-08-29T09:14:02Z", "accountUsername": "operator"}}
+{"block": "gate_controls", "subject": {"subjectType": "peer", "subjectId": "7"}, "status": {"state": "parked", "run": "run-6f0a", "kind": "reports.audit", "agent": null, "gate": "review", "failure": null, "reason": null, "triggeredAt": "2026-08-29T09:14:02Z", "accountUsername": "operator", "phase": null, "phaseEndsAt": null}}
 ```
 
 The author writes `ui.GateControls(peer)`. Druks adds `status`, the status that
@@ -1998,7 +2003,7 @@ class SubjectStatus:
 ```
 
 ```json
-{"value": "subject_status", "subject": {"subjectType": "target", "subjectId": "7"}, "working": "auditing", "status": {"state": "failed", "run": "run-6f0a", "kind": "reports.audit", "agent": null, "gate": null, "failure": "The crawl timed out.", "reason": null, "triggeredAt": "2026-08-29T09:14:02Z", "accountUsername": "operator"}}
+{"value": "subject_status", "subject": {"subjectType": "target", "subjectId": "7"}, "working": "auditing", "status": {"state": "failed", "run": "run-6f0a", "kind": "reports.audit", "agent": null, "gate": null, "failure": "The crawl timed out.", "reason": null, "triggeredAt": "2026-08-29T09:14:02Z", "accountUsername": "operator", "phase": null, "phaseEndsAt": null}}
 ```
 
 The author writes `ui.SubjectStatus(target, working="auditing")`. Druks adds

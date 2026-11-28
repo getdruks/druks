@@ -354,7 +354,8 @@ and tells it where you connect a missing one. A Bot's sandbox never holds a sign
 A build still acts as the App: see [GitHub](configuration.md#github).
 
 The agent can change Druks through those tools. Chat has no permission dialog
-or proposal mode. Claude runs in bypass mode and cannot call `AskUserQuestion`.
+or proposal mode. Claude runs in bypass mode and cannot call `AskUserQuestion`,
+`CronCreate`, `CronDelete`, `CronList`, `Monitor`, or `ScheduleWakeup`.
 Codex runs in full-access mode for an operator. For a Bot it runs in read-only
 mode without shell, web, or image tools. OpenCode runs its default agent with
 every permission allowed for an operator. For a Bot it runs an agent that
@@ -362,7 +363,10 @@ denies the file, shell, and web tools.
 
 A run that the agent starts with a tool records its conversation. When the run
 parks with a question, Druks adds an internal message with the request to that
-conversation. On a WhatsApp number with an admin, the admin answers instead: see
+conversation. In an operator's conversation, the message also holds the address
+of the run's page, when the installation has an endpoint. The agent gives you that
+address and a short summary of the run's artifact, which it reads with `get_gate`.
+On a WhatsApp number with an admin, the admin answers instead: see
 [Confirmation](#confirmation). A question that names an
 [approver](writing-an-app.md#wait-for-input) asks the approver instead, on any
 source. The conversation gets no buttons, because only the approver can answer.
@@ -493,10 +497,13 @@ one of these:
 | `send_at` | Once, at that time. A time with no offset is local. | `2026-10-20T09:00` |
 | `cron` | Again and again, in local time | `0 9 * * 1` for Mondays at 9 |
 
-Local time is the installation `timezone`. Each turn opens with the current time
-and that timezone, so that the agent never guesses them. Without
-`conversation_id`, the reminder sends in the chat that asked for it. The answer
-gives `nextSendAt` in local time. The agent tells the person that time.
+Local time is the timezone of the person's account. A number's bot and bot admin
+accounts never sign in to choose one, so their chats use the installation timezone.
+Each turn opens with the current time and that timezone, so that the agent never
+guesses them. When the person changes the timezone in **Settings → Preferences**, a
+reminder on a cron moves with it. Without `conversation_id`, the reminder sends in the
+chat that asked for it. The answer gives `nextSendAt` in local time. The agent tells
+the person that time.
 
 Druks checks for due reminders every minute. A reminder sends up to a minute
 after its time. It sends the words as written, as the agent's message, and runs no
@@ -538,8 +545,9 @@ agent has no schedule of its own.
 | `cron` | When to call, in local time | `0 9 * * *` |
 
 Druks checks that the tool exists and that the cron has five fields when the
-agent saves the schedule. Local time is the installation `timezone`, as for
-reminders.
+agent saves the schedule. Local time is the timezone of the person's account, as for
+reminders. When the person changes that timezone in **Settings → Preferences**, the
+schedule moves with it.
 
 Each schedule has its own DBOS schedule. At each due time, Druks makes the tool
 call through its own MCP server. It calls as the owner, from the
@@ -800,7 +808,7 @@ deletes, joins, hidden events, and people from other workspaces.
 
 ### Files
 
-In a direct message or a thread that you joined, a file that you send to the bot
+In a direct message, or in a room message that reaches the bot, a file that you send
 becomes a Druks file on its message. A message with only a file starts a turn
 like every other message. An image reaches the agent with its message. Every other file,
 except audio, reaches the agent as a link to a copy in the sandbox. The agent
@@ -815,10 +823,10 @@ a Druks file with `chat_show`, Slack shows the image: see [Blocks](#blocks).
 
 Invite the bot to a channel or a group. Tag it in a message. The Bot
 answers in that message's thread. A tag inside a thread answers in that thread.
-Each person who tags the bot gets their own conversation for the thread. For 24
-hours after the last message in your conversation there, your untagged replies
-in the thread reach that conversation too. Other people must tag it. A
-top-level message with no tag reaches nobody. When you tag the bot before you
+Each person who tags the bot gets their own conversation for the thread. Tag the
+bot in every message that is for it. A message with no tag reaches nobody, in a
+thread too, unless you turned the tag off for that thread, as this section says
+below. When you tag the bot before you
 connect Slack, it says in the thread that your account is not connected. It sends
 you the link in a direct message.
 
@@ -827,20 +835,33 @@ To ask an agent, write its name right after the tag:
 match, Druks takes the longer one: "Security engineer", not "Security". A name
 before the tag does
 not count. A comma or a colon after the tag is fine. The agent answers in your
-own conversation with it for that thread. One thread can hold your
-conversations with several agents. A tag that names no agent reaches the
-conversation you last wrote in there, or the Bot if you have none. Your untagged
-replies reach the conversation you last wrote in, under the 24-hour rule above
-and the tag rule below. When you name an agent you cannot talk to, the bot says why
-in the thread and drops the message. The same tag works in a direct message,
-where a name without the tag reaches the Bot.
+own conversation with it for that thread.
+
+The last agent that a person names in a thread owns the thread, for everyone in
+it. A tag that names no agent reaches the thread's agent:
+`@Druks make it shorter`. A tag that names another agent moves the thread to that
+agent. From then on, a tag with no name reaches the new agent, from anyone. A
+thread has no time limit. In a thread where nobody named an agent, a tag with no
+name reaches the channel's agent, or else the Bot. When you cannot talk to the
+agent, because you named it or because it owns the thread, the bot says why in
+the thread and drops the message. Name an agent that you can talk to. The bot
+drops an untagged reply of yours for such an agent and says nothing. The same
+tag works in a direct message, where a name without the tag reaches the Bot.
+
+Tell the agent to answer your replies without a tag. Your untagged replies in
+that thread then reach the thread's agent, as a tag that names no agent does.
+The agent records your choice with `chat_require_tag`. The choice has no time
+limit, and it stays when the thread moves to another agent. It holds for you and
+for that thread only: everyone else in the thread still tags the bot. An agent's
+name counts only after a tag. Tell the agent to answer only when you tag it, and
+a tag is required again.
 
 An admin can give a public agent one Slack channel, under **Slack channel**
 when they edit the agent. The bot must be in the channel. In that channel, a tag
-that names no agent reaches that agent. This does not apply when you already
-have a conversation in the thread, with an agent or with the Bot. A tag that
-names another agent still reaches that agent. A top-level message without
-the tag still reaches nobody. A channel has one agent at most. Choose
+that names no agent reaches that agent. This does not apply in a thread that
+another agent owns. A tag that names another agent still reaches that agent. A
+message without the tag still reaches nobody, unless you turned the tag off for
+its thread. A channel has one agent at most. Choose
 **No channel** to return the channel to normal chat.
 
 An agent's replies in Slack show the agent's name. To give an agent a picture,
@@ -869,13 +890,6 @@ that agent, such as the text that a person types into a workflow's form. Accept
 only an automation whose input you trust. An automation's untagged
 message reaches nobody. Nobody can click the buttons of a question from such a
 run. A person answers it in the dashboard.
-
-Tell the agent to answer only when you tag it. Your untagged replies in that
-thread then stop reaching it. The agent records your choice with `chat_require_tag`.
-Tell it to answer your replies again. They then reach it again for the rest of the
-24 hours. Your choice holds for that thread only. The Slack pane of
-**Chat → Channels** sets the default for the threads that you tag the bot in
-after that.
 
 The agent reads the thread with `chat_read_thread`. It returns the newest 200
 messages, oldest first. Each has its author's id and name, and the files on it.

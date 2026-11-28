@@ -575,10 +575,58 @@ def _claude_result_event(text: str) -> bytes:
         (
             ClaudeHarness,
             _claude_result_event(
-                "You've hit your monthly spend limit · your session limit resets 4:20pm"
+                "You've hit your org's monthly spend limit · ask your admin to raise it at "
+                "https://claude.ai/admin-settings/usage · your session limit resets 2:20pm"
+            ),
+            HarnessUsageLimitError,
+            "usage_limit",
+        ),
+        (
+            ClaudeHarness,
+            _claude_result_event("You've hit your weekly limit · resets Mon 12:00am"),
+            HarnessUsageLimitError,
+            "usage_limit",
+        ),
+        (
+            ClaudeHarness,
+            _claude_result_event("You've hit your individual usage limit"),
+            HarnessSpendLimitError,
+            "spend_limit",
+        ),
+        (
+            ClaudeHarness,
+            _claude_result_event(
+                "You've hit your individual spend limit · ask your admin for a higher limit"
             ),
             HarnessSpendLimitError,
             "spend_limit",
+        ),
+        (
+            ClaudeHarness,
+            _claude_result_event(
+                "You've hit your team's shared budget · ask your admin to raise it at "
+                "https://claude.ai/admin-settings/usage"
+            ),
+            HarnessSpendLimitError,
+            "spend_limit",
+        ),
+        (
+            ClaudeHarness,
+            _claude_result_event(
+                "This request exceeds your group's budget. Ask your organization's admins to "
+                "raise it, or try again after it resets on November 1 at 00:00 UTC."
+            ),
+            HarnessSpendLimitError,
+            "spend_limit",
+        ),
+        (
+            ClaudeHarness,
+            _claude_result_event(
+                "API Error: Request rejected (429) · this may be a temporary capacity issue. "
+                "If it persists, check https://status.claude.com."
+            ),
+            HarnessRateLimitError,
+            "rate_limited",
         ),
         (
             ClaudeHarness,

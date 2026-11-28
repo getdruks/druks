@@ -21,7 +21,6 @@ from druks.models import Base, Model
 from druks.notifications.models import Notification
 from druks.registry import channel_registry
 from druks.secrets.models import VaultSecret
-from druks.settings import get_settings
 
 from .enums import ConversationSource, MessageRole, MessageState
 from .exceptions import ReminderError
@@ -142,8 +141,8 @@ class Conversation(Base, Uuid7Pk):
     thread_id: Mapped[str] = mapped_column(default="", server_default=text("''"))
     title: Mapped[str | None]
     is_pinned: Mapped[bool] = mapped_column(default=False, server_default=text("false"))
-    # The person asked that only their tagged messages in the thread reach the agent.
-    is_tag_required: Mapped[bool] = mapped_column(default=False, server_default=text("false"))
+    # Off when the person asked that their untagged replies in the thread reach its agent.
+    is_tag_required: Mapped[bool] = mapped_column(default=True, server_default=text("true"))
     session_file: Mapped[File | None] = FileField()
     # The saved agent that answers instead of the Bot.
     agent_id: Mapped[str | None] = mapped_column(ForeignKey("agents.id", ondelete="CASCADE"))
@@ -201,7 +200,6 @@ class Conversation(Base, Uuid7Pk):
         user_name: str,
         user_phone: str,
         thread_id: str,
-        is_tag_required: bool = False,
         agent_id: str | None = None,
     ) -> "Conversation":
         """The one conversation of a person with an agent or with the Bot, in a thread or
@@ -218,7 +216,6 @@ class Conversation(Base, Uuid7Pk):
                 user_name=user_name,
                 user_phone=user_phone,
                 thread_id=thread_id,
-                is_tag_required=is_tag_required,
                 agent_id=agent_id,
                 created_at=Base.utc_now(),
             )
@@ -241,36 +238,71 @@ class Conversation(Base, Uuid7Pk):
         return conversation
 
     @classmethod
-    async def get_for_user(
+    async def get_thread_owner(
+        cls,
+        session: AsyncSession,
+        connection: VaultSecret,
+        *,
+        thread_id: str,
+    ) -> "Agent | None":
+        """The agent that owns a thread on a channel's connection: the agent of the
+        conversation that a person last wrote in there, on the channel. A conversation
+        with the Bot owns nothing."""
+        from druks.agents.models import Agent  # noqa: PLC0415
+
+        return await session.scalar(
+            select(Agent)
+            .join(cls, cls.agent_id == Agent.id)
+            .join(Message, Message.conversation_id == cls.id)
+            .where(
+                cls.connection_id == connection.id,
+                cls.thread_id == thread_id,
+                # Only what a person wrote on the channel has their role and a source
+                # id. An agent's reply has another role. A click on a button, a run's
+                # report and a message from the dashboard have no source id.
+                Message.role == MessageRole.USER,
+                Message.source_id.is_not(None),
+            )
+            .order_by(Message.created_at.desc(), Message.id.desc())
+            .limit(1)
+        )
+
+    @classmethod
+    async def is_tag_required_for_user(
         cls,
         session: AsyncSession,
         connection: VaultSecret,
         *,
         user_id: str,
         thread_id: str,
-    ) -> "Conversation | None":
-        """The conversation that a person last wrote in, in a thread on a channel's
-        connection. A late reply of an agent does not make its conversation the latest.
-        The empty conversation of a bare tag comes last."""
-        # A run's report arrives in the person's role. Only what they wrote counts.
-        last_written_at = (
-            select(func.max(Message.created_at))
-            .where(
-                Message.conversation_id == cls.id,
-                Message.role == MessageRole.USER,
-                ~Message.is_internal,
-            )
-            .scalar_subquery()
-        )
-        return await session.scalar(
-            select(cls)
+    ) -> bool:
+        """Whether a person must tag the bot in a thread on a channel's connection. The
+        choice is theirs for the thread, so no tag is required once any of their
+        conversations there holds it off."""
+        has_optional_tag = await session.scalar(
+            select(cls.id)
             .where(
                 cls.connection_id == connection.id,
                 cls.user_id == user_id,
                 cls.thread_id == thread_id,
+                ~cls.is_tag_required,
             )
-            .order_by(last_written_at.desc().nulls_last(), cls.id.desc())
             .limit(1)
+        )
+        return not has_optional_tag
+
+    async def set_tag_required(self, session: AsyncSession, is_required: bool) -> None:
+        """Require a tag from the conversation's person in its thread, or stop requiring
+        one. Each of their conversations in the thread takes the choice, so that it
+        stays when the thread moves to another agent."""
+        await session.execute(
+            update(Conversation)
+            .where(
+                Conversation.connection_id == self.connection_id,
+                Conversation.user_id == self.user_id,
+                Conversation.thread_id == self.thread_id,
+            )
+            .values(is_tag_required=is_required)
         )
 
     @classmethod
@@ -531,8 +563,9 @@ class Reminder(Base, Uuid7Pk):
     conversation: Mapped[Conversation] = relationship(lazy="joined")
     # The account that asked for the reminder. Only it lists or cancels the reminder.
     account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id", ondelete="RESTRICT"))
+    account: Mapped[Account] = relationship(lazy="joined")
     body: Mapped[str]
-    # A cron in the installation timezone. Empty for a reminder that sends once.
+    # A cron in the account's timezone. Empty for a reminder that sends once.
     cron: Mapped[str] = mapped_column(default="", server_default=text("''"))
     next_send_at: Mapped[datetime]
     created_at: Mapped[datetime] = mapped_column(default=Base.utc_now)
@@ -542,7 +575,7 @@ class Reminder(Base, Uuid7Pk):
         cls,
         session: AsyncSession,
         conversation: Conversation,
-        account_id: str,
+        account: Account,
         *,
         body: str,
         send_at: datetime | None = None,
@@ -557,7 +590,7 @@ class Reminder(Base, Uuid7Pk):
             raise ReminderError(f"'{cron}' is not a cron. Write five fields, such as '0 9 * * 1'.")
         reminder = cls(
             conversation_id=conversation.id,
-            account_id=account_id,
+            account=account,
             body=body,
             cron=cron,
             next_send_at=send_at,
@@ -568,7 +601,7 @@ class Reminder(Base, Uuid7Pk):
             reminder.next_send_at = Base.utc_now() + timedelta(seconds=delay_seconds)
         elif not send_at.tzinfo:
             # The agent writes the time that the person said, which is local.
-            reminder.next_send_at = send_at.replace(tzinfo=ZoneInfo(get_settings().timezone))
+            reminder.next_send_at = send_at.replace(tzinfo=ZoneInfo(account.local_timezone))
         if reminder.next_send_at <= Base.utc_now():
             raise ReminderError("That time is past. Give a later one.")
         session.add(reminder)
@@ -607,13 +640,13 @@ class Reminder(Base, Uuid7Pk):
 
     @property
     def local_next_send_at(self) -> datetime:
-        """When the reminder sends next, in the installation timezone."""
-        return self.next_send_at.astimezone(ZoneInfo(get_settings().timezone))
+        """When the reminder sends next, in the account's timezone."""
+        return self.next_send_at.astimezone(ZoneInfo(self.account.local_timezone))
 
     def get_next_send_at(self, after: datetime) -> datetime:
         """The first time after ``after`` on the reminder's cron, which runs in the
-        installation timezone."""
-        local = after.astimezone(ZoneInfo(get_settings().timezone))
+        account's timezone."""
+        local = after.astimezone(ZoneInfo(self.account.local_timezone))
         return croniter(self.cron, local).get_next(datetime).astimezone(UTC)
 
     async def create_message(self, session: AsyncSession) -> Message:

@@ -1845,6 +1845,7 @@ a.dui-status:hover { text-decoration: underline; }
   min-height: 12em; padding: 8px 0; border: none; background: transparent; border-radius: 0;
   resize: vertical;
 }
+.dui-form-prose textarea.dui-input-title { display: block; min-height: 0; field-sizing: content; resize: none; }
 .dui-form-prose :is(input, textarea).dui-input:hover,
 .dui-form-prose :is(input, textarea).dui-input:focus {
   background: transparent; border: none; outline: none;
@@ -1987,6 +1988,7 @@ a.dui-status:hover { text-decoration: underline; }
 
 .dui-page { overflow-wrap: break-word; }
 .dui-fact-value { overflow-wrap: anywhere; }
+.dui-card-title,
 .dui-card-desc { overflow-wrap: anywhere; }
 
 :is(.dui-action, .dui-link, .dui-tab, .dui-retry, .dui-parent, .dui-checkbox,

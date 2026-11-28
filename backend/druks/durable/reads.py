@@ -10,7 +10,6 @@ from sqlalchemy import Engine
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from druks.database import session_scope
-from druks.durable.activity import get_run_phase, get_run_phase_ends_at
 from druks.durable.exceptions import AgentCallNotFound
 from druks.durable.live import keepalive_comment, serialize_model_event
 from druks.registry import get_app
@@ -120,21 +119,6 @@ async def get_statuses_for_subjects(
     return {identity: await _status(driving_runs.get(identity)) for identity in identities}
 
 
-async def get_subject_phase(
-    session: AsyncSession,
-    subject_type: str,
-    subject_id: str,
-    *,
-    workflows: "Sequence[type[Workflow]]",
-) -> str | None:
-    kinds = {workflow.kind for workflow in workflows}
-    runs = await Run.list_for_subject(session, subject_type, subject_id)
-    active_run = next((run for run in runs if run.kind in kinds and run.is_active), None)
-    if active_run and active_run.is_running:
-        return await get_run_phase(active_run.id)
-    return
-
-
 async def get_subject_response(
     session: AsyncSession,
     subject_type: str,
@@ -149,15 +133,10 @@ async def get_subject_response(
     runs = await Run.list_for_subject(
         session, subject_type, subject_id, kinds=kinds, include_calls=True
     )
-    latest = runs[0] if runs else None
-    phase = await get_run_phase(latest.id) if latest and latest.is_running else None
-    ends_at = await get_run_phase_ends_at(latest.id) if phase else None
     return SubjectResponse(
         summary=summary,
-        status=await _status(latest),
+        status=await _status(runs[0] if runs else None),
         timeline=await _timeline(runs),
-        phase=phase,
-        phase_ends_at=ends_at if ends_at and ends_at > datetime.now(UTC) else None,
     )
 
 
@@ -168,8 +147,8 @@ async def list_active_runs_for_conversation(
     what it does now."""
     active_runs = []
     for run in await Run.list_active_for_conversation(session, conversation_id):
-        phase = await get_run_phase(run.id) if run.is_running else None
-        ends_at = await get_run_phase_ends_at(run.id) if phase else None
+        phase = run.phase if run.is_running else None
+        ends_at = run.phase_ends_at if phase else None
         if ends_at and ends_at <= datetime.now(UTC):
             ends_at = None
         active_runs.append(ActiveRunResponse.from_run(run, phase=phase, phase_ends_at=ends_at))
@@ -212,6 +191,10 @@ async def _status(driving_run: Run | None) -> SubjectStatus:
     agent = None
     if not parked and driving_run.agent_calls:
         agent = driving_run.agent_calls[-1].agent
+    phase = driving_run.phase if driving_run.is_running else None
+    ends_at = driving_run.phase_ends_at if phase else None
+    if ends_at and ends_at <= datetime.now(UTC):
+        ends_at = None
     return SubjectStatus(
         state=RunState(driving_run.state),
         run=driving_run.id,
@@ -222,6 +205,8 @@ async def _status(driving_run: Run | None) -> SubjectStatus:
         reason=driving_run.failure_code,
         triggered_at=driving_run.created_at,
         account_username=driving_run.account.username,
+        phase=phase,
+        phase_ends_at=ends_at,
     )
 
 

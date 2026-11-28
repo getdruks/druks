@@ -2,9 +2,9 @@
   "name": "druks-sandbox-harnesses",
   "private": true,
   "dependencies": {
-    "@anthropic-ai/claude-code": "2.1.327",
+    "@anthropic-ai/claude-code": "2.1.329",
     "@earendil-works/pi-coding-agent": "1.5.2",
-    "@openai/codex": "0.170.0",
+    "@openai/codex": "0.171.0",
     "opencode-ai": "1.19.6",
     "pi-mcp-adapter": "7.0.1"
   }

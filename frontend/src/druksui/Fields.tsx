@@ -13,6 +13,7 @@ export function Fields({
   resets,
   onChange,
   onBlur,
+  layout,
 }: {
   fields: Field[]
   values: Record<string, unknown>
@@ -20,13 +21,14 @@ export function Fields({
   resets: number
   onChange: (name: string, value: unknown) => void
   onBlur?: () => void
+  layout?: 'stack' | 'prose' | 'row'
 }) {
   // A page can hold two forms that both take a "body". The id that a label points
   // at thus belongs to this form, not to the field name alone.
   const form = useId()
   return (
     <>
-      {fields.map((field) => {
+      {fields.map((field, index) => {
         const id = `${form}${field.name}`
         const help = field.helpText ? `${id}-help` : ''
         const error = errors[field.name] ? `${id}-error` : ''
@@ -62,6 +64,7 @@ export function Fields({
               describedBy={describedBy}
               isInvalid={Boolean(errors[field.name])}
               resets={resets}
+              isTitle={layout === 'prose' && index === 0}
             />
             {field.helpText && (
               <div className="dui-field-help dim" id={help}>
@@ -89,6 +92,7 @@ function Input({
   describedBy,
   isInvalid,
   resets,
+  isTitle,
 }: {
   field: Field
   id: string
@@ -98,6 +102,7 @@ function Input({
   describedBy?: string
   isInvalid: boolean
   resets: number
+  isTitle: boolean
 }) {
   const picker = useRef<HTMLInputElement>(null)
   const shared = {
@@ -116,6 +121,27 @@ function Input({
   const group = { 'aria-labelledby': `${id}-label`, 'aria-describedby': describedBy }
   switch (field.field) {
     case 'text':
+      if (isTitle) {
+        // An input cannot wrap. It cuts off a long title. Enter in this text area asks
+        // the form to submit and adds no line, as Enter in an input does.
+        return (
+          <textarea
+            {...shared}
+            className="dui-input dui-input-title"
+            rows={1}
+            placeholder={field.placeholder}
+            value={String(value ?? '')}
+            onChange={(event) => onChange(field.name, event.target.value.replace(/\n+/g, ' '))}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
+                event.preventDefault()
+                event.currentTarget.form!.requestSubmit()
+              }
+            }}
+            onBlur={onBlur}
+          />
+        )
+      }
       return (
         <input
           {...shared}

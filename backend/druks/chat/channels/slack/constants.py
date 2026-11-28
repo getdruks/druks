@@ -4,9 +4,6 @@ LINK_KEY = "chat:slack:link:{token}"
 # A person who stays unlinked gets the welcome again after this long.
 WELCOME_TTL_SECONDS = 30 * 24 * 60 * 60
 WELCOME_KEY = "chat:slack:welcome:{user}"
-# A person's untagged replies in a thread go to their agent while the last message
-# of their conversation there is younger than this.
-JOINED_THREAD_SECONDS = 24 * 60 * 60
 # How much of a thread the agent reads.
 THREAD_MESSAGES = 200
 LINK_MESSAGE = (

@@ -338,7 +338,7 @@ async def test_an_agent_lists_the_schedules_set_in_its_conversations(tmp_path: P
             )
             schedule = await Schedule.create(
                 druks_db,
-                account_id=owner.id,
+                account=owner,
                 conversation_id=conversation.id,
                 tool="field_notes_jot_note",
                 arguments={"body": "Scan payments"},

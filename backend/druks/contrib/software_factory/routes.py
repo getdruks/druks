@@ -12,7 +12,6 @@ from druks.contrib.software_factory.enums import Priority, Status
 from druks.contrib.software_factory.exceptions import (
     AssigneeNotFound,
     PrefixTakenError,
-    RepoNotFound,
     RepoTakenError,
     TicketAlreadyMerged,
     TicketBlocked,
@@ -329,22 +328,6 @@ reviews_router = APIRouter(prefix="/reviews")
     status_code=status.HTTP_202_ACCEPTED,
     operation_id="review",
     tags=["agent"],
-    responses={
-        404: {
-            "description": "The repository is not registered.",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "error": "HTTP_404",
-                        "detail": (
-                            "owner/name is not a registered project repo. "
-                            "Add it to a project first."
-                        ),
-                    }
-                }
-            },
-        }
-    },
 )
 async def request_review(
     repo: str = Body(
@@ -367,13 +350,9 @@ async def request_review(
     account: Account = Depends(current_account),
 ) -> str:
     """Start a pull request review."""
-    if await ProjectRepo.get_for_repo(repo):
-        return await PullRequestReview.dispatch(
-            repo=repo, pr_number=pr_number, account=account, note=note
-        )
-    raise HTTPException(
-        status.HTTP_404_NOT_FOUND,
-        f"{repo} is not a registered project repo. Add it to a project first.",
+    project_repo = await ProjectRepo.get(full_name=repo)
+    return await PullRequestReview.dispatch(
+        repo=project_repo.full_name, pr_number=pr_number, account=account, note=note
     )
 
 
@@ -398,12 +377,6 @@ async def require_ticket(identifier: str) -> Ticket:
     raise TicketNotFound(identifier, "druks")
 
 
-async def require_repo(repo_id: int) -> ProjectRepo:
-    if project_repo := await ProjectRepo.get_or_none(id=repo_id):
-        return project_repo
-    raise RepoNotFound(repo_id)
-
-
 async def require_assignee(account_id: str | None) -> str | None:
     """The id as given, once it names a real account. The column is RESTRICT, so an
     unknown id would surface as a write failure rather than an answer."""
@@ -419,12 +392,16 @@ async def require_assignee(account_id: str | None) -> str | None:
     status_code=status.HTTP_201_CREATED,
     operation_id="create_ticket",
     tags=["agent"],
-    responses=agent_error_responses(RepoNotFound(7), AssigneeNotFound("ops@example.com")),
+    responses=agent_error_responses(AssigneeNotFound("ops@example.com")),
 )
 async def create_ticket(
     title: Annotated[TicketTitle, Body(embed=True)],
-    repo_id: Annotated[
-        int, Body(embed=True, description="the GitHub repo this ticket's PR will target")
+    repo: Annotated[
+        str,
+        Body(
+            embed=True,
+            description="the registered project repo this ticket's PR will target, as owner/name",
+        ),
     ],
     description: Annotated[str, Body(embed=True)] = "",
     status: Annotated[Status, Body(embed=True)] = Status.BACKLOG,
@@ -434,7 +411,7 @@ async def create_ticket(
 ) -> Ticket:
     """Create a ticket. Creating it in Ready for Agent opens a build."""
     return await Ticket.create(
-        project_repo=await require_repo(repo_id),
+        project_repo=await ProjectRepo.get(full_name=repo),
         title=title,
         description=description,
         status=status,
@@ -465,7 +442,6 @@ async def get_ticket(identifier: str) -> Ticket:
     tags=["agent"],
     responses=agent_error_responses(
         TicketNotFound("ACM-1", "druks"),
-        RepoNotFound(7),
         AssigneeNotFound("ops@example.com"),
         TicketBlocksItself("ACM-1"),
     ),
@@ -474,8 +450,8 @@ async def update_ticket(identifier: str, edit: TicketEdit) -> Ticket:
     """Edit a ticket's title, description, priority, assignee, repo, or blockers.
     ``blocked_by`` replaces the blockers that the ticket has."""
     ticket = await require_ticket(identifier)
-    if edit.repo_id:
-        ticket.project_repo = await require_repo(edit.repo_id)
+    if edit.repo:
+        ticket.project_repo = await ProjectRepo.get(full_name=edit.repo)
     if edit.title:
         ticket.title = edit.title
     # An empty description is one the operator cleared.

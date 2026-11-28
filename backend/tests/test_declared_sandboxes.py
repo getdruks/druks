@@ -7,6 +7,8 @@ from unittest.mock import AsyncMock
 
 import druks.workflows as workflow_module
 import pytest
+from druks.apps import App
+from druks.browser.sessions import BrowserSession
 from druks.exceptions import ObjectNotFound
 from druks.sandbox import datastructures, templates
 from druks.sandbox.client import Client
@@ -48,13 +50,30 @@ def test_get_declared_sandboxes_deduplicates_by_content(monkeypatch):
         kind = "notes.second"
         sandbox = other
 
-    app = SimpleNamespace(workflows=SimpleNamespace(all=lambda: [First, Second]))
+    app = SimpleNamespace(
+        workflows=SimpleNamespace(all=lambda: [First, Second]),
+        browser_sessions=SimpleNamespace(all=lambda: []),
+    )
     monkeypatch.setattr(templates, "iter_apps", lambda: [app])
     monkeypatch.setattr(Sandbox, "read_setup_script", lambda self: b"setup")
 
     declared = templates.get_declared_sandboxes()
 
     assert declared == {hashlib.sha256(b"setup").hexdigest(): other}
+
+
+def test_get_declared_sandboxes_includes_the_browser_when_an_app_declares_a_session(
+    monkeypatch, declared_apps
+):
+    class Notebook(App):
+        name = "notebook"
+        journal = BrowserSession(site="journal.example")
+
+    monkeypatch.setattr(templates, "iter_apps", lambda: [Notebook])
+
+    declared = templates.get_declared_sandboxes()
+
+    assert declared == {BrowserSession.sandbox.setup_script_hash: BrowserSession.sandbox}
 
 
 async def test_prepare_sandbox_templates_requests_each_declaration(monkeypatch, capsys):

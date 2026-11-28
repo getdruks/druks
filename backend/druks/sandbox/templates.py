@@ -21,6 +21,8 @@ def get_declared_sandboxes(*, extra: tuple[Sandbox, ...] = ()) -> dict[str, Sand
         for workflow in app.workflows.all():
             if sandbox := workflow.sandbox:
                 declared[sandbox.setup_script_hash] = sandbox
+        for session in app.browser_sessions.all():
+            declared[session.sandbox.setup_script_hash] = session.sandbox
     return declared
 
 

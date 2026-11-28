@@ -533,6 +533,10 @@ class NightWatch(App):
     )
 ```
 
+The prompt name starts with the app name. The rest is the path of the file in the
+`templates/` directory of the app's package: Druks reads
+`night_watch/write_report.md` from `templates/write_report.md`.
+
 The app name and the attribute name form the instruction's id:
 `night_watch.write_report`. Settings overrides, the timeline, and the step name
 use that id.
@@ -542,7 +546,7 @@ plugin state and no MCP server:
 
 ```python
     triage = Instruction(
-        prompt="triage.md",
+        prompt="night_watch/triage.md",
         contract=TriageOutput,
         include_plugins=False,
         include_mcp=False,
@@ -564,6 +568,20 @@ context. It resolves the instruction's harness, model, and login in one place.
 It refuses a call that has no login, before any sandbox work. Then it
 provisions or attaches a sandbox, runs the CLI, validates the structured
 output, and records the call.
+
+A workflow can call an instruction more than once in a run, for example to send
+a review's findings back to the agent that wrote the change. Each later call is
+the next round of the same task, so the agent continues the conversation of the
+call before it: Druks sends the rendered prompt as its next message. The agent
+still has what it read and did in the earlier calls. Druks keeps the session of
+each call that finished, so the later call works on any sandbox, and it records
+only its own cost.
+
+Druks prepares the workspace before every call, so keep work that must stay in
+a place that the preparation does not reset, such as a pushed branch. Write the
+prompt so that it holds for every round and for a call that cannot continue:
+only Claude Code keeps a session, and with another CLI every call starts a new
+one. To give work a conversation of its own, start it as its own run.
 
 Override `InstructionOutput.to_result()` to map
 the strict output contract to a domain value. Override `to_artifact()` to
@@ -1577,7 +1595,7 @@ Druks serves the same `/api/night_watch/repository` surface for both subject
 types. This surface contains a board, detail pages, and a live stream. Druks
 mounts it for each declared subject. Each response contains your summary, the run
 status, the timeline, the agent calls, the artifacts, and the active question.
-While a run starts, it also holds the sandbox phase.
+While a run starts or waits, the status also holds its phase.
 
 A workflow can declare a subject from another app, such as Software Factory's
 `PullRequest`. Your board then lists the subjects that your workflows keep open.
@@ -1608,8 +1626,8 @@ if status.is_parked:
 
 `status.is_parked` is true when a run stopped to ask a person something.
 `status.kind` names the workflow of the current run. `status.gate`
-names the question that the run stopped on. While a run is active,
-`await repository.get_phase()` returns the step that it is on.
+names the question that the run stopped on. `status.phase` names the step of a
+running run, such as `queued_for_vm`.
 
 A subject that Druks did not run has no state. `status.state` and `status.run`
 are both None. `await repository.get_status(workflow=Sweep)` narrows the read to
@@ -1627,7 +1645,7 @@ statuses = await Repository.get_statuses([summary.id for summary in summaries])
 The platform's own board uses this read. A declared page that lists fifty rows
 then costs one query rather than fifty.
 
-`get_status()`, `get_statuses()`, `get_phase()`, and `list_open()` count the runs
+`get_status()`, `get_statuses()`, and `list_open()` count the runs
 of the workflows of the app that defines the subject. A run of another app on the
 same subject does not show. On a subject from another app, pass your workflow:
 `get_status(workflow=Sweep)` or `list_open(workflows=[Sweep])`.
@@ -2671,7 +2689,7 @@ fixtures directly without a `conftest.py` or `pytest_plugins` declaration:
 | `druks_db` | A SQLAlchemy `AsyncSession` bound to a per-test transaction. Commits become savepoints. Teardown rolls the outer transaction back. |
 | `druks_client` | An authenticated `httpx.AsyncClient` with installed apps mounted. It shares the connection of `druks_db`. A request starts with no session bound, as in production. |
 | `druks_redis` | The test Redis database, flushed before the test. |
-| `druks_without_dispatch` | Workflow starts and run-phase writes become no-ops. A run-phase read finds no phase. Use it in tests that start no durable engine. |
+| `druks_without_dispatch` | Workflow starts and run-phase writes become no-ops. Use it in tests that start no durable engine. |
 | `druks_without_remote_config` | Every `.druks` namespace lookup misses. Prompts then resolve to bundled templates. Config resolves to its declared defaults. |
 
 The fixtures are not autouse. A test that requests `druks_client` also gets

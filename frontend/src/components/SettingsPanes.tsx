@@ -336,7 +336,9 @@ export function PreferencesPane({
     <div className="set-pane">
       <div className="set-pane-head">
         <div className="set-pane-sub">
-          Your timezone controls timestamp display. Schedules use the installation timezone.
+          Your timezone controls timestamp display and local time in your chats: your reminders
+          and the schedules you ask an agent for. Workflow schedules use the installation
+          timezone.
         </div>
       </div>
       <div className="set-group" data-setting={SETTINGS_FIELDS.timezone.field}>

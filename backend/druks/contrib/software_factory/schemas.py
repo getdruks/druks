@@ -150,7 +150,7 @@ class TicketDetail(Schema):
     description: str
     status: Status
     priority: Priority
-    repo_id: int
+    repo: str = Field(validation_alias=AliasPath("project_repo", "full_name"))
     assignee_id: str | None
     blocked_by: Annotated[
         list[str], BeforeValidator(lambda tickets: [ticket.identifier for ticket in tickets])
@@ -166,7 +166,7 @@ class TicketEdit(BaseModel):
     description: str | None = None
     priority: Priority | None = None
     assignee_id: AssigneeId = None
-    repo_id: int | None = None
+    repo: str | None = Field(default=None, description="a registered project repo, as owner/name")
     blocked_by: set[str] | None = Field(
         default=None,
         description="the identifier of every ticket that blocks this one; replaces the blockers",

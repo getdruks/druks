@@ -39,3 +39,11 @@ CLAUDE_DISALLOWED_TOOLS = (
     "Monitor",
     "ScheduleWakeup",
 )
+
+# Appended to the prompt of an agent call that Druks retries. The retry is a new session.
+# Without this, the agent reads the changes of its last attempt as the work of another run.
+RETRY_PROMPT = (
+    "This is a retry. Your last attempt at this task failed: {failure}\n\n"
+    "That attempt can have changed the workspace and other services. Those changes are your "
+    "own work, not the work of another run. Continue from them."
+)

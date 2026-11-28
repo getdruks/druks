@@ -48,6 +48,8 @@ const CATALOG: Block[] = [
       reason: null,
       triggeredAt: null,
       accountUsername: null,
+      phase: null,
+      phaseEndsAt: null,
     },
   },
 ]

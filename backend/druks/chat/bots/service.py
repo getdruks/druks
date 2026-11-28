@@ -11,6 +11,7 @@ from druks.chat.constants import (
     PARKED_FOR_APPROVER_MESSAGE,
     PARKED_FOR_REVIEW_MESSAGE,
     PARKED_MESSAGE,
+    PARKED_WITH_SUMMARY_MESSAGE,
 )
 from druks.chat.enums import BotAccess, MessageState, PauseSignal
 from druks.chat.models import Conversation
@@ -258,8 +259,9 @@ async def ask_for_answer(session: AsyncSession, run: Run) -> str | None:
     """Ask for the answer a parked run that a chat started waits on. When only another
     account may answer, an operator's chat hears whom the run waits for, and a Bot's chat
     hears only that it waits for a review. Otherwise a number's admin decides for the
-    number's chats, and any other chat hears the ask itself. Returns the conversation to
-    deliver."""
+    number's chats, and any other chat hears the ask itself. There, an operator's chat also
+    hears the address of the run's page and a request to summarize the run's artifact.
+    Returns the conversation to deliver."""
     if not run.input_request:
         return
     conversation = await session.get(Conversation, run.conversation_id)
@@ -278,12 +280,13 @@ async def ask_for_answer(session: AsyncSession, run: Run) -> str | None:
             outcome = "waits for someone else's answer"
         return await report_run(session, run, body, outcome=outcome)
     if not conversation.admin_account_id:
-        return await report_run(
-            session,
-            run,
-            PARKED_MESSAGE.format(run=run.id, request=request),
-            outcome="waits for your answer",
-        )
+        if conversation.account.kind == AccountKind.OPERATOR:
+            link = run.get_link()
+            page = f" Give them the address of the run's page: {link}" if link else ""
+            body = PARKED_WITH_SUMMARY_MESSAGE.format(run=run.id, request=request, page=page)
+        else:
+            body = PARKED_MESSAGE.format(run=run.id, request=request)
+        return await report_run(session, run, body, outcome="waits for your answer")
     admin = await get_or_create_admin_conversation(session, conversation)
     body = QUESTION_MESSAGE.format(
         run=run.id,

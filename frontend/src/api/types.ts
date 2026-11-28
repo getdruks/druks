@@ -96,6 +96,10 @@ export interface SubjectStatus {
   // of its own keeps these facts in its columns.
   triggeredAt: string | null
   accountUsername: string | null
+  // The live phase of the driving run while it runs. The shell writes the words.
+  // ``phaseEndsAt`` holds the end of a timed phase.
+  phase: string | null
+  phaseEndsAt: string | null
 }
 
 export interface TokenUsage {
@@ -199,10 +203,6 @@ export interface SubjectResponse<S extends SubjectSummary = SubjectSummary> {
   summary: S
   status: SubjectStatus
   timeline: RunSummary[]
-  // The live phase of the driving run while it starts or waits. The shell writes the
-  // words. ``phaseEndsAt`` holds the end of a timed phase.
-  phase?: string | null
-  phaseEndsAt?: string | null
 }
 
 export interface ArtifactFile {
@@ -833,7 +833,6 @@ export interface PersonalSettings {
   timezone: string
   theme: 'system' | 'light' | 'dark'
   notificationChannelId: string | null
-  isTagRequired: boolean
 }
 
 /** A Slack channel that the bot is a member of. A person can send their notifications to it. */
@@ -865,7 +864,6 @@ export interface UpdatePersonalSettingsRequest {
   timezone?: string
   theme?: PersonalSettings['theme']
   notificationChannelId?: string | null
-  isTagRequired?: boolean
 }
 
 export interface UpdateSettingsRequest {

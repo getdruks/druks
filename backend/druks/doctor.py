@@ -20,7 +20,6 @@ from sqlalchemy.orm import Session
 
 from .accounts.models import Account
 from .apps.loader import load_installed_apps
-from .browser.sessions import BrowserSession
 from .chat.bridge import Bridge
 from .chat.channels.base import Channel
 from .core.services import Github
@@ -350,7 +349,7 @@ async def check_sandbox_e2e(settings: Settings) -> CheckResult | list[CheckResul
 
 async def check_declared_sandboxes(settings: Settings) -> CheckResult | list[CheckResult]:
     try:
-        declared = get_declared_sandboxes(extra=(Bridge.sandbox, BrowserSession.sandbox))
+        declared = get_declared_sandboxes(extra=(Bridge.sandbox,))
     except Exception as error:  # noqa: BLE001 — doctor reports, never raises
         return CheckResult(
             name="sandbox_templates",

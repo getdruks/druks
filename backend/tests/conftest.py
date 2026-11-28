@@ -200,9 +200,9 @@ async def _redis(druks_redis):
 
 @pytest.fixture(autouse=True)
 def _no_durable_dispatch(request, monkeypatch):
-    # Routes start durable work, and agent runs push and read a DBOS phase event. A
-    # test that runs no DBOS engine gets a no-op for each of those calls. The *_durable
-    # tests run the real engine.
+    # Routes start durable work, and agent runs push a DBOS phase event. A test that
+    # runs no DBOS engine gets a no-op for each of those calls. The *_durable tests run
+    # the real engine.
     if "durable" in request.module.__name__:
         return
 
@@ -225,8 +225,6 @@ def _no_durable_dispatch(request, monkeypatch):
     # undoes both in reverse order and puts the real attribute back.
     monkeypatch.setattr(Workflow, "start", classmethod(_noop))
     monkeypatch.setattr("druks.workflows.set_run_phase", _phase_noop)
-    monkeypatch.setattr("druks.durable.reads.get_run_phase", _phase_noop)
-    monkeypatch.setattr("druks.durable.reads.get_run_phase_ends_at", _phase_noop)
     monkeypatch.setattr("dbos.DBOS.cancel_workflow_async", _dbos_cancel)
     monkeypatch.setattr("dbos.DBOS.start_workflow_async", _noop)
     monkeypatch.setattr("dbos.DebouncerClient.debounce_async", _noop)
