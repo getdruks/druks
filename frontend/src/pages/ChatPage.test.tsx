@@ -28,7 +28,7 @@ const message: Message = { id: '10', role: 'user', body: 'Check the active runs'
 const conversation: Conversation = {
   id: '01995a3c-0000-7000-8000-000000000001', title: message.body, source: 'web', userId: null, userName: '', createdAt: message.createdAt,
   messageCount: 1, activeMessageId: '10', messages: [message],
-  isPinned: false, lastMessageAt: message.createdAt, agentId: null, agentName: null,
+  isPinned: false, isInternal: false, lastMessageAt: message.createdAt, agentId: null, agentName: null,
 }
 const admin: Account = { id: 'admin', username: 'admin@example.com', isDefault: true, role: 'admin' }
 const reviewer: Agent = {
@@ -258,6 +258,17 @@ describe('Chat page', () => {
     fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'alex' } })
     expect(screen.getByRole('link', { name: /Alex/ })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Pin Alex' })).toBeTruthy()
+  })
+
+  it('shows an internal conversation by what reports in it, with no message box', async () => {
+    const internal = { ...conversation, title: '#eng', isInternal: true }
+    vi.mocked(chatApi.list).mockResolvedValue([internal])
+    vi.mocked(chatApi.get).mockResolvedValue(internal)
+    mount()
+    await connected()
+    expect(screen.getByRole('link', { name: /Schedule reports in #eng/ })).toBeTruthy()
+    expect(screen.getByText('A schedule reports here. You cannot write in this chat.')).toBeTruthy()
+    expect(screen.queryByRole('textbox', { name: 'Message' })).toBeNull()
   })
 
   it('moves Today to Yesterday when the account calendar passes midnight', async () => {

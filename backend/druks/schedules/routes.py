@@ -7,7 +7,9 @@ from druks.accounts.context import current_conversation_id
 from druks.accounts.dependencies import current_account
 from druks.accounts.models import Account
 from druks.api.dependencies import SessionDep
+from druks.chat.models import Conversation
 from druks.exceptions import PermissionDenied
+from druks.registry import channel_registry
 
 from .models import Schedule
 from .schemas import ScheduleResponse
@@ -43,17 +45,32 @@ async def create_schedule(
         Body(description="The tool's arguments, the same at every call. Give {} for none."),
     ],
     cron: Annotated[str, Body(description="A cron for when to call, local time.")],
+    room: Annotated[
+        str,
+        Body(
+            description="A room where its runs report, as the person named it. Leave it "
+            "out to report in this chat."
+        ),
+    ] = "",
     account: Account = Depends(current_account),
 ) -> Schedule:
     """Call one of your tools again and again on a cron, as the person in this chat. For
     example, schedule a tool that starts a run. When none of your tools does the task,
     schedule chat_run_instruction with the task in words. Each call goes through the same
-    checks as when you call the tool. Its runs report to this chat. Local time is the
-    timezone that each turn opens with. The answer's nextRunAt is local. Tell the person
-    that time as it is. When Druks refuses the time, ask the person rather than guess."""
+    checks as when you call the tool. Its runs report to this chat. With room, they
+    report at the top of that room, where everyone in it reads them. The bot and the person
+    must both be members of the room. Local time is the timezone that each turn opens
+    with. The answer's nextRunAt is local. Tell the person that time as it is. When Druks
+    refuses the time, ask the person rather than guess."""
     conversation_id = current_conversation_id.get()
     if not conversation_id:
         raise HTTPException(422, "This call comes from no chat. Make a schedule from a chat.")
+    if room:
+        (channel,) = [channel for channel in channel_registry.all() if channel.has_room_messaging]
+        conversation = await channel.create_room_conversation(
+            session, await session.get(Conversation, conversation_id), room=room
+        )
+        conversation_id = conversation.id
     schedule = await Schedule.create(
         session,
         account=account,

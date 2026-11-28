@@ -699,6 +699,8 @@ export interface AgentSchedule {
   arguments: Record<string, unknown>
   cron: string
   nextRunAt: string
+  // The title of the group or the room that the schedule reports in.
+  room: string | null
   lastRun: ScheduledRun | null
 }
 

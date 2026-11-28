@@ -1,6 +1,5 @@
 from collections.abc import Collection
 from datetime import datetime
-from typing import Any
 from zoneinfo import ZoneInfo
 
 from croniter import CroniterBadDateError, croniter
@@ -20,7 +19,7 @@ from .constants import SCHEDULE_NAME_PREFIX
 
 class Schedule(Base, Uuid7Pk):
     """A tool call that a person asked an agent to make on a cron. DBOS fires each due
-    time, and Druks makes the call as the person, from the conversation it was set in."""
+    time, and Druks makes the call as the person, from the schedule's conversation."""
 
     __tablename__ = "schedules"
     __table_args__ = (Index("schedules_account_idx", "account_id", "created_at"),)
@@ -32,9 +31,12 @@ class Schedule(Base, Uuid7Pk):
     conversation_id: Mapped[str] = mapped_column(
         ForeignKey("chat_conversations.id", ondelete="CASCADE")
     )
+    # Where the runs that its calls start report: the chat where the person asked, or
+    # the internal conversation of a room.
+    conversation: Mapped[Conversation] = relationship(lazy="joined")
     # The tool's name and arguments, as the agent calls it.
     tool: Mapped[str]
-    arguments: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    arguments: Mapped[dict] = mapped_column(JSONB)
     # A cron in the account's timezone.
     cron: Mapped[str]
     created_at: Mapped[datetime] = mapped_column(default=Base.utc_now)
@@ -47,7 +49,7 @@ class Schedule(Base, Uuid7Pk):
         account: Account,
         conversation_id: str,
         tool: str,
-        arguments: dict[str, Any],
+        arguments: dict,
         cron: str,
         tool_names: Collection[str],
     ) -> "Schedule":
@@ -64,9 +66,7 @@ class Schedule(Base, Uuid7Pk):
         await session.flush()
         return schedule
 
-    def change(
-        self, *, tool: str, arguments: dict[str, Any], cron: str, tool_names: Collection[str]
-    ) -> None:
+    def change(self, *, tool: str, arguments: dict, cron: str, tool_names: Collection[str]) -> None:
         """Set the tool, its arguments and the cron."""
         self._check_tool(tool, tool_names)
         self._check_cron(cron)
@@ -115,7 +115,7 @@ class Schedule(Base, Uuid7Pk):
 
     @classmethod
     async def list_for_agent(cls, session: AsyncSession, agent_id: str) -> list["Schedule"]:
-        """The schedules set in the agent's conversations, newest first."""
+        """The schedules that report in the agent's conversations, newest first."""
         return list(
             await session.scalars(
                 select(cls)

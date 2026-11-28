@@ -31,6 +31,8 @@ class Channel:
     has_account_notifications: ClassVar[bool] = False
     # Whether the channel shows a run's status in one message, which it edits as the run moves.
     has_editable_status: ClassVar[bool] = False
+    # Whether the channel sends messages at the top of a room, in a conversation there.
+    has_room_messaging: ClassVar[bool] = False
     # The reaction that acknowledges a person's message, as the channel names it.
     reaction_ack: ClassVar[str]
 
@@ -126,3 +128,12 @@ class Channel:
         raise ChannelStartsNoConversationsError(
             f"A {cls.name} conversation cannot start a chat with a person."
         )
+
+    @classmethod
+    async def create_room_conversation(
+        cls, session: AsyncSession, conversation: Conversation, *, room: str
+    ) -> Conversation:
+        """The internal conversation at the top of a room on the channel, under the
+        conversation's account and with its agent. Each reply there is a new message in
+        the room."""
+        raise NotImplementedError

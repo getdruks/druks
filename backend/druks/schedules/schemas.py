@@ -23,6 +23,8 @@ class AgentScheduleResponse(ScheduleResponse):
     """A schedule on its agent's page: who owns it, and its newest due time."""
 
     account_id: str
+    # The title of the room that the schedule reports in. None when it reports in a chat.
+    room: str | None
     last_run: ScheduledRun | None
 
     @classmethod
@@ -37,5 +39,6 @@ class AgentScheduleResponse(ScheduleResponse):
             arguments=schedule.arguments,
             cron=schedule.cron,
             next_run_at=schedule.next_run_at,
+            room=schedule.conversation.title if schedule.conversation.is_internal else None,
             last_run=last_run,
         )

@@ -143,6 +143,9 @@ class Conversation(Base, Uuid7Pk):
     is_pinned: Mapped[bool] = mapped_column(default=False, server_default=text("false"))
     # Off when the person asked that their untagged replies in the thread reach its agent.
     is_tag_required: Mapped[bool] = mapped_column(default=True, server_default=text("true"))
+    # On when Druks made the conversation for reports, such as a schedule's at the top of
+    # a room. Its person reads it and cannot write in it.
+    is_internal: Mapped[bool] = mapped_column(default=False, server_default=text("false"))
     session_file: Mapped[File | None] = FileField()
     # The saved agent that answers instead of the Bot.
     agent_id: Mapped[str | None] = mapped_column(ForeignKey("agents.id", ondelete="CASCADE"))

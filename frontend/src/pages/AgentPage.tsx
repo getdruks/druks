@@ -110,6 +110,7 @@ export function AgentPage({ id, account }: { id: string; account: Account }) {
             <tr>
               <th scope="col">What</th>
               <th scope="col">When</th>
+              <th scope="col">Reports in</th>
               <th scope="col">Owner</th>
               <th scope="col">Last run</th>
               <th scope="col">Actions</th>
@@ -125,6 +126,7 @@ export function AgentPage({ id, account }: { id: string; account: Account }) {
                 <td data-label="When">
                   <code>{schedule.cron}</code> · next {timeAway(schedule.nextRunAt)}
                 </td>
+                <td data-label="Reports in">{schedule.room ?? 'The chat of its owner'}</td>
                 <td data-label="Owner">{usernames.get(schedule.accountId)}</td>
                 <td data-label="Last run">
                   {schedule.lastRun

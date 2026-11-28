@@ -6,6 +6,8 @@ export interface ConversationSummary {
   id: string
   title: string | null
   isPinned: boolean
+  /** Druks made the conversation for reports. Its person cannot write in it. */
+  isInternal: boolean
   source: 'web' | 'whatsapp' | 'slack' | 'github'
   userId: string | null
   userName: string
@@ -105,8 +107,10 @@ export type ConversationAction =
 
 export const initialConversation: ConversationState = { conversation: null, turns: {}, error: null }
 
-// A channel's conversation can have no title. Then the page shows the person's name.
+// A channel's conversation can have no title. Then the page shows the person's name. An
+// internal conversation holds the reports of the schedules of its room.
 export function conversationTitle(conversation: ConversationSummary): string {
+  if (conversation.isInternal) return `Schedule reports in ${conversation.title}`
   return conversation.title ?? (conversation.userName || conversation.userId || 'New conversation')
 }
 

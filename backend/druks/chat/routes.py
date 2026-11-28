@@ -188,6 +188,8 @@ async def create_message(
         raise HTTPException(404, "Conversation not found.")
     if not body.strip():
         raise HTTPException(422, "Write a message.")
+    if conversation.is_internal:
+        raise HTTPException(409, "A schedule reports in this chat. Write in another chat.")
     message = await conversation.create_message(session, body)
     await session.commit()
     await publish(conversation.id, {"type": "messages"})

@@ -18,6 +18,7 @@ from druks.chat.models import Automation, Conversation, Message
 from druks.chat.service import deliver
 from druks.core.apis.slack import SLACK_CUSTOMIZE_SCOPE, SlackClient
 from druks.core.services import Slack
+from druks.exceptions import ValidationError
 from druks.files.datastructures import File
 from druks.notifications.constants import CLOSED_MESSAGE
 from druks.notifications.exceptions import ChannelUnavailableError
@@ -65,6 +66,7 @@ class SlackChannel(Channel):
     has_blocks = True
     has_account_notifications = True
     has_editable_status = True
+    has_room_messaging = True
     reaction_ack = "eyes"
 
     @classmethod
@@ -204,15 +206,17 @@ class SlackChannel(Channel):
 
     @classmethod
     async def get_prompt_context(cls, session: AsyncSession, conversation: Conversation) -> dict:
-        """Whether the person must tag the bot in the conversation's thread, so the agent
-        knows whether to ask for a tag in the answer."""
+        """Whether the conversation is the top of a room, and whether the person must tag
+        the bot in its thread. The agent's prompt reads both."""
+        room, _, thread_ts = conversation.thread_id.partition(":")
         return {
+            "is_room": bool(room and not thread_ts),
             "is_tag_required": await Conversation.is_tag_required_for_user(
                 session,
                 conversation.connection,
                 user_id=conversation.user_id,
                 thread_id=conversation.thread_id,
-            )
+            ),
         }
 
     @classmethod
@@ -321,6 +325,54 @@ class SlackChannel(Channel):
             ]
         reply.source_id = f"{posted['channel']}:{posted['ts']}"
         await session.commit()
+
+    @classmethod
+    async def create_room_conversation(
+        cls, session: AsyncSession, conversation: Conversation, *, room: str
+    ) -> Conversation:
+        """The internal conversation at the top of the Slack channel that ``room`` names by
+        id or by name. The bot and the person must both be members: Druks posts in a
+        channel for nobody who is not in it."""
+        sign_ins = await VaultSecret.list_account_connections(
+            session, audience=Audience.service(Slack.slug), account_id=conversation.account_id
+        )
+        if not sign_ins:
+            raise ValidationError(
+                "Druks does not know the person's Slack account. Ask them to connect Slack "
+                "in Druks first."
+            )
+        user_id = sign_ins[0].identity["subject"]
+        client = SlackClient(token=await Slack.get_bot_token())
+        # A person writes #eng, and Slack sends a mention as <#C0123ABCD|eng>.
+        name = room.strip("<>").removeprefix("#").partition("|")[0]
+        bot_rooms = [
+            bot_room
+            for bot_room in await client.list_member_channels()
+            if name in (bot_room["id"], bot_room["name"])
+        ]
+        if not bot_rooms:
+            raise ValidationError(f"The bot is not in {room}. Invite it to the channel first.")
+        found_room = bot_rooms[0]
+        shared_rooms = await client.list_member_channels(user=user_id)
+        if found_room["id"] not in [shared_room["id"] for shared_room in shared_rooms]:
+            raise ValidationError(
+                f"The person is not in #{found_room['name']}. Ask them to join the channel "
+                "first, or choose a channel that they are in."
+            )
+        created = await Conversation.get_or_create_for_user(
+            session,
+            await Slack.get(),
+            conversation.account_id,
+            source=ConversationSource.SLACK,
+            user_id=user_id,
+            user_name="",
+            user_phone="",
+            thread_id=found_room["id"],
+            agent_id=conversation.agent_id,
+        )
+        created.title = f"#{found_room['name']}"
+        created.is_internal = True
+        return created
 
     @classmethod
     def validate_fields(cls, fields: list[dict]) -> None:
@@ -544,8 +596,10 @@ class SlackChannel(Channel):
         conversation's by its recorded Slack id. A webhook's post has no author, so the
         list leaves it out."""
         room, _, thread_ts = conversation.thread_id.partition(":")
-        if not room:
-            raise ChannelHasNoThreadsError("A direct message has no thread to read.")
+        if not thread_ts:
+            raise ChannelHasNoThreadsError(
+                "A direct message or the top of a room has no thread to read."
+            )
         client = SlackClient(token=await Slack.get_bot_token())
         messages = await client.list_replies(
             channel=room, thread_ts=thread_ts, limit=THREAD_MESSAGES

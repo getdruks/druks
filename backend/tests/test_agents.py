@@ -336,6 +336,8 @@ async def test_an_agent_lists_the_schedules_set_in_its_conversations(tmp_path: P
             conversation = await Conversation.create(
                 druks_db, account_id=owner.id, body="Scan payments", agent_id=agent_id
             )
+            # The schedule reports in the internal conversation of a room.
+            conversation.is_internal, conversation.title = True, "#eng"
             schedule = await Schedule.create(
                 druks_db,
                 account=owner,
@@ -362,7 +364,11 @@ async def test_an_agent_lists_the_schedules_set_in_its_conversations(tmp_path: P
 
     assert hidden.json() == []
     [shown] = listed.json()
-    assert (shown["id"], shown["accountId"]) == (schedules[0].id, owner.id)
+    assert (shown["id"], shown["accountId"], shown["room"]) == (
+        schedules[0].id,
+        owner.id,
+        "#eng",
+    )
     assert (shown["lastRun"]["run"], shown["lastRun"]["status"]) == ("due-time-1", "ERROR")
 
 
