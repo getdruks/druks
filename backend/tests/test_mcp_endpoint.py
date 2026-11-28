@@ -5,7 +5,6 @@ from datetime import UTC, datetime, timedelta
 from functools import partial
 from types import SimpleNamespace
 from typing import Literal
-from unittest.mock import AsyncMock
 
 import httpx
 import httpx2
@@ -28,7 +27,6 @@ from druks.chat.channels.whatsapp.constants import WAHA_AUDIENCE
 from druks.chat.constants import CONVERSATION_HEADER, REFUSED_MESSAGE
 from druks.chat.enums import ConversationSource, MessageRole
 from druks.chat.models import Conversation, Message, Reminder
-from druks.chat.workflows import RunInstruction
 from druks.contrib.software_factory.app import SoftwareFactory
 from druks.contrib.software_factory.models import Project, ProjectRepo, Ticket
 from druks.contrib.software_factory.ticketing.base import Tracker
@@ -223,6 +221,7 @@ async def test_tools_list_pins_platform_and_app_tools(app, pat_token, mode):
         "chat_show",
         "chat_run_instruction",
         "chat_start_conversation",
+        "chat_start_room_conversation",
         "chat_list_reminders",
         "chat_create_reminder",
         "chat_cancel_reminder",
@@ -936,30 +935,6 @@ async def test_a_schedule_calls_its_tool_as_its_owner_from_its_chat(
         account.id,
         "Stand up",
     )
-
-
-async def test_a_schedule_tells_the_task_run_that_it_starts_which_schedule_it_is(
-    app, account, druks_db, monkeypatch
-):
-    _call_schedules_in_process(app, monkeypatch)
-    start = AsyncMock(return_value="run-1")
-    monkeypatch.setattr(RunInstruction, "start", start)
-    conversation = await Conversation.create(druks_db, account_id=account.id, body="Brief us")
-    schedule = await Schedule.create(
-        druks_db,
-        account_id=account.id,
-        conversation_id=conversation.id,
-        tool="chat_run_instruction",
-        arguments={"instruction": "Brief the team on the merges."},
-        cron="0 8 * * 1",
-        tool_names=["chat_run_instruction"],
-    )
-    await druks_db.commit()
-
-    async with live(app):
-        await call_tool(schedule.id)
-
-    assert start.await_args.kwargs["schedule_id"] == schedule.id
 
 
 async def test_a_schedule_whose_tool_refuses_the_call_says_why(app, account, druks_db, monkeypatch):

@@ -1,12 +1,13 @@
 from datetime import datetime
+from typing import Any
 
 from dbos import DBOS, StepOptions
 from fastmcp import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
 from druks.agents.constants import PRIVATE_AGENT_MESSAGE
-from druks.chat import constants as chat_constants
 from druks.chat import service as chat_service
+from druks.chat.constants import CONVERSATION_HEADER, REFUSED_MESSAGE, SKIPPED_MESSAGE
 from druks.chat.enums import MessageRole
 from druks.chat.models import Conversation
 from druks.durable.engine import step_session
@@ -37,7 +38,7 @@ async def apply_schedule(schedule: Schedule) -> None:
 
 
 @DBOS.workflow(name=RUN_SCHEDULE_WORKFLOW)
-async def run_schedule(scheduled_at: datetime, context: dict) -> None:
+async def run_schedule(scheduled_at: datetime, context: dict[str, Any]) -> None:
     """Make the schedule's tool call at a due time. When Druks skips the call, the
     conversation hears why, and the due time fails."""
     try:
@@ -82,10 +83,7 @@ async def call_tool(schedule_id: str) -> None:
     try:
         transport = StreamableHttpTransport(
             get_druks_mcp_server(allowed_tools=()).url,
-            headers={
-                chat_constants.CONVERSATION_HEADER: conversation_id,
-                chat_constants.SCHEDULE_HEADER: schedule_id,
-            },
+            headers={CONVERSATION_HEADER: conversation_id},
             auth=bearer,
         )
         async with Client(transport) as client:
@@ -111,7 +109,7 @@ async def report_skip(schedule_id: str, reason: str) -> str | None:
         if conversation.agent and not conversation.account.can_talk_to(conversation.agent):
             notice = await conversation.create_message(
                 session,
-                chat_constants.REFUSED_MESSAGE.format(tool=schedule.tool, reason=reason),
+                REFUSED_MESSAGE.format(tool=schedule.tool, reason=reason),
                 role=MessageRole.ASSISTANT,
             )
             await session.commit()
@@ -120,5 +118,5 @@ async def report_skip(schedule_id: str, reason: str) -> str | None:
         return await chat_service.report_outcome(
             session,
             schedule.conversation_id,
-            chat_constants.SKIPPED_MESSAGE.format(tool=schedule.tool, reason=reason),
+            SKIPPED_MESSAGE.format(tool=schedule.tool, reason=reason),
         )

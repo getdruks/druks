@@ -6,9 +6,8 @@ from croniter import CroniterBadDateError, croniter
 from sqlalchemy import ForeignKey, Index, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from druks.chat.constants import RUN_INSTRUCTION_TOOL
 from druks.chat.models import Conversation
 from druks.core.models import Uuid7Pk
 from druks.exceptions import ValidationError
@@ -20,7 +19,7 @@ from .constants import SCHEDULE_NAME_PREFIX
 
 class Schedule(Base, Uuid7Pk):
     """A tool call that a person asked an agent to make on a cron. DBOS fires each due
-    time, and Druks makes the call as the person, from the conversation it was set in."""
+    time, and Druks makes the call as the person, from the schedule's conversation."""
 
     __tablename__ = "schedules"
     __table_args__ = (Index("schedules_account_idx", "account_id", "created_at"),)
@@ -31,13 +30,14 @@ class Schedule(Base, Uuid7Pk):
     conversation_id: Mapped[str] = mapped_column(
         ForeignKey("chat_conversations.id", ondelete="CASCADE")
     )
+    # Where the runs that its calls start report: the chat where the person asked, or
+    # another of their conversations.
+    conversation: Mapped[Conversation] = relationship(lazy="joined")
     # The tool's name and arguments, as the agent calls it.
     tool: Mapped[str]
     arguments: Mapped[dict] = mapped_column(JSONB)
     # A cron in the installation timezone.
     cron: Mapped[str]
-    # The id of the channel where each run posts its answer. None posts nowhere.
-    channel_id: Mapped[str | None] = mapped_column(default=None)
     created_at: Mapped[datetime] = mapped_column(default=Base.utc_now)
 
     @classmethod
@@ -50,19 +50,16 @@ class Schedule(Base, Uuid7Pk):
         tool: str,
         arguments: dict,
         cron: str,
-        channel_id: str = "",
         tool_names: Collection[str],
     ) -> "Schedule":
         cls._check_tool(tool, tool_names)
         cls._check_cron(cron)
-        cls._check_channel(channel_id, tool)
         schedule = cls(
             account_id=account_id,
             conversation_id=conversation_id,
             tool=tool,
             arguments=arguments,
             cron=cron,
-            channel_id=channel_id or None,
         )
         session.add(schedule)
         await session.flush()
@@ -74,17 +71,17 @@ class Schedule(Base, Uuid7Pk):
         tool: str,
         arguments: dict,
         cron: str,
-        channel_id: str,
+        conversation_id: str,
         tool_names: Collection[str],
     ) -> None:
-        """Set the tool, its arguments, the cron and the channel."""
+        """Set the tool, its arguments, the cron and the conversation that its runs report
+        to."""
         self._check_tool(tool, tool_names)
         self._check_cron(cron)
-        self._check_channel(channel_id, tool)
         self.tool = tool
         self.arguments = arguments
         self.cron = cron
-        self.channel_id = channel_id or None
+        self.conversation_id = conversation_id
 
     @staticmethod
     def _check_tool(tool: str, tool_names: Collection[str]) -> None:
@@ -107,15 +104,6 @@ class Schedule(Base, Uuid7Pk):
                 f"'{cron}' never comes due. Write a date that exists, such as '0 9 28 2 *'."
             ) from error
 
-    @staticmethod
-    def _check_channel(channel_id: str, tool: str) -> None:
-        """Only the tool whose run answers in words takes a channel."""
-        if channel_id and tool != RUN_INSTRUCTION_TOOL:
-            raise ValidationError(
-                f"A run of '{tool}' has no answer to post in a channel. "
-                f"Schedule {RUN_INSTRUCTION_TOOL}, or leave channel out."
-            )
-
     @classmethod
     async def list_for_account(cls, session: AsyncSession, account_id: str) -> list["Schedule"]:
         return list(
@@ -136,7 +124,7 @@ class Schedule(Base, Uuid7Pk):
 
     @classmethod
     async def list_for_agent(cls, session: AsyncSession, agent_id: str) -> list["Schedule"]:
-        """The schedules set in the agent's conversations, newest first."""
+        """The schedules that report in the agent's conversations, newest first."""
         return list(
             await session.scalars(
                 select(cls)

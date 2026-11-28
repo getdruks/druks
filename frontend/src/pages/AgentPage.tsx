@@ -37,13 +37,6 @@ export function AgentPage({ id, account }: { id: string; account: Account }) {
     queryFn: () => api.agentSchedules(id),
   })
   const runsQuery = useQuery({ queryKey: ['agentRuns', id], queryFn: () => api.agentRuns(id) })
-  // Without a Slack connection the list fails, and a schedule shows its channel's id.
-  const channelsQuery = useQuery({
-    queryKey: ['notificationChannels'],
-    queryFn: api.listNotificationChannels,
-    enabled: (schedulesQuery.data ?? []).some((schedule) => schedule.channelId),
-    retry: false,
-  })
   const costQuery = useQuery({
     queryKey: ['agentCost', id, weekStart],
     queryFn: () => api.agentCost(id, weekStart),
@@ -51,7 +44,6 @@ export function AgentPage({ id, account }: { id: string; account: Account }) {
   const [stopping, setStopping] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const usernames = new Map((accountsQuery.data ?? []).map((entry) => [entry.id, entry.username]))
-  const channelNames = new Map((channelsQuery.data ?? []).map((channel) => [channel.id, `#${channel.name}`]))
   const schedules = schedulesQuery.data ?? []
   const runs = runsQuery.data ?? []
 
@@ -117,7 +109,7 @@ export function AgentPage({ id, account }: { id: string; account: Account }) {
             <tr>
               <th scope="col">What</th>
               <th scope="col">When</th>
-              <th scope="col">Posts in</th>
+              <th scope="col">Reports in</th>
               <th scope="col">Owner</th>
               <th scope="col">Last run</th>
               <th scope="col">Actions</th>
@@ -133,9 +125,7 @@ export function AgentPage({ id, account }: { id: string; account: Account }) {
                 <td data-label="When">
                   <code>{schedule.cron}</code> · next {timeAway(schedule.nextRunAt)}
                 </td>
-                <td data-label="Posts in">
-                  {schedule.channelId && (channelNames.get(schedule.channelId) ?? schedule.channelId)}
-                </td>
+                <td data-label="Reports in">{schedule.room ?? 'The chat of its owner'}</td>
                 <td data-label="Owner">{usernames.get(schedule.accountId)}</td>
                 <td data-label="Last run">
                   {schedule.lastRun

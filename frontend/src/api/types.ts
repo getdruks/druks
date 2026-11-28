@@ -698,9 +698,9 @@ export interface AgentSchedule {
   tool: string
   arguments: Record<string, unknown>
   cron: string
-  // The id of the Slack channel where each run posts its answer.
-  channelId: string | null
   nextRunAt: string
+  // The title of the group or the room that the schedule reports in.
+  room: string | null
   lastRun: ScheduledRun | null
 }
 

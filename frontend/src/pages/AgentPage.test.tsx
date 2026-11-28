@@ -15,7 +15,7 @@ const member: Account = {
   role: 'member',
 }
 
-function schedule(id: string, accountId: string, channelId: string | null = null): AgentSchedule {
+function schedule(id: string, accountId: string, room: string | null = null): AgentSchedule {
   return {
     id,
     accountId,
@@ -23,8 +23,8 @@ function schedule(id: string, accountId: string, channelId: string | null = null
     tool: `scan_${id}`,
     arguments: { repo: 'payments' },
     cron: '0 9 * * *',
-    channelId,
     nextRunAt: '2026-11-21T09:00:00Z',
+    room,
     lastRun: { run: `due-${id}`, status: 'ERROR', createdAt: '2026-11-20T09:00:00Z', startedAt: null, finishedAt: null },
   }
 }
@@ -109,18 +109,19 @@ describe('AgentPage', () => {
     await waitFor(() => expect(stop).toHaveBeenCalledWith('mine'))
   })
 
-  it('shows the Slack channel where a schedule posts its answer, by its name when the bot is in it', async () => {
-    vi.spyOn(api, 'listNotificationChannels').mockResolvedValue([{ id: 'C1', name: 'eng' }])
+  it('shows the room that a schedule reports in, and the chat of its owner when it has none', async () => {
     vi.spyOn(api, 'agentSchedules').mockResolvedValue([
-      schedule('brief', 'member', 'C1'),
-      schedule('left', 'member', 'C9'),
+      schedule('brief', 'member', '#eng'),
+      schedule('private', 'member'),
     ])
 
     renderPage(member)
     const table = await screen.findByRole('table', { name: 'Schedules' })
 
-    expect(await within(within(table).getByRole('row', { name: /scan_brief/ })).findByText('#eng')).toBeTruthy()
-    expect(within(within(table).getByRole('row', { name: /scan_left/ })).getByText('C9')).toBeTruthy()
+    expect(within(within(table).getByRole('row', { name: /scan_brief/ })).getByText('#eng')).toBeTruthy()
+    expect(
+      within(within(table).getByRole('row', { name: /scan_private/ })).getByText('The chat of its owner'),
+    ).toBeTruthy()
   })
 
   it('says why a stop failed and shows the schedules as they are now', async () => {

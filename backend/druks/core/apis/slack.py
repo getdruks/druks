@@ -93,7 +93,8 @@ class SlackClient(AsyncWebClient):
 
     async def list_member_channels(self, *, user: str = "") -> list[dict]:
         """The public and private channels that this token's user is a member of. With
-        ``user``, only the ones that this Slack user is a member of too."""
+        ``user``, the channels of that Slack user instead: each public one, and each
+        private one that this token's user is in too."""
         channels = []
         async for page in await self.users_conversations(
             types="public_channel,private_channel",

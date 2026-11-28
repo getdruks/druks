@@ -18,6 +18,7 @@ from druks.chat.models import Automation, Conversation, Message
 from druks.chat.service import deliver
 from druks.core.apis.slack import SLACK_CUSTOMIZE_SCOPE, SlackClient
 from druks.core.services import Slack
+from druks.exceptions import ValidationError
 from druks.files.datastructures import File
 from druks.notifications.constants import CLOSED_MESSAGE
 from druks.notifications.exceptions import ChannelUnavailableError
@@ -65,6 +66,7 @@ class SlackChannel(Channel):
     has_blocks = True
     has_account_notifications = True
     has_editable_status = True
+    has_rooms = True
     reaction_ack = "eyes"
 
     @classmethod
@@ -204,15 +206,17 @@ class SlackChannel(Channel):
 
     @classmethod
     async def get_prompt_context(cls, session: AsyncSession, conversation: Conversation) -> dict:
-        """Whether the person must tag the bot in the conversation's thread, so the agent
-        knows whether to ask for a tag in the answer."""
+        """Whether the conversation is the top of a room, and whether the person must tag
+        the bot in its thread. The agent's prompt reads both."""
+        room, _, thread_ts = conversation.thread_id.partition(":")
         return {
+            "is_room": bool(room and not thread_ts),
             "is_tag_required": await Conversation.is_tag_required_for_user(
                 session,
                 conversation.connection,
                 user_id=conversation.user_id,
                 thread_id=conversation.thread_id,
-            )
+            ),
         }
 
     @classmethod
@@ -288,7 +292,13 @@ class SlackChannel(Channel):
         them. An agent's reply shows the agent's name and picture."""
         client = SlackClient(token=await Slack.get_bot_token())
         room, _, thread_ts = conversation.thread_id.partition(":")
-        author = await cls.get_author(conversation.agent)
+        # Slack takes a custom name only with the scope. A workspace that has not
+        # approved the app again gets the reply under the app's own name.
+        agent = None
+        if SLACK_CUSTOMIZE_SCOPE in (await Slack.get_grant()).scopes:
+            agent = conversation.agent
+        username = agent.name if agent else None
+        icon_url = agent.picture_url if agent else None
         if reply.blocks:
             blocks = reply.answer_blocks
             posted = await deliver_notification(
@@ -299,7 +309,8 @@ class SlackChannel(Channel):
                 account=conversation.account,
                 blocks=blocks,
                 thread_ts=thread_ts,
-                **author,
+                username=username,
+                icon_url=icon_url,
             )
         else:
             posted, *_ = [
@@ -307,7 +318,8 @@ class SlackChannel(Channel):
                     room or conversation.user_id,
                     reply.answer[start : start + MARKDOWN_TEXT_LIMIT],
                     thread_ts=thread_ts,
-                    **author,
+                    username=username,
+                    icon_url=icon_url,
                 )
                 for start in range(0, len(reply.answer), MARKDOWN_TEXT_LIMIT)
             ]
@@ -315,31 +327,50 @@ class SlackChannel(Channel):
         await session.commit()
 
     @classmethod
-    async def send_in_room(
-        cls, session: AsyncSession, room: str, text: str, *, agent: Agent | None
-    ) -> None:
-        """Post ``text`` at the top of ``room``, in pieces that fit a markdown block. Each
-        piece shows the agent's name and picture."""
-        client = SlackClient(token=await Slack.get_bot_token())
-        author = await cls.get_author(agent)
-        for start in range(0, len(text), MARKDOWN_TEXT_LIMIT):
-            await deliver_notification(
-                client,
-                room,
-                text[start : start + MARKDOWN_TEXT_LIMIT],
-                session=session,
-                account=None,
-                **author,
+    async def start_room_conversation(
+        cls, session: AsyncSession, conversation: Conversation, *, room: str
+    ) -> Conversation:
+        """The conversation at the top of the Slack channel that ``room`` names by id or by
+        name. The bot and the person must both be members: Druks posts in a channel for
+        nobody who is not in it."""
+        sign_ins = await VaultSecret.list_account_connections(
+            session, audience=Audience.service(Slack.slug), account_id=conversation.account_id
+        )
+        if not sign_ins:
+            raise ValidationError(
+                "Druks does not know the person's Slack account. Ask them to connect Slack "
+                "in Druks first."
             )
-
-    @classmethod
-    async def get_author(cls, agent: Agent | None) -> dict:
-        """The name and the picture that a message of ``agent`` shows. Slack takes them
-        only with the scope. A workspace that has not approved the app again gets the
-        message under the app's own name."""
-        if agent and SLACK_CUSTOMIZE_SCOPE in (await Slack.get_grant()).scopes:
-            return {"username": agent.name, "icon_url": agent.picture_url}
-        return {}
+        user_id = sign_ins[0].identity["subject"]
+        client = SlackClient(token=await Slack.get_bot_token())
+        name = room.removeprefix("#")
+        bot_rooms = [
+            bot_room
+            for bot_room in await client.list_member_channels()
+            if name in (bot_room["id"], bot_room["name"])
+        ]
+        if not bot_rooms:
+            raise ValidationError(f"The bot is not in {room}. Invite it to the channel first.")
+        found_room = bot_rooms[0]
+        shared_rooms = await client.list_member_channels(user=user_id)
+        if found_room["id"] not in [shared_room["id"] for shared_room in shared_rooms]:
+            raise ValidationError(
+                f"The person is not in #{found_room['name']}. Ask them to join the channel "
+                "first, or choose a channel that they are in."
+            )
+        started = await Conversation.get_or_create_for_user(
+            session,
+            await Slack.get(),
+            conversation.account_id,
+            source=ConversationSource.SLACK,
+            user_id=user_id,
+            user_name="",
+            user_phone="",
+            thread_id=found_room["id"],
+            agent_id=conversation.agent_id,
+        )
+        started.title = f"#{found_room['name']}"
+        return started
 
     @classmethod
     def validate_fields(cls, fields: list[dict]) -> None:
@@ -563,8 +594,10 @@ class SlackChannel(Channel):
         conversation's by its recorded Slack id. A webhook's post has no author, so the
         list leaves it out."""
         room, _, thread_ts = conversation.thread_id.partition(":")
-        if not room:
-            raise ChannelHasNoThreadsError("A direct message has no thread to read.")
+        if not thread_ts:
+            raise ChannelHasNoThreadsError(
+                "A direct message or the top of a room has no thread to read."
+            )
         client = SlackClient(token=await Slack.get_bot_token())
         messages = await client.list_replies(
             channel=room, thread_ts=thread_ts, limit=THREAD_MESSAGES

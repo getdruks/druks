@@ -2443,18 +2443,15 @@ async def test_a_person_makes_their_schedule_in_a_chat_and_only_they_change_it(
     other_id = await _get_or_create_account_id(runtime.engine, "other@example.com")
     async with get_session(runtime.engine) as session:
         chat = await Conversation.create(session, account_id=owner_id, body="Scan payments")
+        room = await Conversation.create(session, account_id=owner_id, body="Team room")
+        foreign = await Conversation.create(session, account_id=other_id, body="Their chat")
         _, owner_token = await PersonalAccessToken.create(session, account_id=owner_id, name="o")
         _, other_token = await PersonalAccessToken.create(session, account_id=other_id, name="x")
         await session.commit()
     owner = {"Authorization": f"Bearer {owner_token}"}
     other = {"Authorization": f"Bearer {other_token}"}
     scan = {"tool": "list_schedules", "arguments": {}, "cron": "0 */2 * * *"}
-    change = {
-        "tool": "list_schedules",
-        "arguments": {"page": 2},
-        "cron": "0 9 * * *",
-        "channel": "",
-    }
+    change = {"tool": "list_schedules", "arguments": {"page": 2}, "cron": "0 9 * * *"}
 
     async with asgi_client(api) as client:
         nowhere = await client.post("/api/schedules", json=scan, headers=owner)
@@ -2462,6 +2459,9 @@ async def test_a_person_makes_their_schedule_in_a_chat_and_only_they_change_it(
             "/api/schedules",
             json={**scan, "tool": "list_schedulez"},
             headers={**owner, CONVERSATION_HEADER: chat.id},
+        )
+        not_theirs = await client.post(
+            "/api/schedules", json={**scan, "conversation_id": foreign.id}, headers=owner
         )
         made = await client.post(
             "/api/schedules", json=scan, headers={**owner, CONVERSATION_HEADER: chat.id}
@@ -2474,6 +2474,11 @@ async def test_a_person_makes_their_schedule_in_a_chat_and_only_they_change_it(
         refused = await client.put(f"/api/schedules/{schedule_id}", json=change, headers=other)
         changed = await client.put(f"/api/schedules/{schedule_id}", json=change, headers=owner)
         changed_in_dbos = await DBOS.get_schedule_async(name)
+        moved = await client.put(
+            f"/api/schedules/{schedule_id}",
+            json={**change, "conversation_id": room.id},
+            headers=owner,
+        )
         kept = await client.delete(f"/api/schedules/{schedule_id}", headers=other)
         stopped = await client.delete(f"/api/schedules/{schedule_id}", headers=owner)
 
@@ -2485,7 +2490,11 @@ async def test_a_person_makes_their_schedule_in_a_chat_and_only_they_change_it(
     )
     assert [each["id"] for each in listed.json()] == [schedule_id]
     assert hidden.json() == []
-    assert (refused.status_code, kept.status_code) == (404, 403)
+    assert (refused.status_code, kept.status_code, not_theirs.status_code) == (404, 403, 404)
+    assert (changed.json()["conversationId"], moved.json()["conversationId"]) == (
+        chat.id,
+        room.id,
+    )
     assert (changed.json()["arguments"], changed_in_dbos["schedule"]) == (
         {"page": 2},
         "0 9 * * *",

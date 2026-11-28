@@ -15,7 +15,7 @@ from druks.durable.enums import RunState
 from druks.durable.exceptions import ArtifactContentMissing
 from druks.durable.models import Artifact, Run
 from druks.durable.reads import read_ask
-from druks.exceptions import ObjectNotFound, ValidationError
+from druks.exceptions import ObjectNotFound
 from druks.notifications.constants import (
     APPROVER_ONLY_MESSAGE,
     NOTE_FIELD,
@@ -37,46 +37,11 @@ from druks.ui.blocks import iter_parts
 from druks.ui.page import get_route_path, list_route_parameters
 
 
-async def list_notification_channels(*, member: Account | None = None) -> list[dict]:
+async def list_notification_channels() -> list[dict]:
     """The channels that a person can choose for their notifications, by name. The bot
-    posts only in a channel that it is a member of. With ``member``, only the channels
-    that the person of that account is a member of too. Their Slack sign-in says who they
-    are in Slack."""
+    posts only in a channel that it is a member of."""
     client = await Slack.get_client()
-    user = ""
-    if member:
-        sign_ins = await Slack.list_for_account(member.id)
-        if not sign_ins:
-            raise ValidationError(
-                "Druks does not know the person's Slack account. Ask them to connect Slack "
-                "in Druks first."
-            )
-        user = sign_ins[0].identity["subject"]
-    channels = await client.list_member_channels(user=user)
-    return sorted(channels, key=lambda channel: channel["name"])
-
-
-async def lookup_notification_channel(channel: str, *, member: Account) -> dict:
-    """The channel that a person gives by its id or by its name, when both the bot and
-    ``member``, the person of that account, are in it. Slack lets nobody post in a channel
-    that they are not in, so Druks posts there for no such person. Raises
-    ``ValidationError`` with the reason when there is no such channel."""
-    name = channel.removeprefix("#")
-    bot_channels = [
-        bot_channel
-        for bot_channel in await list_notification_channels()
-        if name in (bot_channel["id"], bot_channel["name"])
-    ]
-    if not bot_channels:
-        raise ValidationError(f"The bot is not in {channel}. Invite it to the channel first.")
-    found_channel = bot_channels[0]
-    shared_channels = await list_notification_channels(member=member)
-    if found_channel["id"] not in [shared_channel["id"] for shared_channel in shared_channels]:
-        raise ValidationError(
-            f"The person is not in #{found_channel['name']}. Ask them to join the channel "
-            "first, or choose a channel that they are in."
-        )
-    return found_channel
+    return sorted(await client.list_member_channels(), key=lambda channel: channel["name"])
 
 
 async def get_rendered_ask(session: AsyncSession, run: Run) -> dict:

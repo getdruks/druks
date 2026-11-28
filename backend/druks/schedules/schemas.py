@@ -16,7 +16,6 @@ class ScheduleResponse(Schema):
     tool: str
     arguments: dict
     cron: str
-    channel_id: str | None
     next_run_at: datetime
 
 
@@ -24,6 +23,9 @@ class AgentScheduleResponse(ScheduleResponse):
     """A schedule on its agent's page: who owns it, and its newest due time."""
 
     account_id: str
+    # The title of the group or the room that the schedule reports in. None for a direct
+    # chat, and for a thread, which has no title.
+    room: str | None
     last_run: ScheduledRun | None
 
     @classmethod
@@ -37,7 +39,7 @@ class AgentScheduleResponse(ScheduleResponse):
             tool=schedule.tool,
             arguments=schedule.arguments,
             cron=schedule.cron,
-            channel_id=schedule.channel_id,
             next_run_at=schedule.next_run_at,
+            room=schedule.conversation.title if schedule.conversation.thread_id else None,
             last_run=last_run,
         )

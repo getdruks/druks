@@ -518,6 +518,8 @@ person's phone number and name. The chat is the operator's own. Their
 reminders reach it. WAHA confirms that the number is on WhatsApp. Druks sends
 nothing until a reminder does. The person's replies reach no agent.
 
+A reminder can also send at the top of a Slack channel: see [Rooms](#rooms).
+
 `chat_list_conversations` lists where the caller can send. `chat_list_reminders`
 lists the caller's reminders with each one's cron and next time.
 `chat_cancel_reminder` stops a reminder. What it already sent stays in the
@@ -528,44 +530,20 @@ conversation.
 A schedule makes one of the agent's tool calls again and again on a cron. Say
 "review pull request 7 in acme/api every morning". The agent then calls
 `create_schedule` with the tool, its arguments, and the cron. The schedule
-belongs to the person who asked and to the conversation where they asked. An
-agent has no schedule of its own.
+belongs to the person who asked. Its runs report in the conversation where they
+asked, or in another of their conversations. An agent has no schedule of its
+own.
 
 | Field | What it holds | Example |
 | --- | --- | --- |
 | `tool` | The name of one of the agent's tools | `software_factory_review` |
 | `arguments` | The tool's arguments, the same at every call | `{"repo": "acme/api", "prNumber": 7}` |
 | `cron` | When to call, in local time | `0 9 * * *` |
-| `channel` | Optional. The Slack channel where each run posts its answer | `#eng` |
+| `conversation_id` | Where the runs report. Without it, the chat that asked | The top of a Slack channel |
 
 Druks checks that the tool exists and that the cron has five fields when the
 agent saves the schedule. Local time is the installation `timezone`, as for
 reminders.
-
-A schedule can name one Slack channel, by its id or by its name. In a Slack
-chat, a mention of the channel holds the id, and the agent gives that. Say
-"every Monday at 8:00, brief #eng on last week's merges". Only a schedule of
-`chat_run_instruction` takes a channel, because only its run answers in words.
-Druks refuses a new channel while Slack is not connected. Druks also refuses a
-channel that the bot is not a member of: invite the bot to the channel first.
-The person who sets the schedule must be a member of the channel too, because
-Slack lets nobody post in a channel that they are not in. Druks knows the
-person by their Slack account: see [Link your account](#link-your-account).
-Druks checks the bot and the person when the schedule takes the channel, not at
-each run. Druks saves the id of the channel, so the schedule keeps its channel
-when someone renames it in Slack. `list_schedules` gives that id as
-`channelId`.
-Each run then posts its answer in the channel as a new message, with the name
-and picture of the conversation's agent. Slack shows them when the Slack app
-has the `chat:write.customize` scope. The post is text. Druks sends an answer
-that is too long for one Slack message as several messages, and it sends no
-files. The run still reports to the conversation, so a failure or a question
-goes to the owner there. The report names the channel that took the post, so
-the agent can say where the answer is. When Slack does not take the post, such
-as after the bot left the channel, the run still finishes, and its report to
-the conversation gives the reason. The schedule goes on. The run reads the
-channel when it posts, so a change to the schedule also applies to a run that
-has started. An interrupted run does its task again, so it can post again.
 
 Each schedule has its own DBOS schedule. At each due time, Druks makes the tool
 call through its own MCP server. It calls as the owner, from the
@@ -581,15 +559,23 @@ turn runs. DBOS records that due time as failed. The schedule goes on.
 A due time makes one call, also when two Druks servers run. An interrupted call
 can run again. Druks does not call a due time that passes while it is down.
 
+Say "post the brief in #eng every morning" to get the reports in a Slack
+channel. The agent first starts a conversation at the top of that channel: see
+[Rooms](#rooms). It then gives that conversation to `create_schedule`. Each
+report starts the agent's turn there, and the agent's reply is a new message in
+the channel. A failed run and a question of a run show there too. The chat where
+you asked hears nothing.
+
 `list_schedules` lists the caller's schedules with each one's tool, arguments,
-cron, Slack channel, and next time. `change_schedule` replaces the tool, the
-arguments, the cron, and the Slack channel of one of the caller's schedules. An
-empty `channel` removes the channel. `stop_schedule` stops it. The runs its
+cron, and next time. `change_schedule` replaces the tool, the arguments, and the
+cron of one of the caller's schedules. With `conversation_id`, it also moves where
+the runs report. `stop_schedule` stops it. The runs its
 calls already started go on. An admin can also stop another person's schedule.
 
-An agent's page lists the schedules that people set in the agent's conversations, each
-with its Slack channel, its owner, its last run, and how that run ended. A person sees the
-schedules whose tool belongs to an app that they can use.
+An agent's page lists the schedules that report in the agent's conversations, each
+with its owner, its last run, and how that run ended. A schedule that reports in a
+group or at the top of a channel shows that place's name. A person sees the schedules whose
+tool belongs to an app that they can use.
 
 ## Tasks
 
@@ -882,6 +868,17 @@ another agent owns. A tag that names another agent still reaches that agent. A
 message without the tag still reaches nobody, unless you turned the tag off for
 its thread. A channel has one agent at most. Choose
 **No channel** to return the channel to normal chat.
+
+An agent can also write at the top of a channel. Say "post the brief in #eng
+every morning". The agent calls `chat_start_room_conversation` with the channel's
+id or its name. Druks then makes a conversation at the top of that channel, for
+you and that agent. You and the bot must both be members of the channel, and your
+Slack account must be connected. Otherwise Druks refuses, and the agent tells you
+why. Nobody writes in this conversation. A [schedule](#schedules) or a
+[reminder](#reminders) that names it sends there. Each message is a new message
+in the channel, and everyone in the channel reads it. Your list of conversations
+shows it with the channel's name. A reply under one of its messages is a thread
+as any other: tag the bot there.
 
 An agent's replies in Slack show the agent's name. To give an agent a picture,
 choose a png, jpg or gif file under **Picture** when you edit the agent. Slack loads

@@ -2,7 +2,6 @@ from typing import ClassVar
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from druks.agents.models import Agent
 from druks.chat.exceptions import ChannelHasNoThreadsError, ChannelStartsNoConversationsError
 from druks.chat.models import Conversation, Message
 from druks.notifications.models import Notification
@@ -32,6 +31,8 @@ class Channel:
     has_account_notifications: ClassVar[bool] = False
     # Whether the channel shows a run's status in one message, which it edits as the run moves.
     has_editable_status: ClassVar[bool] = False
+    # Whether a conversation can start at the top of one of the channel's rooms.
+    has_rooms: ClassVar[bool] = False
     # The reaction that acknowledges a person's message, as the channel names it.
     reaction_ack: ClassVar[str]
 
@@ -49,14 +50,6 @@ class Channel:
         cls, session: AsyncSession, conversation: Conversation, reply: Message
     ) -> None:
         """Send the agent's reply to where the conversation lives."""
-        raise NotImplementedError
-
-    @classmethod
-    async def send_in_room(
-        cls, session: AsyncSession, room: str, text: str, *, agent: Agent | None
-    ) -> None:
-        """Send ``text`` as a new message at the top of ``room``, outside a conversation,
-        as ``agent``. ``room`` is the id that the channel gives the place."""
         raise NotImplementedError
 
     @classmethod
@@ -135,3 +128,11 @@ class Channel:
         raise ChannelStartsNoConversationsError(
             f"A {cls.name} conversation cannot start a chat with a person."
         )
+
+    @classmethod
+    async def start_room_conversation(
+        cls, session: AsyncSession, conversation: Conversation, *, room: str
+    ) -> Conversation:
+        """A conversation at the top of a room on the channel, under the conversation's
+        account and with its agent. Each reply there is a new message in the room."""
+        raise NotImplementedError

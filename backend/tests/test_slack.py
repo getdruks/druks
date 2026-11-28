@@ -10,29 +10,22 @@ import httpx
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
-from conftest import (
-    Answer,
-    bind_ambient_session,
-    connect_anthropic_subscription,
-    install_service,
-)
+from conftest import Answer, bind_ambient_session, install_service
 from druks import ui
 from druks.accounts.models import Account, PersonalAccessToken
 from druks.agents.constants import PRIVATE_AGENT_MESSAGE
 from druks.agents.models import Agent
 from druks.api.dependencies import request_session
 from druks.chat import service
-from druks.chat.app import Chat
 from druks.chat.bridge import Bridge
 from druks.chat.channels.slack.channel import SlackChannel
-from druks.chat.channels.slack.constants import LINK_KEY, MARKDOWN_TEXT_LIMIT
+from druks.chat.channels.slack.constants import LINK_KEY
 from druks.chat.constants import CONVERSATION_HEADER
 from druks.chat.dependencies import current_conversation
 from druks.chat.enums import ConversationSource, MessageRole
 from druks.chat.exceptions import ChannelHasNoThreadsError
 from druks.chat.models import Automation, Conversation, Message
 from druks.chat.routes import read_file, read_thread, require_tag
-from druks.chat.workflows import RunInstruction
 from druks.core.apis.slack import SlackClient
 from druks.core.services import Slack
 from druks.core.webhooks.slack import SlackEvents, SlackInteractivity
@@ -44,13 +37,11 @@ from druks.notifications.services import respond_to_notification
 from druks.redis import close_client, get_client
 from druks.sandbox.exceptions import SandboxUploadError
 from druks.sandbox.layout import get_work_root
-from druks.schedules.models import Schedule
 from druks.secrets.datastructures import Audience
 from druks.secrets.models import VaultSecret
 from druks.settings import configure_settings, get_settings
-from druks.testing import asgi_client, configure_app_for_test, make_settings, run_workflow
+from druks.testing import asgi_client, configure_app_for_test, make_settings
 from druks.webhooks.router import match_webhook
-from druks.workflows import _CONVERSATION_INPUT_KEY
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 from slack_sdk.errors import SlackApiError
@@ -1302,6 +1293,7 @@ async def test_chat_read_thread_reads_the_callers_own_conversation(
     thread_reads(monkeypatch, [{"ts": "10.0", "user": ANA, "text": "hi"}])
     conversation = await thread_conversation(druks_db, card, ana)
     direct = await thread_conversation(druks_db, card, ana, thread_id="")
+    room = await thread_conversation(druks_db, card, ana, thread_id="C1")
     web = await Conversation.create(druks_db, account_id=ana.id, body="hi")
     _, token = await PersonalAccessToken.create(druks_db, account_id=ana.id, name="chat")
     await druks_db.commit()
@@ -1313,10 +1305,16 @@ async def test_chat_read_thread_reads_the_callers_own_conversation(
             "/thread", headers={**headers, CONVERSATION_HEADER: conversation.id}
         )
         no_thread = await client.get("/thread", headers={**headers, CONVERSATION_HEADER: direct.id})
+        room_top = await client.get("/thread", headers={**headers, CONVERSATION_HEADER: room.id})
         no_channel = await client.get("/thread", headers={**headers, CONVERSATION_HEADER: web.id})
 
-    statuses = (outside.status_code, no_thread.status_code, no_channel.status_code)
-    assert statuses == (409, 409, 409)
+    statuses = (
+        outside.status_code,
+        no_thread.status_code,
+        room_top.status_code,
+        no_channel.status_code,
+    )
+    assert statuses == (409, 409, 409, 409)
     assert [(message["ts"], message["is_from_user"]) for message in thread.json()] == [
         ("10.0", True)
     ]
@@ -1480,187 +1478,134 @@ async def test_the_client_posts_a_message_again_when_slack_still_scans_its_file(
     assert posted["ts"] == "1.0"
 
 
-async def run_scheduled_task(druks_db, monkeypatch, *, answer: str = "Three merges.") -> dict:
-    """Run a task as its schedule starts it: the schedule names the channel C1, and the
-    chat's agent gives ``answer``."""
-    await install_slack(druks_db, scopes=("chat:write", "chat:write.customize"))
-    subscription = await connect_anthropic_subscription("ana@example.com")
-    ana = await Account.get(druks_db, id=subscription.account_id)
-    agent = await create_agent(druks_db, ana, "Security engineer")
-    conversation = await Conversation.create(
-        druks_db, account_id=ana.id, body="Brief the team", agent_id=agent.id
-    )
-    schedule = await Schedule.create(
-        druks_db,
-        account_id=ana.id,
-        conversation_id=conversation.id,
-        tool="chat_run_instruction",
-        arguments={"instruction": "Brief the team on the merges."},
-        cron="0 8 * * 1",
-        channel_id="C1",
-        tool_names=["chat_run_instruction"],
-    )
-    await druks_db.commit()
-    monkeypatch.setattr(Chat, "run_instruction", AsyncMock(return_value=answer))
-    return await run_workflow(
-        RunInstruction,
-        account_id=ana.id,
-        instruction="Brief the team on the merges.",
-        schedule_id=schedule.id,
-        **{_CONVERSATION_INPUT_KEY: conversation.id},
-    )
+ENG = {"id": "C1", "name": "eng"}
+LEADERSHIP = {"id": "C2", "name": "leadership"}
 
 
-async def test_a_scheduled_task_posts_its_answer_in_the_schedules_channel_as_the_agent(
-    druks_db, slack, monkeypatch
+def member_rooms(monkeypatch, rooms: dict) -> None:
+    """Answer the channels that the bot is in under "", and those of a Slack user under
+    their id."""
+
+    async def list_member_channels(client, *, user=""):
+        return rooms[user]
+
+    monkeypatch.setattr(SlackClient, "list_member_channels", list_member_channels)
+
+
+@pytest.mark.usefixtures("tmp_data_dir")
+async def test_a_schedule_reports_at_the_top_of_a_room_that_its_agent_started_a_conversation_in(
+    druks_db, tmp_path, slack, monkeypatch
 ):
-    result = await run_scheduled_task(druks_db, monkeypatch)
-
-    [(method, sent)] = slack
-    assert (method, sent["channel"], sent["text"]) == ("chat.postMessage", "C1", "Three merges.")
-    assert (sent["username"], sent.get("thread_ts")) == ("Security engineer", None)
-    assert result["posted_in"] == "C1"
-
-
-async def test_a_scheduled_task_posts_a_long_answer_in_pieces(druks_db, slack, monkeypatch):
-    answer = "a" * MARKDOWN_TEXT_LIMIT + "b"
-
-    await run_scheduled_task(druks_db, monkeypatch, answer=answer)
-
-    assert [sent["text"] for _, sent in slack] == ["a" * MARKDOWN_TEXT_LIMIT, "b"]
-
-
-async def test_a_scheduled_task_with_an_empty_answer_names_no_post(druks_db, slack, monkeypatch):
-    result = await run_scheduled_task(druks_db, monkeypatch, answer="")
-
-    assert (slack, "posted_in" in result) == ([], False)
-
-
-async def test_a_scheduled_task_reports_why_slack_refused_the_post(druks_db, monkeypatch):
-    refused = AsyncMock(side_effect=SlackApiError("", {"ok": False, "error": "not_in_channel"}))
-    monkeypatch.setattr(SlackClient, "api_call", refused)
-
-    result = await run_scheduled_task(druks_db, monkeypatch)
-
-    assert (result["answer"], "posted_in" in result) == ("Three merges.", False)
-    assert result["post_failure"] == (
-        "Delivery failed: the bot is not in channel C1. Invite the bot to the channel in Slack."
-    )
-
-
-async def test_a_schedule_takes_a_channel_only_for_a_task_and_with_slack_connected(
-    druks_db, tmp_path, monkeypatch
-):
-    bind_ambient_session(druks_db)
     monkeypatch.setattr("druks.schedules.routes.apply_schedule", AsyncMock())
-    owner = await Account.get_or_create(druks_db, "owner@example.com")
-    conversation = await Conversation.create(druks_db, account_id=owner.id, body="Brief us")
+    member_rooms(monkeypatch, {"": [ENG], ANA: [ENG]})
+    card = await install_slack(druks_db, scopes=("chat:write", "chat:write.customize"))
+    ana = await Account.get_or_create(druks_db, "ana@example.com")
+    await link_person(druks_db, ana)
+    agent = await create_agent(druks_db, ana, "Scout")
+    chat = await thread_conversation(druks_db, card, ana, thread_id="", agent_id=agent.id)
     await druks_db.commit()
     api = configure_app_for_test(
         settings=make_settings(tmp_path, identity={"mode": "header", "header": "X-User"}),
         authenticated=False,
     )
-    headers = {"X-User": "owner@example.com", CONVERSATION_HEADER: conversation.id}
-    task = {
-        "tool": "chat_run_instruction",
-        "arguments": {"instruction": "Brief the team on the merges."},
-        "cron": "0 8 * * 1",
-    }
-    brief = {**task, "channel": "#eng"}
-    member_channels = AsyncMock(return_value=[{"id": "C1", "name": "eng"}])
-    bot = SimpleNamespace(list_member_channels=member_channels)
+    headers = {"X-User": "ana@example.com", CONVERSATION_HEADER: chat.id}
+    brief = {"tool": "list_schedules", "arguments": {}, "cron": "0 8 * * 1"}
 
     async with asgi_client(api) as client:
-        without_slack = await client.post("/api/schedules", json=brief, headers=headers)
-        await install_service("slack", access_token="xoxb-1", identity={}, secrets={})
-        await link_person(druks_db, owner)
-        monkeypatch.setattr(Slack, "get_client", AsyncMock(return_value=bot))
-        other_tool = await client.post(
+        started = await client.post(
+            "/api/chat/rooms/conversations", json={"room": "#eng"}, headers=headers
+        )
+        again = await client.post(
+            "/api/chat/rooms/conversations", json={"room": "C1"}, headers=headers
+        )
+        made = await client.post(
             "/api/schedules",
-            json={**brief, "tool": "list_schedules", "arguments": {}},
+            json={**brief, "conversation_id": started.json()["id"]},
             headers=headers,
         )
-        made = await client.post("/api/schedules", json=brief, headers=headers)
-        changed = await client.put(
-            f"/api/schedules/{made.json()['id']}",
-            json={**task, "channel": ""},
-            headers=headers,
-        )
+    room = await druks_db.get(Conversation, started.json()["id"])
+    reply = await room.create_message(druks_db, "Three merges.", role=MessageRole.ASSISTANT)
+    await SlackChannel.send_reply(druks_db, room, reply)
 
-    assert (without_slack.status_code, other_tool.status_code) == (409, 422)
-    assert (made.json()["channelId"], changed.json()["channelId"]) == ("C1", None)
+    assert (started.status_code, again.json()["id"]) == (201, room.id)
+    assert (room.title, room.thread_id, room.user_id, room.agent_id) == (
+        "#eng",
+        "C1",
+        ANA,
+        agent.id,
+    )
+    assert made.json()["conversationId"] == room.id
+    posts = [(sent["channel"], sent.get("thread_ts"), sent.get("username")) for _, sent in slack]
+    assert posts == [("C1", None, "Scout")]
 
 
-async def test_a_schedule_takes_only_a_channel_that_the_bot_and_its_owner_are_in(
-    druks_db, tmp_path, monkeypatch
+async def test_a_conversation_starts_only_in_a_room_that_the_bot_and_the_person_are_in(
+    card, druks_db, tmp_path, monkeypatch
 ):
-    bind_ambient_session(druks_db)
-    monkeypatch.setattr("druks.schedules.routes.apply_schedule", AsyncMock())
-    eng, leadership = {"id": "C1", "name": "eng"}, {"id": "C2", "name": "leadership"}
-    member_channels = {"": [eng, leadership], ANA: [eng]}
-
-    async def list_member_channels(*, user=""):
-        return member_channels[user]
-
-    bot = SimpleNamespace(list_member_channels=list_member_channels)
-    monkeypatch.setattr(Slack, "get_client", AsyncMock(return_value=bot))
-    owner = await Account.get_or_create(druks_db, "owner@example.com")
-    conversation = await Conversation.create(druks_db, account_id=owner.id, body="Brief us")
-    await install_service("slack", access_token="xoxb-1", identity={}, secrets={})
+    member_rooms(monkeypatch, {"": [ENG, LEADERSHIP], ANA: [ENG]})
+    ana = await Account.get_or_create(druks_db, "ana@example.com")
+    chat = await Conversation.create(druks_db, account_id=ana.id, body="Brief us")
     await druks_db.commit()
     api = configure_app_for_test(
         settings=make_settings(tmp_path, identity={"mode": "header", "header": "X-User"}),
         authenticated=False,
     )
-    headers = {"X-User": "owner@example.com", CONVERSATION_HEADER: conversation.id}
-    task = {
-        "tool": "chat_run_instruction",
-        "arguments": {"instruction": "Brief the team on the merges."},
-        "cron": "0 8 * * 1",
-    }
+    headers = {"X-User": "ana@example.com", CONVERSATION_HEADER: chat.id}
 
     async with asgi_client(api) as client:
         unknown = await client.post(
-            "/api/schedules", json={**task, "channel": "C1"}, headers=headers
+            "/api/chat/rooms/conversations", json={"room": "#eng"}, headers=headers
         )
-        await link_person(druks_db, owner)
+        await link_person(druks_db, ana)
         without_bot = await client.post(
-            "/api/schedules", json={**task, "channel": "#ops"}, headers=headers
+            "/api/chat/rooms/conversations", json={"room": "#ops"}, headers=headers
         )
-        without_owner = await client.post(
-            "/api/schedules", json={**task, "channel": "#leadership"}, headers=headers
+        without_person = await client.post(
+            "/api/chat/rooms/conversations", json={"room": "#leadership"}, headers=headers
         )
-        made = await client.post("/api/schedules", json={**task, "channel": "C1"}, headers=headers)
-        address = f"/api/schedules/{made.json()['id']}"
-        moved = await client.put(address, json={**task, "channel": "#leadership"}, headers=headers)
-        by_name = await client.put(address, json={**task, "channel": "eng"}, headers=headers)
-        member_channels[""] = []
-        kept = await client.put(
-            address, json={**task, "cron": "0 9 * * 1", "channel": "C1"}, headers=headers
+        from_no_chat = await client.post(
+            "/api/chat/rooms/conversations",
+            json={"room": "#eng"},
+            headers={"X-User": "ana@example.com"},
         )
 
-    assert unknown.json()["detail"] == (
-        "Druks does not know the person's Slack account. Ask them to connect Slack in Druks first."
-    )
-    assert without_bot.json()["detail"] == "The bot is not in #ops. Invite it to the channel first."
-    assert without_owner.json()["detail"] == (
+    assert [unknown.json()["detail"], without_bot.json()["detail"]] == [
+        "Druks does not know the person's Slack account. Ask them to connect Slack in Druks first.",
+        "The bot is not in #ops. Invite it to the channel first.",
+    ]
+    assert without_person.json()["detail"] == (
         "The person is not in #leadership. Ask them to join the channel first, or choose a "
         "channel that they are in."
     )
-    assert (moved.status_code, by_name.json()["channelId"]) == (422, "C1")
-    assert (kept.status_code, kept.json()["channelId"]) == (200, "C1")
+    assert from_no_chat.status_code == 409
+    assert await Conversation.list_for_connection(druks_db, card.id) == []
 
 
-async def test_the_client_lists_only_the_channels_that_the_bot_shares_with_a_person(monkeypatch):
+async def test_at_the_top_of_a_room_the_agent_learns_that_everyone_reads_its_reply(card, druks_db):
+    ana = await Account.get_or_create(druks_db, "ana@example.com")
+    room = await thread_conversation(druks_db, card, ana, thread_id="C1")
+    thread = await thread_conversation(druks_db, card, ana, thread_id="C1:10.0")
+    await druks_db.refresh(room, ["account"])
+    await druks_db.refresh(thread, ["account"])
+
+    _, room_prompt, _ = await service.get_agent(druks_db, room)
+    _, thread_prompt, _ = await service.get_agent(druks_db, thread)
+
+    assert "This conversation is the top of a room." in room_prompt
+    assert "This is a thread in a room." not in room_prompt
+    assert "This conversation is the top of a room." not in thread_prompt
+
+
+async def test_the_client_lists_the_channels_of_a_slack_user(monkeypatch):
     asked = []
 
     async def api_call(client, api_method, *, params, **request):
         asked.append((api_method, params["user"]))
-        return Answer(ok=True, channels=[{"id": "C1", "name": "eng"}])
+        return Answer(ok=True, channels=[ENG])
 
     monkeypatch.setattr(SlackClient, "api_call", api_call)
 
     channels = await SlackClient(token="xoxb-1").list_member_channels(user=ANA)
 
-    assert channels == [{"id": "C1", "name": "eng"}]
+    assert channels == [ENG]
     assert asked == [("users.conversations", ANA)]
