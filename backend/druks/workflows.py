@@ -41,6 +41,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid_utils import uuid7
 
+from druks import ui
 from druks.accounts.context import current_account_id, current_actor, current_conversation_id
 from druks.accounts.models import Account
 from druks.agents.models import Agent
@@ -113,10 +114,10 @@ from druks.harnesses.exceptions import (
     Retry,
 )
 from druks.models import StoredSubject, snake_name
-from druks.notifications.constants import STATUS_REASON
+from druks.notifications.constants import RUN_FAILED_MESSAGE, STATUS_REASON
 from druks.notifications.models import Notification
 from druks.notifications.outbox import queue_status_send, send_notification
-from druks.notifications.services import create_failure_notification, create_park_notification
+from druks.notifications.services import create_park_notification, get_run_card
 from druks.prompts.resolver import get_template
 from druks.registry import get_app, get_app_by_module, get_app_name, get_instruction
 from druks.sandbox import gate as sandbox_gate
@@ -629,7 +630,18 @@ async def _create_failure_notification(
         # agent, and the run then has none.
         if run.conversation_id:
             return
-        return await create_failure_notification(session, run, subject, failure)
+        blocks = [await get_run_card(run), ui.Markdown(RUN_FAILED_MESSAGE.format(failure=failure))]
+        notification = await Notification.create(
+            session,
+            account_id=run.account_id,
+            reason="run.failed",
+            body=ui.Stack(blocks).to_markdown(),
+            blocks=[block.model_dump(mode="json", by_alias=True) for block in blocks],
+            subject=subject,
+            run_id=run.id,
+            deep_link=run.get_link(),
+        )
+        return notification.id
 
 
 async def _replace_status(workflow_id: str, subject: dict | None, stack: Stack) -> None:

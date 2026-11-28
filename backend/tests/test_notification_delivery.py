@@ -1737,19 +1737,17 @@ async def test_an_approval_shows_its_inputs_above_every_control_until_its_answer
             ],
         },
     ]
-    # The first post has no blocks. The edits draw the stored blocks, where the card of the
-    # run is a block of its own.
-    content = [
+    (card, markdown, section) = answer_edit["blocks"]
+    assert (card, markdown) == (
         {"type": "card", "title": _label("Field Notes")},
         {"type": "markdown", "text": approval.body.removeprefix("### Field Notes\n\n")},
-    ]
-    (*answer_content, section) = answer_edit["blocks"]
-    assert answer_content == content
+    )
     assert len(section["text"]["text"]) <= SECTION_TEXT_LIMIT
     assert section["text"]["text"].startswith(outcome[:80])
     assert section["text"]["text"].endswith("Then retry it.\n\n…")
     assert close_edit["blocks"] == [
-        *content,
+        card,
+        markdown,
         {"type": "section", "text": {"type": "mrkdwn", "text": CLOSED_MESSAGE}},
     ]
 
