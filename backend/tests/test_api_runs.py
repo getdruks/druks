@@ -1,9 +1,12 @@
 from pathlib import Path
 
 import pytest
+from conftest import connect_provider, connect_service
 from druks.accounts.models import Account
 from druks.durable.exceptions import AgentCallNotFound
 from druks.durable.reads import get_agent_call_files
+from druks.harnesses.providers import AnthropicProvider
+from druks.sandbox.models import SandboxIdentity, SecretIssue, SecretRef
 from druks.testing import configure_app_for_test, make_settings, seed_call, seed_run
 from druks_field_notes.models import Note
 from druks_field_notes.workflows import Summarize
@@ -336,3 +339,89 @@ async def test_a_person_reads_the_run_of_another_account(druks_client, druks_db)
     assert response.status_code == 200
     assert response.json()["subject"] is None
     assert (await druks_client.get("/api/runs/no-such-run")).status_code == 404
+
+
+async def test_a_run_lists_the_secrets_that_its_box_fetches(druks_client, druks_db):
+    github = await connect_service(
+        "github",
+        identity={"app_id": "1", "slug": "druks-operator"},
+        secrets={"private_key": "operator-pem"},
+    )
+    subscription = await connect_provider(
+        AnthropicProvider,
+        {"claudeAiOauth": {"accessToken": "live", "refreshToken": "R0", "expiresAt": 0}},
+    )
+    run = await seed_run(druks_db, kind=Summarize.kind)
+    identity, _ = await SandboxIdentity.create(
+        druks_db,
+        account_id=run.account_id,
+        run_id=run.id,
+        scoped_to="workflow",
+        secret_refs=[
+            SecretRef(name="github", secret_id=github.id, resources=["getdruks/druks"]),
+            SecretRef(name="anthropic", secret_id=subscription.id),
+        ],
+        secrets_hash="",
+    )
+
+    before_the_box = await druks_client.get(f"/api/runs/{run.id}/sandboxes")
+    await identity.bind("host-1")
+    with_the_box = await druks_client.get(f"/api/runs/{run.id}/sandboxes")
+
+    sandbox = {
+        "scopedTo": "workflow",
+        "secrets": [
+            {
+                "name": "anthropic",
+                "secretId": subscription.id,
+                "kind": subscription.kind,
+                "resources": [],
+                "issues": [],
+            },
+            {
+                "name": "github",
+                "secretId": github.id,
+                "kind": github.kind,
+                "resources": ["getdruks/druks"],
+                "issues": [],
+            },
+        ],
+    }
+    assert before_the_box.json() == [{**sandbox, "isLive": False}]
+    assert with_the_box.json() == [{**sandbox, "isLive": True}]
+
+    await SecretIssue.record(druks_db, identity.id, "github", error="GitHub refused")
+    await druks_db.commit()
+    with_an_issue = await druks_client.get(f"/api/runs/{run.id}/sandboxes")
+
+    [issue] = with_an_issue.json()[0]["secrets"][1]["issues"]
+    assert issue.pop("issuedAt")
+    assert issue == {
+        "fingerprint": "",
+        "expiresAt": None,
+        "audience": "",
+        "mintedAt": None,
+        "error": "GitHub refused",
+    }
+
+
+async def test_a_run_with_no_box_lists_no_secrets(druks_client, druks_db):
+    subscription = await connect_provider(
+        AnthropicProvider,
+        {"claudeAiOauth": {"accessToken": "live", "refreshToken": "R0", "expiresAt": 0}},
+    )
+    run_with_a_box = await seed_run(druks_db, kind=Summarize.kind)
+    await SandboxIdentity.create(
+        druks_db,
+        account_id=run_with_a_box.account_id,
+        run_id=run_with_a_box.id,
+        scoped_to="workflow",
+        secret_refs=[SecretRef(name="anthropic", secret_id=subscription.id)],
+        secrets_hash="",
+    )
+    run = await seed_run(druks_db, kind=Summarize.kind)
+
+    response = await druks_client.get(f"/api/runs/{run.id}/sandboxes")
+
+    assert response.json() == []
+    assert (await druks_client.get("/api/runs/no-such-run/sandboxes")).status_code == 404

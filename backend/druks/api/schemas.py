@@ -1,11 +1,14 @@
 from datetime import datetime
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from druks.durable.enums import RunState
 from druks.durable.schemas import RunResponse
 from druks.schemas import Schema
+
+if TYPE_CHECKING:
+    from druks.sandbox.models import SandboxIdentity
 
 
 class ResumeRequest(BaseModel):
@@ -32,6 +35,63 @@ class RunDetailResponse(Schema):
     # The run's work item; None for a run about no work item.
     subject: dict[str, str] | None
     run: RunResponse
+
+
+class SecretIssueResponse(Schema):
+    # One answer of Druks to a box for a secret. It holds no secret value.
+    issued_at: datetime
+    # The first 8 hex characters of the SHA-256 of the token. Empty for a value with
+    # no expiry.
+    fingerprint: str
+    expires_at: datetime | None
+    # The vault row that keeps the token, and when Druks wrote it. Empty for a token
+    # that the vault does not keep.
+    audience: str
+    minted_at: datetime | None
+    # Why the box got no token.
+    error: str
+
+
+class SandboxSecretResponse(Schema):
+    name: str
+    # The vault row that answers for the secret, and its kind.
+    secret_id: str
+    kind: str
+    # What the token covers, such as repositories.
+    resources: list[str]
+    # The answers that changed, oldest first.
+    issues: list[SecretIssueResponse]
+
+
+class SandboxResponse(Schema):
+    # One box of a run and the secrets that it fetches from Druks. A pasted provider
+    # key is not one of them: Druks gives it to the box at creation.
+
+    # "workflow" for the box that a run keeps for all its steps. A step name otherwise.
+    scoped_to: str
+    is_live: bool
+    secrets: list[SandboxSecretResponse]
+
+    @classmethod
+    def from_identity(cls, identity: "SandboxIdentity") -> "SandboxResponse":
+        return cls(
+            scoped_to=identity.scoped_to,
+            # Druks stores an identity before its box exists, so a live box also has a host.
+            is_live=bool(identity.host_id) and identity.is_live,
+            secrets=[
+                SandboxSecretResponse(
+                    name=ref.name,
+                    secret_id=ref.secret_id,
+                    kind=ref.secret.kind,
+                    resources=ref.resources,
+                    issues=[
+                        SecretIssueResponse.model_validate(issue, from_attributes=True)
+                        for issue in ref.issues
+                    ],
+                )
+                for ref in sorted(identity.secret_refs, key=lambda ref: ref.name)
+            ],
+        )
 
 
 class OpenWorkflowResponse(Schema):

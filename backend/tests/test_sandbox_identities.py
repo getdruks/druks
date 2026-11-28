@@ -18,12 +18,13 @@ from druks.mcp.enums import IdentityMode, Toolkit
 from druks.mcp.inbound import get_druks_account_token
 from druks.mcp.models import McpServer
 from druks.sandbox.constants import SANDBOX_HOST_LEASE_SECONDS
-from druks.sandbox.models import SandboxIdentity, SecretRef
+from druks.sandbox.models import SandboxIdentity, SecretIssue, SecretRef
 from druks.secrets.datastructures import Audience
 from druks.secrets.models import VaultSecret
 from druks.testing import asgi_client, configure_app_for_test, make_settings, seed_run
 from druks.workspaces import Workspace
 from druks_field_notes.workflows import Summarize
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 
@@ -416,6 +417,72 @@ async def test_the_issuer_answers_github_through_the_stored_service_and_repo(
     assert asked == [("acme/widgets",), ("acme/widgets",)]
 
 
+async def _issues(identity: SandboxIdentity) -> list[SecretIssue]:
+    rows = await db_session().scalars(
+        select(SecretIssue)
+        .where(SecretIssue.identity_id == identity.id)
+        .order_by(SecretIssue.id)
+        .execution_options(populate_existing=True)
+    )
+    return list(rows)
+
+
+async def test_the_issuer_records_each_token_that_a_box_gets_and_never_its_value(
+    druks_db, tmp_path, monkeypatch
+):
+    expiry = datetime.now(UTC).replace(microsecond=0) + timedelta(hours=1)
+    minted: list[str] = []
+
+    async def get_installation(self, owner_or_repo: str):
+        return type("Installation", (), {"id": 77, "repository_selection": "all"})
+
+    async def create_installation_token(self, installation_id, names):
+        minted.append(f"ghs_{len(minted)}")
+        return minted[-1], expiry + timedelta(hours=len(minted))
+
+    monkeypatch.setattr(GitHubAppClient, "get_installation", get_installation)
+    monkeypatch.setattr(GitHubAppClient, "create_installation_token", create_installation_token)
+    await _connect_github()
+    identity, bearer = await _github_identity()
+    audience = Audience.resource("github", "installation", 77, "widgets")
+
+    await _fetch(tmp_path, identity.id, bearer, "github")
+    # The vault serves the kept token again, so the second answer adds no row.
+    await _fetch(tmp_path, identity.id, bearer, "github")
+    await VaultSecret.revoke_tokens(db_session(), audience)
+    await db_session().commit()
+    await _fetch(tmp_path, identity.id, bearer, "github")
+
+    first, second = await _issues(identity)
+    assert minted == ["ghs_0", "ghs_1"]
+    assert (first.name, first.fingerprint, first.expires_at, first.audience, first.error) == (
+        "github",
+        hashlib.sha256(b"ghs_0").hexdigest()[:8],
+        expiry + timedelta(hours=1),
+        audience,
+        "",
+    )
+    assert first.minted_at
+    assert second.fingerprint == hashlib.sha256(b"ghs_1").hexdigest()[:8]
+    assert second.expires_at == expiry + timedelta(hours=2)
+
+
+async def test_the_issuer_gives_no_fingerprint_to_a_value_with_no_expiry(
+    druks_db, tmp_path, monkeypatch
+):
+    async def issue_token(resources, *, name):
+        return "pasted", None
+
+    monkeypatch.setattr(Github, "issue_token", issue_token)
+    await _connect_github()
+    identity, bearer = await _github_identity()
+
+    await _fetch(tmp_path, identity.id, bearer, "github")
+
+    [issue] = await _issues(identity)
+    assert (issue.fingerprint, issue.expires_at, issue.audience, issue.error) == ("", None, "", "")
+
+
 async def test_a_disconnected_service_ends_its_secrets(druks_db, tmp_path):
     await _connect_github()
     identity, bearer = await _github_identity()
@@ -439,6 +506,8 @@ async def test_the_issuer_answers_503_when_github_refuses(druks_db, tmp_path, mo
 
     assert response.status_code == 503
     assert "installed" not in response.text
+    [issue] = await _issues(identity)
+    assert (issue.fingerprint, issue.error) == ("", "app not installed on acme/widgets")
 
 
 async def test_the_issuer_answers_422_with_the_reason_when_the_app_is_not_on_the_repo(
@@ -457,6 +526,8 @@ async def test_the_issuer_answers_422_with_the_reason_when_the_app_is_not_on_the
     assert response.json()["detail"].startswith(
         "The GitHub App druks-reviewer has no access to acme/widgets"
     )
+    [issue] = await _issues(identity)
+    assert issue.error == response.json()["detail"]
 
 
 async def _mcp_identity() -> tuple[SandboxIdentity, str, dict]:

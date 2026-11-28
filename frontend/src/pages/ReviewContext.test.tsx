@@ -13,7 +13,13 @@ import { SubjectPage } from './SubjectPage'
 vi.mock('../api/sse', () => ({ useSSE: vi.fn() }))
 vi.mock('../api/client', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api/client')>()),
-  api: { listApps: vi.fn(), getGate: vi.fn(), answerGate: vi.fn(), artifact: vi.fn() },
+  api: {
+    listApps: vi.fn(),
+    getGate: vi.fn(),
+    answerGate: vi.fn(),
+    artifact: vi.fn(),
+    listRunSandboxes: vi.fn(async () => []),
+  },
   subjectApi: {
     read: vi.fn(),
     stream: vi.fn(() => '/stream'),

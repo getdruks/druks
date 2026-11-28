@@ -1,10 +1,11 @@
+import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
 
-import { subjectApi } from '../api/client'
+import { api, subjectApi } from '../api/client'
 import type { RunSummary } from '../api/types'
 import { AppPagesProvider } from '../druksui/AppPage'
 import { GateControls } from '../druksui/GateControls'
-import { httpUrl, relTimeFromIso } from '../lib/format'
+import { absTime, httpUrl, relTimeFromIso } from '../lib/format'
 import { isActiveRun } from '../lib/states'
 import { CancelRun, RetryRun } from './RunControls'
 import { RunTranscript } from './RunTranscript'
@@ -26,6 +27,15 @@ export function RunBlock({
   const ask = run.state === 'parked' ? run.inputRequest : null
   const call = run.agentCalls.at(-1)
   const [open, setOpen] = useState(false)
+  const sandboxes = useQuery({
+    // The state is in the key, so that a run that ends asks once more. Its last box
+    // can be newer than the last answer.
+    queryKey: ['runSandboxes', run.id, run.state],
+    queryFn: () => api.listRunSandboxes(run.id),
+    placeholderData: keepPreviousData,
+    // A run gets its boxes while it runs, and no stream carries them.
+    refetchInterval: run.state === 'running' ? 5_000 : false,
+  })
   const block = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (selected) {
@@ -79,6 +89,39 @@ export function RunBlock({
           <div className="ins-fail-body">{run.failure}</div>
         </div>
       )}
+      {sandboxes.data?.map((sandbox, index) => (
+        <div className="subject-run-secrets" key={index}>
+          <div className="dim">
+            secrets fetched from Druks ·{' '}
+            {sandbox.scopedTo === 'workflow' ? 'whole run' : sandbox.scopedTo} ·{' '}
+            {sandbox.isLive ? 'sandbox live' : 'no live sandbox'}
+          </div>
+          {sandbox.secrets.map((secret) => (
+            <div key={secret.name}>
+              {secret.name}{' '}
+              <span className="dim">
+                {secret.kind} {secret.secretId}
+              </span>{' '}
+              {secret.resources.join(', ')}
+              {secret.issues.map((issue) => (
+                <div className="subject-run-issue dim" key={issue.issuedAt}>
+                  {absTime(issue.issuedAt)} UTC ·{' '}
+                  {issue.error
+                    ? `no token: ${issue.error}`
+                    : [
+                        issue.fingerprint ? `token ${issue.fingerprint}` : 'value with no expiry',
+                        issue.expiresAt && `expires ${absTime(issue.expiresAt)}`,
+                        issue.mintedAt && `minted ${absTime(issue.mintedAt)}`,
+                        issue.audience,
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')}
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      ))}
       {call && (
         <button
           type="button"
