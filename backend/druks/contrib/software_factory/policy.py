@@ -1,4 +1,4 @@
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -8,6 +8,11 @@ from druks.sandbox.datastructures import Profile
 
 GateValue = Literal["human", "none"]
 PlanGate = Literal["human", "machine", "machine_then_human", "adaptive"]
+CONFIG_FOLDER = ".druks/software_factory/"
+# A script of the config folder. A push to that folder profiles the repo again, so a changed
+# script builds a new image.
+Script = Annotated[str, Field(pattern=r"^\.druks/software_factory/\w[\w.-]*$")]
+VariableName = Annotated[str, Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")]
 
 
 class Gates(BaseModel):
@@ -17,6 +22,31 @@ class Gates(BaseModel):
 
     plan_approval: PlanGate | None = None
     implementation_approval: GateValue | None = None
+
+
+class Size(BaseModel):
+    model_config = {"frozen": True, "extra": "forbid"}
+
+    cpu: int = Field(ge=1)
+    memory_gb: int = Field(ge=1)
+
+
+class Environment(BaseModel):
+    """The computer that the commands of a repo's builds run on."""
+
+    model_config = {"frozen": True, "extra": "forbid"}
+
+    # The script that installs what the repo's commands need. Druks builds the image of the
+    # environment from it, once for each version of the script.
+    setup: Script
+    # The script that runs each time the environment boots: the services that the commands
+    # need to find running, and the dependency sync.
+    start: Script | None = None
+    # Set when the environment boots. The values are read from the repo, so they are not
+    # secrets.
+    env: dict[VariableName, str] = Field(default_factory=dict)
+    # None gives the environment the size of the sandbox provider's default.
+    size: Size | None = None
 
 
 class VerificationProfile(BaseModel):
@@ -56,6 +86,8 @@ class RepoPolicy(BaseModel):
     # Operator-pinned verification commands. None → the repo profiler's
     # detected commands stand; an explicit (even empty) profile replaces them.
     verification: VerificationProfile | None = None
+    # None runs the commands of a build on the agent's own sandbox.
+    environment: Environment | None = None
 
     @classmethod
     async def resolve(cls, repo: str | None) -> "RepoPolicy":

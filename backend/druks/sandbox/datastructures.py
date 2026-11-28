@@ -14,6 +14,8 @@ from druks.settings import get_settings
 from .exceptions import SetupScriptError
 
 if TYPE_CHECKING:
+    from drukbox_sdk import SandboxTemplate
+
     from druks.durable.enums import AgentCallStatus
     from druks.harnesses.exceptions import HarnessError
 
@@ -38,12 +40,17 @@ class Sandbox:
     setup: str
     # None runs the sandbox on the installation's provider.
     provider: str | None = None
+    # The setup script itself, for a script that is not a file beside a module, such as one
+    # that a repository holds. ``setup`` then names where the script came from.
+    script: str = ""
     module: str = field(init=False, compare=False, default="")
 
     def __set_name__(self, owner: type, attr: str) -> None:
         object.__setattr__(self, "module", owner.__module__)
 
     def read_setup_script(self) -> bytes:
+        if self.script:
+            return self.script.encode()
         if not self.module:
             raise SetupScriptError(f"sandbox setup {self.setup!r} is not declared on a class")
         path = Path(inspect.getfile(sys.modules[self.module])).parent / self.setup
@@ -65,6 +72,14 @@ class Sandbox:
         if self.provider:
             return ""
         return get_settings().sandbox.image
+
+    async def build(self, *, label: str) -> "SandboxTemplate":
+        """The available template of this sandbox. Drukbox keys a template by its script,
+        so the same script builds once. A build that fails raises ``TemplateUnavailable``."""
+        # The templates module imports this one.
+        from .templates import build_template  # noqa: PLC0415
+
+        return await build_template(self, label=label)
 
 
 @dataclass(frozen=True)

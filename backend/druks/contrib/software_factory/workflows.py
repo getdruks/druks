@@ -7,6 +7,8 @@ from pydantic import BaseModel, Field
 
 from druks import ui
 from druks.accounts import Account
+from druks.apps.exceptions import AppConfigError
+from druks.apps.fetcher import fetch_file
 from druks.contrib.software_factory.contracts import (
     CiReport,
     ImplementationOutput,
@@ -19,7 +21,7 @@ from druks.contrib.software_factory.ticketing.enums import TicketStatus
 from druks.core.services import Github
 from druks.db import db_session
 from druks.mcp.inbound import get_druks_mcp_server
-from druks.sandbox import SandboxMcpServer, SandboxSecret
+from druks.sandbox import Sandbox, SandboxMcpServer, SandboxSecret
 from druks.sandbox.layout import get_related_root, get_work_root
 from druks.services.exceptions import ServiceNotConnectedError
 from druks.settings import get_settings
@@ -654,6 +656,22 @@ class Profile(Workflow):
             effective["verification"] = policy.verification.get_commands(
                 detected=baseline.get("verification") or {}
             )
+        if environment := policy.environment:
+            repo = project_repo.full_name
+            scripts = {
+                path: await fetch_file(repo=repo, path=path)
+                for path in (environment.setup, environment.start)
+                if path
+            }
+            if missing := [path for path, script in scripts.items() if not script]:
+                raise AppConfigError(
+                    f"{repo} has no {missing[0]} in its default branch. Add the script, or "
+                    "remove it from `environment` in .druks/software_factory/config.yml."
+                )
+            template = await Sandbox(
+                setup=environment.setup, script=scripts[environment.setup]
+            ).build(label=f"{repo}:{environment.setup}")
+            effective["environment_template"] = template.id
         await project_repo.set_profile(baseline=baseline, effective=effective)
 
     async def get_prompt_context(self, **context: Any) -> dict[str, Any]:

@@ -44,7 +44,8 @@ def _stub_profile_dispatch(monkeypatch):
     return calls
 
 
-async def test_policy_push_on_default_branch_reprofiles(tmp_path, druks_db, monkeypatch):
+@pytest.mark.parametrize("path", ["config.yml", "setup.sh"])
+async def test_policy_push_on_default_branch_reprofiles(tmp_path, druks_db, monkeypatch, path):
     project = await Project.create(name="Acme")
     repo = await ProjectRepo.create(project_id=project.id, full_name="acme/widget")
     calls = _stub_profile_dispatch(monkeypatch)
@@ -54,7 +55,7 @@ async def test_policy_push_on_default_branch_reprofiles(tmp_path, druks_db, monk
             full_name="acme/widget",
             default_branch="main",
             ref="refs/heads/main",
-            changed_paths=(".druks/software_factory/config.yml",),
+            changed_paths=(f".druks/software_factory/{path}",),
         ),
         tmp_path=tmp_path,
     )

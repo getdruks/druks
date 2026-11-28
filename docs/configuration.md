@@ -685,6 +685,37 @@ only for a push by a person who can use Software Factory. Druks refuses a push b
 every other author, a merge by the operator App included, and the next build keeps
 the old file.
 
+`environment` describes the computer that the commands of a build run on:
+
+```yaml
+environment:
+  setup: .druks/software_factory/setup.sh
+  start: .druks/software_factory/start.sh
+  env:
+    DATABASE_URL: postgres://localhost/test
+  size:
+    cpu: 8
+    memory_gb: 16
+```
+
+| Key | Meaning |
+| --- | --- |
+| `setup` | Required. A script that installs what the repository's commands need, such as a database server or a toolchain. Druks builds an image from it. |
+| `start` | A script that runs each time the environment boots. It starts the services that the commands need to find running, and syncs the dependencies. |
+| `env` | Variables that are set when the environment boots. Druks reads them from the repository, so do not put a secret here. |
+| `size` | The `cpu` count and the `memory_gb` of the environment. Without it, the environment has the size of the sandbox provider's default. |
+
+Both scripts are files in `.druks/software_factory/`, and Druks reads them from
+the default branch, so a pull request cannot change the environment that its own
+build uses. Druks builds the image when it profiles the repository, and again
+after a push to the default branch that changes a file in that folder. The run
+shows **Building sandbox** while the image builds. The profile fails when the
+default branch lacks a script that the config names, or when the image does not
+build, and the repository keeps its last profile.
+
+This version builds the image and checks the other keys. A build does not run
+its commands in the environment yet.
+
 The same folder holds `review.md`, the repository's rules for the implementer
 and the reviewer. The build and review prompts read it when the checkout has
 one, and it is the last word where it and a prompt disagree. A section heading

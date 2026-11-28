@@ -10,6 +10,7 @@ from druks.contrib.software_factory.exceptions import (
     TicketNotRoutable,
 )
 from druks.contrib.software_factory.models import ProjectRepo, WorkItem
+from druks.contrib.software_factory.policy import CONFIG_FOLDER
 from druks.contrib.software_factory.ticketing.enums import TicketStatus
 from druks.contrib.software_factory.workflows import Build, Profile, PullRequestReview
 from druks.db import atomic
@@ -85,9 +86,9 @@ async def stopped_review_fails_the_build(
 
 @subscribe("repo.pushed", to_default_branch=True)
 async def policy_push_reprofiles_the_repo(*, repo: str, paths: list, **_: object) -> None:
-    # The operator edited the repo's build policy — re-apply it over the
-    # profiled baseline.
-    if ".druks/software_factory/config.yml" in paths:
+    # The operator edited the repo's build policy, or a script that the policy names. The
+    # profile applies the policy again and builds the image of a changed environment.
+    if any(path.startswith(CONFIG_FOLDER) for path in paths):
         project_repo = await ProjectRepo.get_for_repo(repo)
 
         if project_repo:

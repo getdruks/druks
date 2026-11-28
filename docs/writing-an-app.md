@@ -228,6 +228,13 @@ template. A workflow with no declaration uses the platform base unchanged.
 The content hash of the base and the script identifies the template. App authors do
 not name provider images.
 
+A script that is not a file beside a module, such as one that a repository
+holds, goes in `script`: `Sandbox(setup=".druks/night_watch/setup.sh",
+script=text)`. `setup` then names where the script came from.
+`await sandbox.build(label=...)` returns the template, and the run waits in the
+sandbox-building phase while Drukbox builds it. A build that fails raises
+`TemplateUnavailable`.
+
 Use provider idempotency keys for writes. An interrupted operation can run again.
 DBOS reuses completed checkpoints on recovery. Keep decisions in replayable
 control flow. Keep I/O inside steps. See
