@@ -48,7 +48,7 @@ async def create_schedule(
         str,
         Body(
             description="Where its runs report: a conversation from chat_list_conversations, "
-            "or the top of a room that chat_start_room_conversation gives. Leave it out to "
+            "or the top of a room that chat_create_room_conversation gives. Leave it out to "
             "report in this chat."
         ),
     ] = "",
@@ -118,7 +118,7 @@ async def change_schedule(
         str,
         Body(
             description="Where its runs report: a conversation from chat_list_conversations, "
-            "or the top of a room that chat_start_room_conversation gives. Leave it out to "
+            "or the top of a room that chat_create_room_conversation gives. Leave it out to "
             "keep where they report."
         ),
     ] = "",

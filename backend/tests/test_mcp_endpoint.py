@@ -221,7 +221,7 @@ async def test_tools_list_pins_platform_and_app_tools(app, pat_token, mode):
         "chat_show",
         "chat_run_instruction",
         "chat_start_conversation",
-        "chat_start_room_conversation",
+        "chat_create_room_conversation",
         "chat_list_reminders",
         "chat_create_reminder",
         "chat_cancel_reminder",

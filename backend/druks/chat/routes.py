@@ -490,13 +490,13 @@ async def start_conversation(
 
 @router.post(
     "/rooms/conversations",
-    operation_id="start_room_conversation",
+    operation_id="create_room_conversation",
     status_code=201,
     tags=["agent"],
     response_model=ConversationResponse,
     response_model_by_alias=True,
 )
-async def start_room_conversation(
+async def create_room_conversation(
     session: SessionDep,
     room: Annotated[
         str,
@@ -507,18 +507,18 @@ async def start_room_conversation(
         ),
     ],
 ) -> Conversation:
-    """Start a conversation at the top of a room. Then your schedules and your reminders
+    """Create a conversation at the top of a room. Then your schedules and your reminders
     can reach it. Each message that Druks sends there is a new message in the room, and
     everyone in the room reads it. The bot and the person must both be members of the
     room. Druks sends nothing until a schedule or a reminder does."""
     if conversation_id := current_conversation_id.get():
         conversation = await session.get(Conversation, conversation_id)
-        (channel,) = [channel for channel in channel_registry.all() if channel.has_rooms]
-        started = await channel.start_room_conversation(session, conversation, room=room)
+        (channel,) = [channel for channel in channel_registry.all() if channel.can_message_room]
+        created = await channel.create_room_conversation(session, conversation, room=room)
         await session.commit()
-        await session.refresh(started)
-        return started
-    raise HTTPException(409, "This call comes from no chat. Start the conversation from a chat.")
+        await session.refresh(created)
+        return created
+    raise HTTPException(409, "This call comes from no chat. Create the conversation from a chat.")
 
 
 @router.post(
@@ -537,7 +537,7 @@ async def create_reminder(
         Body(
             description="Where to send: a conversation from chat_list_conversations, a "
             "chat you start with chat_start_conversation for someone who has none, or the "
-            "top of a room that chat_start_room_conversation gives. Leave it out to send in "
+            "top of a room that chat_create_room_conversation gives. Leave it out to send in "
             "this chat."
         ),
     ] = "",

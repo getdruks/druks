@@ -66,7 +66,7 @@ class SlackChannel(Channel):
     has_blocks = True
     has_account_notifications = True
     has_editable_status = True
-    has_rooms = True
+    can_message_room = True
     reaction_ack = "eyes"
 
     @classmethod
@@ -327,7 +327,7 @@ class SlackChannel(Channel):
         await session.commit()
 
     @classmethod
-    async def start_room_conversation(
+    async def create_room_conversation(
         cls, session: AsyncSession, conversation: Conversation, *, room: str
     ) -> Conversation:
         """The conversation at the top of the Slack channel that ``room`` names by id or by
@@ -358,7 +358,7 @@ class SlackChannel(Channel):
                 f"The person is not in #{found_room['name']}. Ask them to join the channel "
                 "first, or choose a channel that they are in."
             )
-        started = await Conversation.get_or_create_for_user(
+        created = await Conversation.get_or_create_for_user(
             session,
             await Slack.get(),
             conversation.account_id,
@@ -369,8 +369,8 @@ class SlackChannel(Channel):
             thread_id=found_room["id"],
             agent_id=conversation.agent_id,
         )
-        started.title = f"#{found_room['name']}"
-        return started
+        created.title = f"#{found_room['name']}"
+        return created
 
     @classmethod
     def validate_fields(cls, fields: list[dict]) -> None:

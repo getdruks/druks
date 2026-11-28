@@ -31,8 +31,8 @@ class Channel:
     has_account_notifications: ClassVar[bool] = False
     # Whether the channel shows a run's status in one message, which it edits as the run moves.
     has_editable_status: ClassVar[bool] = False
-    # Whether a conversation can start at the top of one of the channel's rooms.
-    has_rooms: ClassVar[bool] = False
+    # Whether the channel sends messages at the top of a room, in a conversation there.
+    can_message_room: ClassVar[bool] = False
     # The reaction that acknowledges a person's message, as the channel names it.
     reaction_ack: ClassVar[str]
 
@@ -130,7 +130,7 @@ class Channel:
         )
 
     @classmethod
-    async def start_room_conversation(
+    async def create_room_conversation(
         cls, session: AsyncSession, conversation: Conversation, *, room: str
     ) -> Conversation:
         """A conversation at the top of a room on the channel, under the conversation's

@@ -1493,7 +1493,7 @@ def member_rooms(monkeypatch, rooms: dict) -> None:
 
 
 @pytest.mark.usefixtures("tmp_data_dir")
-async def test_a_schedule_reports_at_the_top_of_a_room_that_its_agent_started_a_conversation_in(
+async def test_a_schedule_reports_at_the_top_of_a_room_that_its_agent_created_a_conversation_in(
     druks_db, tmp_path, slack, monkeypatch
 ):
     monkeypatch.setattr("druks.schedules.routes.apply_schedule", AsyncMock())
@@ -1512,7 +1512,7 @@ async def test_a_schedule_reports_at_the_top_of_a_room_that_its_agent_started_a_
     brief = {"tool": "list_schedules", "arguments": {}, "cron": "0 8 * * 1"}
 
     async with asgi_client(api) as client:
-        started = await client.post(
+        created = await client.post(
             "/api/chat/rooms/conversations", json={"room": "#eng"}, headers=headers
         )
         again = await client.post(
@@ -1520,14 +1520,14 @@ async def test_a_schedule_reports_at_the_top_of_a_room_that_its_agent_started_a_
         )
         made = await client.post(
             "/api/schedules",
-            json={**brief, "conversation_id": started.json()["id"]},
+            json={**brief, "conversation_id": created.json()["id"]},
             headers=headers,
         )
-    room = await druks_db.get(Conversation, started.json()["id"])
+    room = await druks_db.get(Conversation, created.json()["id"])
     reply = await room.create_message(druks_db, "Three merges.", role=MessageRole.ASSISTANT)
     await SlackChannel.send_reply(druks_db, room, reply)
 
-    assert (started.status_code, again.json()["id"]) == (201, room.id)
+    assert (created.status_code, again.json()["id"]) == (201, room.id)
     assert (room.title, room.thread_id, room.user_id, room.agent_id) == (
         "#eng",
         "C1",
@@ -1539,7 +1539,7 @@ async def test_a_schedule_reports_at_the_top_of_a_room_that_its_agent_started_a_
     assert posts == [("C1", None, "Scout")]
 
 
-async def test_a_conversation_starts_only_in_a_room_that_the_bot_and_the_person_are_in(
+async def test_a_room_conversation_needs_the_bot_and_the_person_in_the_room(
     card, druks_db, tmp_path, monkeypatch
 ):
     member_rooms(monkeypatch, {"": [ENG, LEADERSHIP], ANA: [ENG]})

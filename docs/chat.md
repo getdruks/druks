@@ -568,7 +568,7 @@ A due time makes one call, also when two Druks servers run. An interrupted call
 can run again. Druks does not call a due time that passes while it is down.
 
 Say "post the brief in #eng every morning" to get the reports in a Slack
-channel. The agent first starts a conversation at the top of that channel: see
+channel. The agent first creates a conversation at the top of that channel: see
 [Rooms](#rooms). It then gives that conversation to `create_schedule`. Each
 report starts the agent's turn there, and the agent's reply is a new message in
 the channel. A failed run and a question of a run show there too. The chat where
@@ -878,7 +878,7 @@ its thread. A channel has one agent at most. Choose
 **No channel** to return the channel to normal chat.
 
 An agent can also write at the top of a channel. Say "post the brief in #eng
-every morning". The agent calls `chat_start_room_conversation` with the channel's
+every morning". The agent calls `chat_create_room_conversation` with the channel's
 id or its name. Druks then makes a conversation at the top of that channel, for
 you and that agent. You and the bot must both be members of the channel, and your
 Slack account must be connected. Otherwise Druks refuses, and the agent tells you
