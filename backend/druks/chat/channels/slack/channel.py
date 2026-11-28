@@ -343,7 +343,8 @@ class SlackChannel(Channel):
             )
         user_id = sign_ins[0].identity["subject"]
         client = SlackClient(token=await Slack.get_bot_token())
-        name = room.removeprefix("#")
+        # A person writes #eng, and Slack sends a mention as <#C0123ABCD|eng>.
+        name = room.strip("<>").removeprefix("#").partition("|")[0]
         bot_rooms = [
             bot_room
             for bot_room in await client.list_member_channels()

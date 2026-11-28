@@ -48,9 +48,8 @@ async def create_schedule(
     room: Annotated[
         str,
         Body(
-            description="A Slack channel where its runs report. Give its id, such as "
-            "C0123ABCD: a mention <#C0123ABCD|eng> holds it. With no id, give its name, such "
-            "as #eng. Leave it out to report in this chat."
+            description="A room where its runs report, as the person named it. Leave it "
+            "out to report in this chat."
         ),
     ] = "",
     account: Account = Depends(current_account),

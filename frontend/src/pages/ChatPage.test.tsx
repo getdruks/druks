@@ -261,7 +261,7 @@ describe('Chat page', () => {
   })
 
   it('shows an internal conversation by what reports in it, with no message box', async () => {
-    const internal = { ...conversation, title: '#eng', source: 'slack' as const, isInternal: true }
+    const internal = { ...conversation, title: '#eng', isInternal: true }
     vi.mocked(chatApi.list).mockResolvedValue([internal])
     vi.mocked(chatApi.get).mockResolvedValue(internal)
     mount()

@@ -1513,7 +1513,9 @@ async def test_a_schedule_with_a_room_reports_in_the_rooms_internal_conversation
 
     async with asgi_client(api) as client:
         made = await client.post("/api/schedules", json={**brief, "room": "#eng"}, headers=headers)
-        again = await client.post("/api/schedules", json={**brief, "room": "C1"}, headers=headers)
+        again = await client.post(
+            "/api/schedules", json={**brief, "room": "<#C1|eng>"}, headers=headers
+        )
         in_chat = await client.post("/api/schedules", json=brief, headers=headers)
         listed = await client.get("/api/chat/conversations", headers=headers)
         written = await client.post(
