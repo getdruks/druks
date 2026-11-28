@@ -1,5 +1,6 @@
 # The platform tools of a number's admin, beside the Bot's admin_tools.
 ADMIN_TOOLS = (
+    "get_gate",
     "answer_gate",
     "chat_resume_conversation",
     "chat_list_conversations",
