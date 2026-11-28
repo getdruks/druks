@@ -304,7 +304,7 @@ describe('ProviderConnect', () => {
 
     expect(screen.getByText('Disconnected')).toBeTruthy()
     expect(screen.getByText('claude-seat@corp.com')).toBeTruthy()
-    expect(screen.getByText('invalid_grant')).toBeTruthy()
+    expect(screen.getByText(/Reason: the provider ended this sign-in/)).toBeTruthy()
     expect(screen.getByText(/Last refreshed/)).toBeTruthy()
     expect(Array.from(view.container.querySelectorAll('time'), (time) => time.dateTime)).toEqual([
       revokedAt,

@@ -94,6 +94,12 @@ afterEach(() => {
 })
 
 describe('AgentPage', () => {
+  it("shows the agent's harness and model", async () => {
+    renderPage(member)
+
+    expect(await screen.findByText('claude · claude-opus')).toBeTruthy()
+  })
+
   it('lets a member stop only their own schedule', async () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true)
     const stop = vi.spyOn(api, 'stopSchedule').mockResolvedValue()

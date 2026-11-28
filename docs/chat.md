@@ -354,7 +354,8 @@ and tells it where you connect a missing one. A Bot's sandbox never holds a sign
 A build still acts as the App: see [GitHub](configuration.md#github).
 
 The agent can change Druks through those tools. Chat has no permission dialog
-or proposal mode. Claude runs in bypass mode and cannot call `AskUserQuestion`.
+or proposal mode. Claude runs in bypass mode and cannot call `AskUserQuestion`,
+`CronCreate`, `CronDelete`, `CronList`, `Monitor`, or `ScheduleWakeup`.
 Codex runs in full-access mode for an operator. For a Bot it runs in read-only
 mode without shell, web, or image tools. OpenCode runs its default agent with
 every permission allowed for an operator. For a Bot it runs an agent that
@@ -362,7 +363,10 @@ denies the file, shell, and web tools.
 
 A run that the agent starts with a tool records its conversation. When the run
 parks with a question, Druks adds an internal message with the request to that
-conversation. On a WhatsApp number with an admin, the admin answers instead: see
+conversation. In an operator's conversation, the message also holds the address
+of the run's page, when the installation has an endpoint. The agent gives you that
+address and a short summary of the run's artifact, which it reads with `get_gate`.
+On a WhatsApp number with an admin, the admin answers instead: see
 [Confirmation](#confirmation). A question that names an
 [approver](writing-an-app.md#wait-for-input) asks the approver instead, on any
 source. The conversation gets no buttons, because only the approver can answer.
@@ -493,10 +497,13 @@ one of these:
 | `send_at` | Once, at that time. A time with no offset is local. | `2026-10-20T09:00` |
 | `cron` | Again and again, in local time | `0 9 * * 1` for Mondays at 9 |
 
-Local time is the installation `timezone`. Each turn opens with the current time
-and that timezone, so that the agent never guesses them. Without
-`conversation_id`, the reminder sends in the chat that asked for it. The answer
-gives `nextSendAt` in local time. The agent tells the person that time.
+Local time is the timezone of the person's account. A number's bot and bot admin
+accounts never sign in to choose one, so their chats use the installation timezone.
+Each turn opens with the current time and that timezone, so that the agent never
+guesses them. When the person changes the timezone in **Settings → Preferences**, a
+reminder on a cron moves with it. Without `conversation_id`, the reminder sends in the
+chat that asked for it. The answer gives `nextSendAt` in local time. The agent tells
+the person that time.
 
 Druks checks for due reminders every minute. A reminder sends up to a minute
 after its time. It sends the words as written, as the agent's message, and runs no
@@ -542,8 +549,9 @@ own.
 | `conversation_id` | Where the runs report. Without it, the chat that asked | The top of a Slack channel |
 
 Druks checks that the tool exists and that the cron has five fields when the
-agent saves the schedule. Local time is the installation `timezone`, as for
-reminders.
+agent saves the schedule. Local time is the timezone of the person's account, as for
+reminders. When the person changes that timezone in **Settings → Preferences**, the
+schedule moves with it.
 
 Each schedule has its own DBOS schedule. At each due time, Druks makes the tool
 call through its own MCP server. It calls as the owner, from the

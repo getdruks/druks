@@ -2,7 +2,7 @@ import { useEffect, useReducer, useRef, useState } from 'react'
 import type { ToolCall } from '@agentclientprotocol/sdk'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  ArrowDown, ArrowLeft, ArrowUp, Check, ChevronRight, MessageSquare, Pin, Plus, Search, Settings, X,
+  ArrowDown, ArrowLeft, ArrowUp, Bot, Check, ChevronRight, MessageSquare, Pin, Plus, Search, Settings, X,
 } from 'lucide-react'
 import { useStickToBottom } from 'use-stick-to-bottom'
 import { Link, useLocation } from 'wouter'
@@ -37,7 +37,7 @@ const conversationIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-
 const stoppedTurns: Partial<Record<NonNullable<Message['state']>, { title: string, detail: string }>> = {
   interrupted: { title: 'Interrupted', detail: 'This turn stopped before it finished.' },
   cancelled: { title: 'Cancelled', detail: 'You stopped this turn.' },
-  failed: { title: 'Failed', detail: 'Druks could not deliver this message.' },
+  failed: { title: 'Failed', detail: 'Druks could not start this turn.' },
 }
 
 export function ChatPage({ id, account }: { id?: string; account: Account }) {
@@ -65,6 +65,7 @@ export function ChatPage({ id, account }: { id?: string; account: Account }) {
   const groups = new Map<string, ConversationSummary[]>([
     ['Pinned', []], ['Today', []], ['Yesterday', []], ['Earlier', []],
   ])
+  const openConversation = list.data?.find((conversation) => conversation.id === conversationId)
   const matches = [...list.data ?? []]
     .filter((conversation) => conversationTitle(conversation).toLowerCase().includes(search.trim().toLowerCase()))
     .sort(compareConversations)
@@ -92,6 +93,27 @@ export function ChatPage({ id, account }: { id?: string; account: Account }) {
     return <Page inset><p role="alert">Conversation not found.</p><Link href="/chat">Back to conversations</Link></Page>
   }
 
+  const headerLink = openConversation?.agentId ? (
+    <Link
+      href={`/agents/${openConversation.agentId}`}
+      className="druks-button druks-button--compact"
+      title="Open this agent's page"
+    >
+      <Bot size={16} aria-hidden="true" />
+      {openConversation.agentName}
+    </Link>
+  ) : (
+    <Link
+      href="/apps/chat/settings"
+      className="druks-button druks-button--compact"
+      aria-label="Chat Settings"
+      title="Chat Settings"
+    >
+      <Settings size={16} aria-hidden="true" />
+      Chat Settings
+    </Link>
+  )
+
   return (
     <Page
       className={`page-chat${id ? ' has-conversation' : ''}`}
@@ -101,17 +123,7 @@ export function ChatPage({ id, account }: { id?: string; account: Account }) {
         <PageHeading
           title="Chat"
           icon={<MessageSquare aria-hidden="true" />}
-          actions={account.role === 'admin' ? (
-            <Link
-              href="/apps/chat/settings"
-              className="druks-button druks-button--compact"
-              aria-label="Chat Settings"
-              title="Chat Settings"
-            >
-              <Settings size={16} aria-hidden="true" />
-              Chat Settings
-            </Link>
-          ) : undefined}
+          actions={account.role === 'admin' ? headerLink : undefined}
         />
       }
     >
@@ -165,7 +177,7 @@ export function ChatPage({ id, account }: { id?: string; account: Account }) {
         id={conversationId}
         account={account}
         showMilestone={id === undefined}
-        summary={list.data?.find((conversation) => conversation.id === conversationId)}
+        summary={openConversation}
         onPin={togglePinned}
         pinPending={pin.isPending}
         draft={drafts[draftKey] ?? ''}
@@ -418,10 +430,13 @@ function ConversationThread({ id, account, showMilestone, summary, onPin, pinPen
           const isQueued = message.state === 'pending' && unansweredMessage?.id !== message.id
           const isWaiting = unansweredMessage?.id === message.id && rows.length === 0 && !state.error
           const stoppedTurn = message.state && stoppedTurns[message.state]
-          return <article className="chat-turn" key={message.id} aria-label="Message and reply">
-            <div className={`druks-chat-message chat-user-message${message.isInternal ? ' is-internal' : ' druks-chat-message--user'}`}>
+          const hasReplyBlock = rows.length > 0 || reply?.blocks.length || isWaiting || stoppedTurn || reply?.question
+          // An internal message is for the agent. The page draws only the agent's side of its turn.
+          if (message.isInternal && !hasReplyBlock) return null
+          return <article className="chat-turn" key={message.id} aria-label={message.isInternal ? 'Agent message' : 'Message and reply'}>
+            {!message.isInternal && <div className="druks-chat-message chat-user-message druks-chat-message--user">
               <div className="druks-chat-message__meta">
-                <span>{message.isInternal ? 'Druks' : 'You'}</span>
+                <span>You</span>
                 {isQueued && <span className="druks-badge druks-badge--tinted druks-badge--info">Queued</span>}
                 <time dateTime={message.createdAt} title={format.absTime(message.createdAt)}>{format.absTimeCompact(message.createdAt)}</time>
               </div>
@@ -430,8 +445,8 @@ function ConversationThread({ id, account, showMilestone, summary, onPin, pinPen
                 {message.transcript && <div className="chat-user-body chat-user-transcript">{message.transcript}</div>}
                 {message.file && <a href={message.file.url} target="_blank" rel="noreferrer">{message.file.name}</a>}
               </div>
-            </div>
-            {(rows.length > 0 || reply?.blocks.length || isWaiting || stoppedTurn || reply?.question) && <div className="chat-reply">
+            </div>}
+            {hasReplyBlock && <div className="chat-reply">
               <div className="druks-chat-message">
                 <div className="druks-chat-message__meta">
                   <span className="chat-agent-status">{conversation?.agentName ?? 'Agent'}

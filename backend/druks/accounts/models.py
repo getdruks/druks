@@ -73,6 +73,12 @@ class Account(Model, Uuid7Pk, ordering=("created_at", "id")):
     def is_admin(self) -> bool:
         return self.role == Role.ADMIN
 
+    @property
+    def local_timezone(self) -> str:
+        """The timezone of local time in the account's chats. Only an operator signs in to
+        choose one, so a Bot's accounts follow the installation timezone."""
+        return self.timezone if self.kind == AccountKind.OPERATOR else get_settings().timezone
+
     async def can_use_app(self, app: "type[App]") -> bool:
         """Whether this account can use the app. An admin can use every app, and
         every account can use a built-in app or an app that no team lists."""

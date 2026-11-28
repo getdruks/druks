@@ -60,10 +60,10 @@ async def _open_repo(druks_client, *, project="Acme", repo="acme/druks"):
     return await _add_repo(druks_client, await _open_project(druks_client, project), repo)
 
 
-async def _open_ticket(druks_client, repo_id, **fields):
+async def _open_ticket(druks_client, repo, **fields):
     created = await druks_client.post(
         _TICKETS,
-        json={"title": "one", "repo_id": int(repo_id), **fields},
+        json={"title": "one", "repo": repo, **fields},
     )
     assert created.status_code == 201
     return created.json()
@@ -73,7 +73,7 @@ async def test_a_new_ticket_lands_in_backlog_and_tells_nobody(druks_client, monk
     events = _published(monkeypatch)
     repo = await _open_repo(druks_client)
 
-    ticket = await _open_ticket(druks_client, repo["id"], title="quiet")
+    ticket = await _open_ticket(druks_client, repo["fullName"], title="quiet")
 
     assert (ticket["identifier"], ticket["status"], ticket["comments"]) == ("ACM-1", "backlog", [])
     assert events == []
@@ -82,7 +82,7 @@ async def test_a_new_ticket_lands_in_backlog_and_tells_nobody(druks_client, monk
 async def test_ready_for_agent_publishes_one_transition(druks_client, monkeypatch):
     events = _published(monkeypatch)
     repo = await _open_repo(druks_client, repo="acme/acme-app")
-    ticket = await _open_ticket(druks_client, repo["id"], title="Add an endpoint")
+    ticket = await _open_ticket(druks_client, repo["fullName"], title="Add an endpoint")
 
     for _ in range(2):
         moved = await druks_client.post(
@@ -103,8 +103,10 @@ async def test_an_edit_takes_what_it_is_given_and_leaves_the_rest(
     here = await _open_repo(druks_client, project="Alpha", repo="acme/alpha")
     there = await _open_repo(druks_client, project="Beta", repo="acme/beta")
     assignee = await Account.get_or_create(druks_db, "dev@example.com")
-    ticket = await _open_ticket(druks_client, here["id"], title="old", assignee_id=assignee.id)
-    blocker = await _open_ticket(druks_client, here["id"])
+    ticket = await _open_ticket(
+        druks_client, here["fullName"], title="old", assignee_id=assignee.id
+    )
+    blocker = await _open_ticket(druks_client, here["fullName"])
 
     async def edit(**fields):
         answer = await druks_client.patch(f"{_TICKETS}/{ticket['identifier']}", json=fields)
@@ -114,7 +116,8 @@ async def test_an_edit_takes_what_it_is_given_and_leaves_the_rest(
     # Status is set_status's alone, and the identifier outlives a move.
     edited = await edit(title="new", priority="high", status="done")
     assert (edited["title"], edited["priority"], edited["status"]) == ("new", "high", "backlog")
-    assert (await edit(repo_id=int(there["id"])))["identifier"] == "ALP-1"
+    moved = await edit(repo=there["fullName"])
+    assert (moved["identifier"], moved["repo"]) == ("ALP-1", "acme/beta")
     assert (await edit(title="kept"))["assigneeId"] == assignee.id
     assert (await edit(assignee_id=""))["assigneeId"] is None
     key = blocker["identifier"]
@@ -126,10 +129,8 @@ async def test_an_edit_takes_what_it_is_given_and_leaves_the_rest(
 
 async def test_a_title_over_200_characters_is_refused_on_create_and_edit(druks_client):
     repo = await _open_repo(druks_client)
-    ticket = await _open_ticket(druks_client, repo["id"], title="x" * 200)
-    created = await druks_client.post(
-        _TICKETS, json={"title": "x" * 201, "repo_id": int(repo["id"])}
-    )
+    ticket = await _open_ticket(druks_client, repo["fullName"], title="x" * 200)
+    created = await druks_client.post(_TICKETS, json={"title": "x" * 201, "repo": repo["fullName"]})
     edited = await druks_client.patch(
         f"{_TICKETS}/{ticket['identifier']}", json={"title": "x" * 201}
     )
@@ -139,7 +140,7 @@ async def test_a_title_over_200_characters_is_refused_on_create_and_edit(druks_c
 async def test_a_comment_carries_the_calling_account(druks_db, druks_client):
     account = await Account.get_or_create(druks_db, "op@example.com")
     repo = await _open_repo(druks_client)
-    ticket = await _open_ticket(druks_client, repo["id"])
+    ticket = await _open_ticket(druks_client, repo["fullName"])
 
     written = await druks_client.post(
         f"{_TICKETS}/{ticket['identifier']}/comments",
@@ -154,15 +155,15 @@ async def test_a_comment_carries_the_calling_account(druks_db, druks_client):
 
 async def test_blank_text_and_unknown_ids_are_refused(druks_client):
     repo = await _open_repo(druks_client)
-    ticket = await _open_ticket(druks_client, repo["id"])
+    ticket = await _open_ticket(druks_client, repo["fullName"])
 
     async def status_of(method, path, **json):
         return (await getattr(druks_client, method)(path, json=json or None)).status_code
 
-    assert await status_of("post", _TICKETS, title="   ", repo_id=int(repo["id"])) == 422
+    assert await status_of("post", _TICKETS, title="   ", repo=repo["fullName"]) == 422
     assert await status_of("patch", f"{_TICKETS}/{ticket['identifier']}", title=" ") == 422
     assert await status_of("post", f"{_TICKETS}/{ticket['identifier']}/comments", body="\n") == 422
-    assert await status_of("post", _TICKETS, title="t", repo_id=999999) == 404
+    assert await status_of("post", _TICKETS, title="t", repo="acme/nowhere") == 404
     assert (
         await status_of("patch", f"{_TICKETS}/{ticket['identifier']}", assignee_id="nobody") == 404
     )
@@ -175,7 +176,7 @@ async def test_blank_text_and_unknown_ids_are_refused(druks_client):
 
 async def test_a_ticket_cannot_block_itself(druks_client):
     repo = await _open_repo(druks_client)
-    ticket = await _open_ticket(druks_client, repo["id"])
+    ticket = await _open_ticket(druks_client, repo["fullName"])
 
     answer = await druks_client.patch(
         f"{_TICKETS}/{ticket['identifier']}", json={"blocked_by": [ticket["identifier"]]}
@@ -187,9 +188,9 @@ async def test_a_ticket_cannot_block_itself(druks_client):
 async def test_blockers_read_in_the_order_they_were_created(druks_client):
     zeta = await _open_repo(druks_client, project="Zeta", repo="acme/zeta")
     alpha = await _open_repo(druks_client, project="Alpha", repo="acme/alpha")
-    ticket = await _open_ticket(druks_client, zeta["id"])
-    first = (await _open_ticket(druks_client, zeta["id"]))["identifier"]
-    second = (await _open_ticket(druks_client, alpha["id"]))["identifier"]
+    ticket = await _open_ticket(druks_client, zeta["fullName"])
+    first = (await _open_ticket(druks_client, zeta["fullName"]))["identifier"]
+    second = (await _open_ticket(druks_client, alpha["fullName"]))["identifier"]
 
     edited = await druks_client.patch(
         f"{_TICKETS}/{ticket['identifier']}", json={"blocked_by": [second, first]}
@@ -201,7 +202,7 @@ async def test_blockers_read_in_the_order_they_were_created(druks_client):
 async def test_deleting_a_repo_takes_its_tickets_and_comments(druks_client):
     project = await _open_project(druks_client)
     repo = await _add_repo(druks_client, project, "acme/gone")
-    ticket = await _open_ticket(druks_client, repo["id"])
+    ticket = await _open_ticket(druks_client, repo["fullName"])
     await druks_client.post(f"{_TICKETS}/{ticket['identifier']}/comments", json={"body": "note"})
 
     deleted = await druks_client.delete(f"{_PROJECTS}/{project['id']}/repos/{repo['id']}")

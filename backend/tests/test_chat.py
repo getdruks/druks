@@ -10,7 +10,7 @@ from uuid import uuid4
 
 import asyncssh
 import pytest
-from conftest import FORM_TEXT, connect_anthropic_subscription
+from conftest import FORM_TEXT, connect_anthropic_subscription, set_endpoint
 from druks import ui
 from druks.accounts.context import current_conversation_id
 from druks.accounts.enums import AccountKind
@@ -1679,7 +1679,14 @@ async def test_only_the_operator_reaches_the_connected_mcp_servers_and_holds_the
                 "meta": {
                     "claudeCode": {
                         "options": {
-                            "disallowedTools": ["AskUserQuestion"],
+                            "disallowedTools": [
+                                "AskUserQuestion",
+                                "CronCreate",
+                                "CronDelete",
+                                "CronList",
+                                "Monitor",
+                                "ScheduleWakeup",
+                            ],
                             "model": "claude-opus-4-7",
                             "extraArgs": {"system-prompt-snapshot": "off"},
                             "systemPrompt": {
@@ -1708,7 +1715,14 @@ async def test_only_the_operator_reaches_the_connected_mcp_servers_and_holds_the
                 "meta": {
                     "claudeCode": {
                         "options": {
-                            "disallowedTools": ["AskUserQuestion"],
+                            "disallowedTools": [
+                                "AskUserQuestion",
+                                "CronCreate",
+                                "CronDelete",
+                                "CronList",
+                                "Monitor",
+                                "ScheduleWakeup",
+                            ],
                             "model": "claude-opus-4-7",
                             "extraArgs": {"system-prompt-snapshot": "off"},
                             "systemPrompt": "Be kind.",
@@ -2522,10 +2536,12 @@ async def test_a_parked_run_asks_the_chat_that_started_it(druks_db, conversation
     run.conversation_id = conversation.id
     run.input_requested_at = Base.utc_now()
 
+    set_endpoint("https://druks.example")
+
     assert await bot_service.ask_for_answer(druks_db, run) == conversation.id
     *_, ask = await list_messages(druks_db, conversation)
     assert ask.is_internal
-    assert run.id in ask.body
+    assert f"https://druks.example/runs/{run.id}" in ask.body
     assert "Approve the plan" in ask.body
 
 
@@ -2599,13 +2615,20 @@ async def test_a_parked_run_asks_its_chat_with_its_blocks_and_where_their_work_s
     assert (value["status"]["run"], value["status"]["gate"]) == (run.id, "review")
 
 
-async def test_each_turn_opens_with_the_local_time(monkeypatch):
+@pytest.mark.parametrize(
+    "kind, timezone",
+    [(AccountKind.OPERATOR, "Europe/Madrid"), (AccountKind.BOT, "UTC")],
+    ids=["person", "number"],
+)
+async def test_each_turn_opens_with_the_local_time(kind, timezone, monkeypatch):
+    # The number's account still holds the timezone of the day the number was linked.
     settings = SimpleNamespace(timezone="Europe/Madrid")
-    monkeypatch.setattr(service, "get_settings", lambda: settings)
+    monkeypatch.setattr("druks.accounts.models.get_settings", lambda: settings)
+    conversation = Conversation(account=Account(username="ana", kind=kind, timezone=timezone))
     monkeypatch.setattr(Base, "utc_now", lambda: datetime(2026, 10, 17, 21, 14, 57, tzinfo=UTC))
     message = Message(body="Remind me in 5 minutes", transcript="", file=None)
 
-    content = await service.get_turn_content(SimpleNamespace(), "/chat", [message])
+    content = await service.get_turn_content(SimpleNamespace(), conversation, "/chat", [message])
 
     assert content == [
         {
@@ -2616,7 +2639,7 @@ async def test_each_turn_opens_with_the_local_time(monkeypatch):
     ]
 
 
-async def test_the_chat_prompt_names_only_the_apps_the_member_can_use(druks_db):
+async def test_the_chat_prompt_offers_only_the_apps_the_member_can_use(druks_db):
     await Account.get_or_create(druks_db, "admin@example.com")
     member = await Account.get_or_create(druks_db, "member@example.com")
     await Team.create(druks_db, name="Notes", member_ids=[], apps=["field_notes"])
@@ -2625,8 +2648,24 @@ async def test_the_chat_prompt_names_only_the_apps_the_member_can_use(druks_db):
 
     _, prompt, _ = await service.get_agent(druks_db, conversation)
 
-    assert FieldNotes.description not in prompt
+    assert "- " + FieldNotes.description not in prompt
     assert SoftwareFactory.description in prompt
+
+
+async def test_the_chat_prompt_tells_the_agent_to_refuse_an_app_the_member_cannot_use(druks_db):
+    await Account.get_or_create(druks_db, "admin@example.com")
+    outsider = await Account.get_or_create(druks_db, "outsider@example.com")
+    member = await Account.get_or_create(druks_db, "member@example.com")
+    await Team.create(druks_db, name="Notes", member_ids=[member.id], apps=["field_notes"])
+    refusal = f"- field_notes: {FieldNotes.description}\nWhen they ask"
+    prompts = {}
+    for account in (outsider, member):
+        conversation = await Conversation.create(druks_db, account_id=account.id, body="Hi")
+        await druks_db.refresh(conversation, ["account"])
+        _, prompts[account.username], _ = await service.get_agent(druks_db, conversation)
+
+    assert refusal in prompts[outsider.username]
+    assert refusal not in prompts[member.username]
 
 
 async def test_each_agent_turn_answers_by_the_agents_instructions_at_that_turn(

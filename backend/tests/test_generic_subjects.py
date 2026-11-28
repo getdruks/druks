@@ -379,7 +379,7 @@ async def test_a_board_on_a_shared_subject_type_shows_only_its_own_apps_runs(dru
     ]
 
 
-async def test_a_subject_class_reads_only_its_own_apps_runs(druks_db, monkeypatch):
+async def test_a_subject_class_reads_only_its_own_apps_runs(druks_db):
     # What an app's own page code reads. Software Factory's review failed on "o/r#1",
     # and another app's newer run works on it and on "o/r#3".
     review = await _seed_run(
@@ -392,17 +392,11 @@ async def test_a_subject_class_reads_only_its_own_apps_runs(druks_db, monkeypatc
     await _seed_run(druks_db, subject_type="pull_request", subject_id="o/r#1", state="running")
     await _seed_run(druks_db, subject_type="pull_request", subject_id="o/r#3", state="running")
 
-    async def get_run_phase(run_id):
-        return "agent_running"
-
-    monkeypatch.setattr("druks.durable.reads.get_run_phase", get_run_phase)
-
     statuses = await PullRequest.get_statuses(["o/r#1", "o/r#3"])
 
     assert (await PullRequest(id="o/r#1").get_status()).run == review.id
     assert (statuses["o/r#1"].run, statuses["o/r#3"].run) == (review.id, None)
     assert [pull_request.id for pull_request in await PullRequest.list_open()] == ["o/r#1"]
-    assert await PullRequest(id="o/r#1").get_phase() is None
 
 
 async def test_the_board_and_its_stream_hand_the_caller_to_list_summaries(druks_db):

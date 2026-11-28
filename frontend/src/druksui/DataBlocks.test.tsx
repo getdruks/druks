@@ -57,6 +57,8 @@ function status(facts: Partial<SubjectStatus>): SubjectStatus {
     reason: null,
     triggeredAt: null,
     accountUsername: null,
+    phase: null,
+    phaseEndsAt: null,
     ...facts,
   }
 }
@@ -312,6 +314,19 @@ describe('values', () => {
     expect(screen.getByText('The crawl timed out.')).toBeTruthy()
     expect(screen.getByText('auditing')).toBeTruthy()
     expect(screen.getByText('idle')).toBeTruthy()
+  })
+
+  it('writes the phase of a run that waits, not the app word', () => {
+    renderBlocks([
+      {
+        block: 'list',
+        title: '',
+        items: [subjectStatus({ state: 'running', run: 'run-1', phase: 'queued_for_vm' })],
+      },
+    ])
+
+    expect(screen.getByText('Waiting for a sandbox slot…')).toBeTruthy()
+    expect(screen.queryByText('auditing')).toBeNull()
   })
 
   it('shows the app word for a time that has no moment', () => {

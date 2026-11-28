@@ -102,14 +102,6 @@ class TicketAlreadyMerged(AgentApiError):
         super().__init__(f"The pull request for {ticket} already merged, so no build starts.")
 
 
-class RepoNotFound(AgentApiError):
-    status_code = 404
-    code = "REPO_NOT_FOUND"
-
-    def __init__(self, repo_id: int) -> None:
-        super().__init__(f"No project repo {repo_id}. Read the projects for the repos they hold.")
-
-
 class AssigneeNotFound(AgentApiError):
     status_code = 404
     code = "ASSIGNEE_NOT_FOUND"

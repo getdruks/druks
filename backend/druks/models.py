@@ -278,14 +278,6 @@ class StoredSubject(Model):
             workflows=cls._list_app_workflows(),
         )
 
-    async def get_phase(self) -> str | None:
-        from druks.db import db_session
-        from druks.durable.reads import get_subject_phase
-
-        return await get_subject_phase(
-            db_session(), self.subject_type, str(self.id), workflows=self._list_app_workflows()
-        )
-
     @classmethod
     async def list_open(
         cls, *, limit: int = 50, workflows: "Sequence[type[Workflow]] | None" = None

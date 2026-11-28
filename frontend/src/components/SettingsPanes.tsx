@@ -336,7 +336,9 @@ export function PreferencesPane({
     <div className="set-pane">
       <div className="set-pane-head">
         <div className="set-pane-sub">
-          Your timezone controls timestamp display. Schedules use the installation timezone.
+          Your timezone controls timestamp display and local time in your chats: your reminders
+          and the schedules you ask an agent for. Workflow schedules use the installation
+          timezone.
         </div>
       </div>
       <div className="set-group" data-setting={SETTINGS_FIELDS.timezone.field}>
@@ -1068,6 +1070,7 @@ const revokeReasonCopy: Record<string, string> = {
   client_replaced: 'client credentials replaced',
   service_disconnected: 'service disconnected',
   server_removed: 'server removed',
+  invalid_grant: 'the provider ended this sign-in',
 }
 
 function revokedCopy(connection: Connection): string {
@@ -1832,7 +1835,8 @@ export function ProviderConnect({
                   <time dateTime={subscription.revokedAt}>
                     {absTime(subscription.revokedAt)}
                   </time>
-                  {' · '}Reason: <code>{subscription.revokedReason}</code>
+                  {' · '}Reason:{' '}
+                  {revokeReasonCopy[subscription.revokedReason] ?? <code>{subscription.revokedReason}</code>}
                 </p>
               )}
               {connected && loginExpiresAt && (

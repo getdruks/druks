@@ -58,9 +58,9 @@ async def create_schedule(
     example, schedule a tool that starts a run. When none of your tools does the task,
     schedule chat_run_instruction with the task in words. Each call goes through the same
     checks as when you call the tool. Its runs report to this chat, or to the conversation
-    that you give. Local time is the installation timezone. The answer's nextRunAt is
-    local. Tell the person that time as it is. When Druks refuses the time, ask the person
-    rather than guess."""
+    that you give. Local time is the timezone that each turn opens with. The answer's
+    nextRunAt is local. Tell the person that time as it is. When Druks refuses the time,
+    ask the person rather than guess."""
     conversation_id = conversation_id or current_conversation_id.get()
     if not conversation_id:
         raise HTTPException(422, "This call comes from no chat. Give conversation_id.")
@@ -69,7 +69,7 @@ async def create_schedule(
         raise HTTPException(404, "Conversation not found. Choose one from chat_list_conversations.")
     schedule = await Schedule.create(
         session,
-        account_id=account.id,
+        account=account,
         conversation_id=conversation.id,
         tool=tool,
         arguments=arguments,

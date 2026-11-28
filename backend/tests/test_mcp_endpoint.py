@@ -917,7 +917,7 @@ async def test_a_schedule_calls_its_tool_as_its_owner_from_its_chat(
     conversation = await Conversation.create(druks_db, account_id=account.id, body="Nudge me")
     schedule = await Schedule.create(
         druks_db,
-        account_id=account.id,
+        account=account,
         conversation_id=conversation.id,
         tool="chat_create_reminder",
         arguments={"body": "Stand up", "delay_seconds": 60},
@@ -942,7 +942,7 @@ async def test_a_schedule_whose_tool_refuses_the_call_says_why(app, account, dru
     conversation = await Conversation.create(druks_db, account_id=account.id, body="Stop it")
     schedule = await Schedule.create(
         druks_db,
-        account_id=account.id,
+        account=account,
         conversation_id=conversation.id,
         tool="cancel_run",
         arguments={"run": "no-such-run", "reason": "Not needed"},
@@ -974,7 +974,7 @@ async def test_a_schedule_whose_agent_no_longer_answers_its_owner_says_why(accou
     )
     schedule = await Schedule.create(
         druks_db,
-        account_id=account.id,
+        account=account,
         conversation_id=conversation.id,
         tool="chat_create_reminder",
         arguments={"body": "Stand up", "delay_seconds": 60},
@@ -1004,7 +1004,7 @@ async def test_a_schedule_whose_call_cannot_reach_druks_says_why(account, druks_
     conversation = await Conversation.create(druks_db, account_id=account.id, body="Nudge me")
     schedule = await Schedule.create(
         druks_db,
-        account_id=account.id,
+        account=account,
         conversation_id=conversation.id,
         tool="chat_list_reminders",
         arguments={},

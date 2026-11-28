@@ -187,6 +187,20 @@ describe('AgentsPage', () => {
     )
   })
 
+  it('shows a refused save beside the Save button, and Cancel clears it', async () => {
+    vi.spyOn(api, 'agents').mockResolvedValue([reviewer])
+    vi.spyOn(api, 'updateAgent').mockRejectedValue(new Error('A private agent cannot have a channel.'))
+
+    renderPage(admin)
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save agent' }))
+
+    const form = screen.getByRole('region', { name: 'Edit agent' })
+    expect((await within(form).findByRole('alert')).textContent).toBe('A private agent cannot have a channel.')
+    fireEvent.click(within(form).getByRole('button', { name: 'Cancel' }))
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
   it('lets the owner upload a picture for their agent', async () => {
     vi.spyOn(api, 'agents').mockResolvedValue([{ ...reviewer, ownerId: 'member' }])
     const upload = vi.spyOn(api, 'upload').mockResolvedValue({

@@ -25,7 +25,7 @@ UNASSIGNED_FILTER = "none"
 
 def _repo_options(repos: list[ProjectRepo]) -> list[ui.Option]:
     return [
-        ui.Option(repo.full_name, value=str(repo.id), group=repo.project.name) for repo in repos
+        ui.Option(repo.full_name, value=repo.full_name, group=repo.project.name) for repo in repos
     ]
 
 
@@ -124,7 +124,7 @@ async def board(
                 fields=[
                     ui.TextField(name="title", label="Title", is_required=True),
                     ui.SelectField(
-                        name="repo_id",
+                        name="repo",
                         label="Repo",
                         options=_repo_options(repos),
                         is_required=True,
@@ -189,7 +189,15 @@ async def board(
                 [ui.Option(item.name, value=str(item.id)) for item in projects],
                 str(project or ""),
             ),
-            _filter_select("repo", "Repo", _repo_options(repo_choices), str(repo or "")),
+            _filter_select(
+                "repo",
+                "Repo",
+                [
+                    ui.Option(item.full_name, value=str(item.id), group=item.project.name)
+                    for item in repo_choices
+                ],
+                str(repo or ""),
+            ),
         ],
         blocks=[
             ui.Columns(
@@ -351,10 +359,10 @@ async def ticket(identifier: str):
                             _live_form(
                                 found,
                                 ui.SelectField(
-                                    name="repo_id",
+                                    name="repo",
                                     label="Repo",
                                     options=_repo_options(repos),
-                                    value=str(found.repo_id),
+                                    value=found.project_repo.full_name,
                                 ),
                                 operation="update_ticket",
                             ),

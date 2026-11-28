@@ -14,7 +14,6 @@ from druks.durable.engine import step_session
 from druks.mcp.constants import BEARER_PREFIX
 from druks.mcp.exceptions import MissingEndpointError
 from druks.mcp.inbound import get_druks_account_token, get_druks_mcp_server
-from druks.settings import get_settings
 
 from .constants import RUN_SCHEDULE_WORKFLOW, SCHEDULE_KEY_NAME
 from .exceptions import ScheduleSkipped
@@ -22,8 +21,8 @@ from .models import Schedule
 
 
 async def apply_schedule(schedule: Schedule) -> None:
-    """Make or replace the DBOS schedule that fires the schedule's due times. A time that
-    passes while Druks is down does not fire later."""
+    """Make or replace the DBOS schedule that fires the schedule's due times, in the
+    timezone of its account. A time that passes while Druks is down does not fire later."""
     await DBOS.apply_schedules_async(
         [
             {
@@ -31,7 +30,7 @@ async def apply_schedule(schedule: Schedule) -> None:
                 "workflow_fn": run_schedule,
                 "schedule": schedule.cron,
                 "context": {"schedule_id": schedule.id},
-                "cron_timezone": get_settings().timezone,
+                "cron_timezone": schedule.account.local_timezone,
             }
         ]
     )

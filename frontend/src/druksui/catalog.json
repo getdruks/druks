@@ -218,7 +218,9 @@
               "failure": "The scout could not reach the repository.",
               "reason": null,
               "triggeredAt": null,
-              "accountUsername": null
+              "accountUsername": null,
+              "phase": null,
+              "phaseEndsAt": null
             }
           }
         },
@@ -422,7 +424,9 @@
             "failure": null,
             "reason": null,
             "triggeredAt": null,
-            "accountUsername": null
+            "accountUsername": null,
+            "phase": null,
+            "phaseEndsAt": null
           }
         }
       ],

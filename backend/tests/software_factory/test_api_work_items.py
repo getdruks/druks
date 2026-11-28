@@ -1,12 +1,15 @@
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from druks.contrib.software_factory.enums import Resolution
 from druks.contrib.software_factory.models import WorkItem
+from druks.durable.dbos_state import workflow_events
 from druks.durable.reads import list_subject_timeline
 from druks.testing import asgi_client, configure_app_for_test, make_settings, seed_call
 from fastapi.testclient import TestClient
+from sqlalchemy import insert
 
 from software_factory.factories import make_test_work_item, seed_build_run
 
@@ -243,44 +246,53 @@ async def test_timeline_shows_every_build_attempt(druks_db):
     assert any(e.failure == "boom" for e in entries)
 
 
-async def test_detail_carries_the_running_phase(client: TestClient, druks_db, monkeypatch):
+async def _seed_phase(session, run, **events) -> None:
+    # The DBOS events that set_run_phase writes, in portable JSON.
+    await session.execute(
+        insert(workflow_events),
+        [
+            {
+                "workflow_uuid": run.id,
+                "key": key,
+                "value": json.dumps(value),
+                "serialization": "portable_json",
+            }
+            for key, value in events.items()
+        ],
+    )
+
+
+async def test_detail_carries_the_running_phase(client: TestClient, druks_db):
     item = await make_test_work_item(repo="ClawHaven/acme-app", title="x")
-    await seed_build_run(druks_db, work_item_id=item.id, state="running")
+    run = await seed_build_run(druks_db, work_item_id=item.id, state="running")
+    await _seed_phase(
+        druks_db, run, phase="waiting_for_quota", phase_ends_at="2099-08-01T14:19:00.000Z"
+    )
 
-    async def phase(_run_id):
-        return "waiting_for_quota"
-
-    async def phase_ends_at(_run_id):
-        return datetime(2099, 8, 1, 14, 19, tzinfo=UTC)
-
-    monkeypatch.setattr("druks.durable.reads.get_run_phase", phase)
-    monkeypatch.setattr("druks.durable.reads.get_run_phase_ends_at", phase_ends_at)
     detail = (await client.get(f"/api/software_factory/work_item/{item.id}")).json()
-    assert detail["phase"] == "waiting_for_quota"
-    assert detail["phaseEndsAt"] == "2099-08-01T14:19:00Z"
+    assert detail["status"]["phase"] == "waiting_for_quota"
+    assert detail["status"]["phaseEndsAt"] == "2099-08-01T14:19:00Z"
 
 
-async def test_detail_omits_a_phase_end_that_has_passed(client: TestClient, druks_db, monkeypatch):
+async def test_detail_omits_a_phase_end_that_has_passed(client: TestClient, druks_db):
     item = await make_test_work_item(repo="ClawHaven/acme-app", title="x")
-    await seed_build_run(druks_db, work_item_id=item.id, state="running")
+    run = await seed_build_run(druks_db, work_item_id=item.id, state="running")
+    await _seed_phase(
+        druks_db, run, phase="waiting_for_quota", phase_ends_at="2000-01-01T00:00:00.000Z"
+    )
 
-    async def phase(_run_id):
-        return "waiting_for_quota"
-
-    async def phase_ends_at(_run_id):
-        return datetime(2000, 1, 1, tzinfo=UTC)
-
-    monkeypatch.setattr("druks.durable.reads.get_run_phase", phase)
-    monkeypatch.setattr("druks.durable.reads.get_run_phase_ends_at", phase_ends_at)
     detail = (await client.get(f"/api/software_factory/work_item/{item.id}")).json()
 
-    assert not detail["phaseEndsAt"]
+    assert not detail["status"]["phaseEndsAt"]
 
 
 async def test_detail_has_no_phase_when_not_running(client: TestClient, druks_db):
     item = await make_test_work_item(repo="ClawHaven/acme-app", title="x")
-    await seed_build_run(druks_db, work_item_id=item.id, state="parked", input_gate="review_plan")
+    run = await seed_build_run(
+        druks_db, work_item_id=item.id, state="parked", input_gate="review_plan"
+    )
+    await _seed_phase(druks_db, run, phase="agent_running")
 
     detail = (await client.get(f"/api/software_factory/work_item/{item.id}")).json()
-    assert not detail["phase"]
-    assert not detail["phaseEndsAt"]
+    assert not detail["status"]["phase"]
+    assert not detail["status"]["phaseEndsAt"]

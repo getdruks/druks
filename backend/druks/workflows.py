@@ -105,6 +105,7 @@ from druks.files.exceptions import FileUnavailableError
 from druks.files.models import FileRecord
 from druks.harnesses.artifacts import normalize_token_usage
 from druks.harnesses.config import AgentConfig, get_config
+from druks.harnesses.constants import RETRY_PROMPT
 from druks.harnesses.exceptions import (
     HarnessError,
     HarnessInvalidOutputError,
@@ -2053,7 +2054,7 @@ class Instruction:
                 f"instruction {self.id!r} runs only inside a workflow. Call it from a workflow."
             )
 
-        async def _invoke():
+        async def _invoke(last_failure: str):
             with trace.get_tracer(__name__).start_as_current_span(
                 f"agent_call {self.id}",
                 # A call inside a @step names its run as well.
@@ -2063,16 +2064,19 @@ class Instruction:
                     workflow_id=workflow.workflow_id,
                     contract=contract,
                     agent_id=agent_id,
+                    last_failure=last_failure,
                     **context,
                 )
 
+        last_failure = ""
         if _in_step.get():
             transient_retry_index = 0
             while True:
                 try:
                     # The @step around the call memoizes it.
-                    return await _invoke()
+                    return await _invoke(last_failure)
                 except HarnessError as error:
+                    last_failure = str(error)
                     # Only a transient error retries here, on the error's own schedule. A
                     # quota wait can last hours. A wait that long must not be inside a held
                     # step. A quota error thus fails here. It does not sleep.
@@ -2091,9 +2095,10 @@ class Instruction:
         while True:
             try:
                 result = await DBOS.run_step_async(
-                    StepOptions(name=f"{workflow.kind}.agent.{self.id}"), _invoke
+                    StepOptions(name=f"{workflow.kind}.agent.{self.id}"), _invoke, last_failure
                 )
             except HarnessError as error:
+                last_failure = str(error)
                 if error.retry is Retry.TRANSIENT:
                     # One retry for each delay on the error's own schedule. After the last
                     # delay, the failure is final.
@@ -2210,6 +2215,7 @@ class Instruction:
         workflow_id: str,
         contract: type[InstructionOutput] | None = None,
         agent_id: str | None = None,
+        last_failure: str = "",
         **context,
     ):
         """The raw execution: read what the call needs, provision or attach a host,
@@ -2243,6 +2249,20 @@ class Instruction:
             running_call = await AgentCall.lookup_running(
                 session, run_id=workflow_id, agent=self.id
             )
+            # A later call of the instruction in a run is the next round of the same task,
+            # so it continues the session of the last call that finished. A browser call
+            # and a call from an after-agent hook run on a box of their own, and start a
+            # session there.
+            continued_session = None
+            session_filename = config.harness_class.session_filename
+            if session_filename and not self.browser and not _in_after_agent.get():
+                sessions = [
+                    artifact_dir / call.id / session_filename
+                    for call in await AgentCall.list_for_run(session, workflow_id)
+                    if call.agent == self.id and call.status == AgentCallStatus.SUCCEEDED
+                ]
+                if sessions and sessions[-1].is_file():
+                    continued_session = sessions[-1]
         model = config.model
         span.set_attributes({"druks.harness": config.harness, "druks.model": model})
         subscription_id = config.subscription.id if config.subscription else None
@@ -2312,7 +2332,10 @@ class Instruction:
                 # The override lookup reads the repository's credential from a row.
                 template = await get_template(self.prompt, repo=prompt_context.get("repo"))
                 harness = config.harness_class(
-                    model=config.model, fast_mode=config.fast_mode, effort=config.effort
+                    model=config.model,
+                    fast_mode=config.fast_mode,
+                    effort=config.effort,
+                    continued_session=continued_session,
                 )
                 agent_instructions = ""
                 if agent_id:
@@ -2379,6 +2402,8 @@ class Instruction:
                         prompt=prompt,
                         workspace=runner,
                     )
+                if last_failure:
+                    prompt = f"{prompt}\n\n{RETRY_PROMPT.format(failure=last_failure)}"
                 if resume_from:
                     await set_run_phase("agent_running")
                     attempt = runner.host.resume_agent(

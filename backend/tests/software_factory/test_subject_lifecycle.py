@@ -118,27 +118,3 @@ async def test_cancel_and_answer_hold_the_caller_to_the_declared_subject(druks_d
         await Build.cancel(repo)
     with pytest.raises(WorkflowError, match="is about WorkItem, not ProjectRepo"):
         await ReviewWork.answer(repo, workflow=Build, action="approve")
-
-
-async def test_subject_phase_reads_the_driving_running_workflow(druks_db, monkeypatch):
-    subject = await _work_item(ticket_key="ENG-748-E")
-    await _subject_run(
-        druks_db,
-        subject=subject,
-        kind=Build.kind,
-        state="parked",
-        gate=OperatorReply.name,
-    )
-    driving = await _subject_run(
-        druks_db, subject=subject, kind=Profile.kind, state="running", order=1
-    )
-    seen = []
-
-    async def phase(workflow_id):
-        seen.append(workflow_id)
-        return "agent_running"
-
-    monkeypatch.setattr("druks.durable.reads.get_run_phase", phase)
-
-    assert await subject.get_phase() == "agent_running"
-    assert seen == [driving.id]
