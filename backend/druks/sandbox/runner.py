@@ -162,21 +162,28 @@ class Exec:
     # Completion
 
     async def wait(self, *, hooks: dict[str, Hook] | None = None) -> int:
-        """Wait for the run's exit code, answering each of ``hooks`` once."""
-        unanswered = dict(hooks or {})
+        """Wait for the run's exit code, answering each request that the run makes of one
+        of ``hooks``. The run writes ``<hook>.request``, or ``<hook>.<id>.request`` for a
+        hook that it asks more than once, and reads the answer beside it."""
+        hooks = hooks or {}
         reconnect_start: float | None = None
         attempt = 0
         while True:
             try:
                 connection = await self.host.ssh_connection()
                 async with connection.start_sftp_client() as sftp:
-                    asked = [
-                        name
-                        for name in unanswered
-                        if await sftp.exists(f"{self.run_dir}/{name}.request")
-                    ]
+                    filenames = set(await sftp.listdir(self.run_dir)) if hooks else set()
+                    # Each request, with the name of the hook that it asks.
+                    requests = {
+                        filename.removesuffix(".request"): name
+                        for filename in sorted(filenames)
+                        if filename.endswith(".request")
+                        and (name := filename.partition(".")[0]) in hooks
+                    }
                     if await self._is_done(sftp):
-                        self.unasked_hooks = tuple(name for name in unanswered if name not in asked)
+                        self.unasked_hooks = tuple(
+                            name for name in hooks if name not in requests.values()
+                        )
                         return await self._read_exit_code(sftp)
                 reconnect_start = None
                 attempt = 0
@@ -192,26 +199,32 @@ class Exec:
                 attempt += 1
                 await asyncio.sleep(_backoff(attempt))
                 continue
-            for name in asked:
-                await self._answer_hook(name, unanswered.pop(name))
+            for request, name in requests.items():
+                if f"{request}.answer" not in filenames:
+                    await self._answer_hook(request, hooks[name])
             await asyncio.sleep(POLL_INTERVAL_SECONDS)
 
-    async def _answer_hook(self, name: str, hook: Hook) -> None:
+    async def _answer_hook(self, request: str, hook: Hook) -> None:
+        path = f"{self.run_dir}/{request}"
+        connection = await self.host.ssh_connection()
+        async with (
+            connection.start_sftp_client() as sftp,
+            sftp.open(f"{path}.request", "rb") as file,
+        ):
+            text = (await file.read()).decode()
         try:
-            text = await hook()
+            answer = await hook(text)
         except Exception:
             # Otherwise the agent waits on the answer until its timeout.
             with contextlib.suppress(Exception):
                 await self.kill()
             raise
-        answer = f"{self.run_dir}/{name}.answer"
-        partial = f"{answer}.partial"
         connection = await self.host.ssh_connection()
         async with connection.start_sftp_client() as sftp:
-            async with sftp.open(partial, "w") as file:
-                await file.write(text)
-            # The answer must appear whole: the hook reads it as soon as it exists.
-            await sftp.rename(partial, answer)
+            async with sftp.open(f"{path}.answer.partial", "w") as file:
+                await file.write(answer)
+            # The answer must appear whole: the run reads it as soon as it exists.
+            await sftp.rename(f"{path}.answer.partial", f"{path}.answer")
 
     async def _read_exit_code(self, sftp: asyncssh.SFTPClient) -> int:
         async with sftp.open(self.exit_code_path, "rb") as file:

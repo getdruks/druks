@@ -119,6 +119,22 @@ async def test_claude_refuses_the_first_result_of_a_hooked_call():
     assert _written(inv.args[2])[_HOOK] == _HOOK_BODY
 
 
+async def test_claude_waits_on_a_command_for_as_long_as_a_call_with_an_exec_hook_lasts():
+    inv = await ClaudeHarness(
+        model="anthropic/claude-x", fast_mode=False, effort=None
+    ).build_invocation(
+        _MANIFEST,
+        prompt="hello",
+        schema={"type": "object"},
+        run_id="run-1",
+        ssh_username="exedev",
+        timeout=900,
+        hooks=("exec",),
+    )
+
+    assert inv.env == {"BASH_DEFAULT_TIMEOUT_MS": "900000", "BASH_MAX_TIMEOUT_MS": "900000"}
+
+
 async def test_codex_build_invocation_carries_every_flag():
     """The Codex invocation carries the complete supported flag set."""
     server = McpServer(name="github", url="https://api.example/mcp/", bearer_token_env_var="TOK")

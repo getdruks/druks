@@ -9,6 +9,7 @@ import pytest
 from conftest import connect_service
 from druks.accounts.context import current_account_id
 from druks.accounts.models import Account
+from druks.contrib.software_factory import hooks
 from druks.contrib.software_factory.app import SoftwareFactory
 from druks.contrib.software_factory.constants import (
     GITHUB_MCP_NAME,
@@ -268,3 +269,27 @@ async def test_set_git_identity_stamps_the_workspace_repo(
     await workspace.set_git_identity()
     assert not hook.exists()
     current_account_id.reset(dispatch)
+
+
+async def test_the_implementer_runs_a_command_on_a_copy_from_the_environment_of_its_repo(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    profile: dict[str, str] = {"environment_template": "template-1"}
+
+    async def get_for_repo(repo: str, *, raise_on_missing: bool = False) -> SimpleNamespace:
+        return SimpleNamespace(effective_profile=profile)
+
+    monkeypatch.setattr(ProjectRepo, "get_for_repo", get_for_repo)
+    ran = subprocess.CompletedProcess("make test", 0, "ok\n")
+    workspace = SimpleNamespace(
+        subject=SimpleNamespace(repo="o/app"), run_on_copy=AsyncMock(return_value=ran)
+    )
+
+    assert await hooks.run_in_environment(command="make test", workspace=workspace) is ran
+    workspace.run_on_copy.assert_awaited_once_with("make test", template="template-1")
+
+    # A repository that declares no environment sends the agent back to its own box.
+    profile.clear()
+    refused = await hooks.run_in_environment(command="make test", workspace=workspace)
+    assert refused.returncode == 69
+    workspace.run_on_copy.assert_awaited_once()

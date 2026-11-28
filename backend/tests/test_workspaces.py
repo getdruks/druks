@@ -1,5 +1,7 @@
 import asyncio
+import shutil
 import subprocess
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,6 +18,7 @@ from druks.db import db_session
 from druks.exceptions import SessionNotBoundError
 from druks.harnesses.claude import ClaudeHarness
 from druks.sandbox import SandboxSecret
+from druks.sandbox.constants import WORKFLOW_HOST_LEASE_SECONDS
 from druks.sandbox.exceptions import ExecFailed
 from druks.sandbox.layout import get_repo_root
 from druks.secrets.models import VaultSecret
@@ -311,3 +314,101 @@ async def test_a_checkout_refused_again_raises_the_first_failure(
     assert len(asked) == 2
     assert "second failure" in str(raised.value.__cause__)
     assert "second failure" in caplog.text
+
+
+class _LocalBox:
+    """A box that is a folder of this machine: commands run here, and a transfer is a
+    copy. It stands in for SSH, so the copy of a checkout is made with real git."""
+
+    def __init__(self, user: str) -> None:
+        self.ssh_username = self.id = user
+
+    async def exec(self, cmd, *, cwd="", timeout=30.0):
+        return await asyncio.to_thread(
+            subprocess.run, cmd, cwd=cwd or None, capture_output=True, text=True
+        )
+
+    async def upload_file(self, *, local, remote):
+        shutil.copy(local, remote)
+
+    async def download(self, *, remote, local):
+        shutil.copy(remote, local)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *error):
+        return
+
+
+async def test_a_command_runs_on_a_copy_of_the_checkout_and_its_changes_come_back(
+    tmp_path, monkeypatch
+):
+    provisioned = []
+
+    async def provision(**kwargs):
+        provisioned.append(kwargs)
+        return _LocalBox("copy")
+
+    @asynccontextmanager
+    async def lease(*, host_id):
+        yield
+
+    monkeypatch.setattr(
+        workspace_mod, "sandbox_client", SimpleNamespace(provision=provision, lease=lease)
+    )
+    monkeypatch.setattr(workspace_mod, "get_work_root", lambda user: f"{tmp_path}/{user}")
+    monkeypatch.setattr(workspace_mod, "get_repo_root", lambda user: f"{tmp_path}/{user}/repo")
+    repo, copy = tmp_path / "agent" / "repo", tmp_path / "copy" / "repo"
+    # A clone with one uncommitted change, one new file, one staged file and one file that
+    # git ignores.
+    script = f"""
+        set -e
+        git init -q origin && cd origin
+        echo node_modules/ > .gitignore && echo one > a.txt && echo keep > b.txt
+        git add . && git -c user.name=t -c user.email=t@t.test commit -qm first
+        git clone -q . {repo} && cd {repo}
+        echo two >> a.txt && echo new > untracked.txt
+        echo staged > staged.txt && git add staged.txt
+        mkdir node_modules && echo here > node_modules/mine
+    """
+    subprocess.run(["sh", "-c", script], cwd=tmp_path, check=True)
+    workspace = RepoWorkspace(subject=SimpleNamespace(repo="acme/widget", ref="main"))
+    workspace.host = _LocalBox("agent")
+    staged = subprocess.check_output(["git", "diff", "--cached", "--stat"], cwd=repo)
+
+    first = await workspace.run_on_copy(
+        "cat a.txt untracked.txt staged.txt; ls node_modules; echo made > generated.txt;"
+        " echo three >> a.txt; mkdir -p node_modules; echo dep > node_modules/installed; exit 3",
+        template="template-1",
+    )
+
+    # The command saw what is not committed, and not what git ignores.
+    assert first.returncode == 3
+    assert first.stdout.split()[:4] == ["one", "two", "new", "staged"]
+    assert "No such file" in first.stdout
+    # What it changed is in the checkout, and the agent's index is as it was.
+    assert (repo / "generated.txt").read_text() == "made\n"
+    assert (repo / "a.txt").read_text() == "one\ntwo\nthree\n"
+    assert subprocess.check_output(["git", "diff", "--cached", "--stat"], cwd=repo) == staged
+    assert not (repo / "node_modules" / "installed").exists()
+
+    (repo / "generated.txt").unlink()
+    (repo / "b.txt").unlink()
+    second = await workspace.run_on_copy("ls; cat node_modules/installed", template="template-1")
+
+    # The copy follows a deletion, and keeps what git ignores from command to command.
+    assert second.stdout.split() == ["a.txt", "node_modules", "staged.txt", "untracked.txt", "dep"]
+    assert (copy / "node_modules" / "installed").exists()
+    # Both commands ran on the one sandbox that the agent's box keeps for the template.
+    assert (
+        provisioned
+        == [
+            {
+                "idempotency_key": "agent:template-1",
+                "template": "template-1",
+                "lease_seconds": WORKFLOW_HOST_LEASE_SECONDS,
+            }
+        ]
+        * 2
+    )

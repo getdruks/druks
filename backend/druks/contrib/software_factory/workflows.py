@@ -295,6 +295,7 @@ class Build(Workflow):
                 db_session(), self._profile.get("recommended_skills", [])
             ),
             blockers=self._blockers,
+            has_environment=bool(self._policy.environment),
             journal=self.journal,
         )
         return {

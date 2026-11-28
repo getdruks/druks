@@ -55,6 +55,10 @@ CI on `{{ build.journal.red_ci_report.head_sha }}` is red. Read it with `gh pr c
 
 Verification is yours: before every push, run the lint and typecheck commands in the **Verification profile** above, and its test commands narrowed to the files you changed. Report each result in `checks`. Fix a failure your diff causes. A failure you cannot attribute to your own diff is environment noise to report, not a gate to chase. Do not run ad hoc install, build, or smoke commands beyond that unless the plan explicitly requires changing those commands or generated outputs. Never leave dependency lockfile, generated, or cache changes unless they are part of the requested implementation. Return structured evidence for every acceptance criterion, every check you ran or intentionally did not run, changed files, and known risks. If a check was not run, include status not_run and a reason.
 
+{% if build.has_environment %}
+The repository's tools and services are not on this box. Run each command that needs them, the verification commands included, as `~/druks-sandbox exec '<command>'`. The command runs at the root of a copy of your checkout, on a computer that has the repository's environment. It sees your uncommitted changes, and the files that it changes come back into your checkout. You get its output and its exit code.
+
+{% endif %}
 ## Delivering your work
 
 When the implementation is complete you MUST commit and push it to the PR branch — the pushed commit is the deliverable. The one exception is when the **CI is red** section above tells you to push nothing. The repo is checked out on the PR branch `{{ build.branch }}` already. Stay on it: Druks finds the PR by this name. Run, from the repo root:

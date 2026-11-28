@@ -1,6 +1,8 @@
 import functools
 import logging
 import subprocess
+import tempfile
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 from urllib.parse import urlsplit
 
@@ -19,7 +21,8 @@ from druks.mcp.helpers import get_bearer_token_env_var
 from druks.mcp.inbound import get_druks_account_token
 from druks.registry import service_registry
 from druks.sandbox import repo as checkout
-from druks.sandbox.client import sandbox_client
+from druks.sandbox.client import provisioning_key, sandbox_client
+from druks.sandbox.constants import MAX_AGENT_TIMEOUT_SECONDS, WORKFLOW_HOST_LEASE_SECONDS
 from druks.sandbox.datastructures import (
     AgentResult,
     McpServer,
@@ -36,6 +39,57 @@ if TYPE_CHECKING:
     from druks.sandbox.host import Host
 
 logger = logging.getLogger(__name__)
+
+# Each script runs in the checkout at $0. A snapshot is a commit of the working copy: what is
+# committed, and every file that git does not ignore. A scratch index makes it, so the
+# agent's own index stays as it is. The bundle at $1 holds what the copy, which has the
+# snapshot $2, does not have yet.
+_BUNDLE_SNAPSHOT = """
+set -e
+cd "$0"
+index=$(mktemp)
+cp "$(git rev-parse --git-path index)" "$index"
+GIT_INDEX_FILE="$index" git add --all
+tree=$(GIT_INDEX_FILE="$index" git write-tree)
+rm -f "$index"
+held=""
+if [ -n "$2" ] && git cat-file -e "$2^{commit}" 2>/dev/null; then held=$2; fi
+snapshot=$(git -c user.name=druks -c user.email=druks@localhost \\
+    commit-tree "$tree" ${held:+-p "$held"} -m snapshot)
+git update-ref refs/druks/snapshot "$snapshot"
+git bundle create -q "$1" refs/druks/snapshot ${held:+"^$held"}
+"""
+# The snapshot that the copy holds, or nothing for a copy that holds none.
+_HELD_SNAPSHOT = 'git init -q "$0" && git -C "$0" rev-parse -q --verify refs/druks/synced || true'
+# The copy becomes the snapshot of the bundle at $1. Files that git ignores, such as
+# installed dependencies, stay.
+_CHECK_OUT_SNAPSHOT = """
+set -e
+cd "$0"
+git fetch -q "$1" refs/druks/snapshot
+git read-tree -u --reset FETCH_HEAD
+git update-ref refs/druks/synced FETCH_HEAD
+"""
+# What the command changed in the copy, as a patch at $1. Prints the size of the patch.
+_WRITE_CHANGES = """
+set -e
+cd "$0"
+git add --all
+git diff --cached --binary refs/druks/synced > "$1"
+wc -c < "$1"
+"""
+_APPLY_CHANGES = 'git -C "$0" apply --whitespace=nowarn "$1"'
+
+
+async def _run_script(host: "Host", script: str, *arguments: str) -> str:
+    """The output of a shell script on the host. A script that fails raises."""
+    result = await host.exec(["sh", "-c", script, *arguments], timeout=600.0)
+    if result.returncode:
+        raise ExecFailed(
+            f"exit={result.returncode} stderr={result.stderr.strip()}",
+            exit_code=result.returncode,
+        )
+    return result.stdout
 
 
 class Workspace:
@@ -308,6 +362,40 @@ class RepoWorkspace(Workspace):
     async def exec(self, command: list[str], *, timeout: float) -> subprocess.CompletedProcess[str]:
         await self.clone()
         return await self.host.exec(command, cwd=self.repo_path, timeout=timeout)
+
+    async def run_on_copy(self, command: str, *, template: str) -> subprocess.CompletedProcess[str]:
+        """Run ``command`` at the root of a copy of this checkout, and bring the files that
+        it changed back into this checkout. The copy is on a sandbox from ``template``
+        that this box keeps for its commands. That sandbox holds no secret. The copy holds
+        what git does not ignore here, and keeps what git ignores there from command to
+        command. The process has the output and the error output of the command as one."""
+        sandbox = await sandbox_client.provision(
+            idempotency_key=provisioning_key(self.host.id, template),
+            template=template,
+            lease_seconds=WORKFLOW_HOST_LEASE_SECONDS,
+        )
+        copy = get_repo_root(sandbox.ssh_username)
+        bundle = f"{get_work_root(self.host.ssh_username)}/snapshot.bundle"
+        copy_bundle = f"{get_work_root(sandbox.ssh_username)}/snapshot.bundle"
+        copy_patch = f"{get_work_root(sandbox.ssh_username)}/changes.patch"
+        patch = f"{get_work_root(self.host.ssh_username)}/changes.patch"
+        async with sandbox, sandbox_client.lease(host_id=sandbox.id):
+            with tempfile.TemporaryDirectory() as folder:
+                held = await _run_script(sandbox, _HELD_SNAPSHOT, copy)
+                await _run_script(self.host, _BUNDLE_SNAPSHOT, self.repo_path, bundle, held.strip())
+                await self.host.download(remote=bundle, local=Path(folder) / "bundle")
+                await sandbox.upload_file(local=Path(folder) / "bundle", remote=copy_bundle)
+                await _run_script(sandbox, _CHECK_OUT_SNAPSHOT, copy, copy_bundle)
+                completed = await sandbox.exec(
+                    ["sh", "-c", f"exec 2>&1; {command}"],
+                    cwd=copy,
+                    timeout=MAX_AGENT_TIMEOUT_SECONDS,
+                )
+                if int(await _run_script(sandbox, _WRITE_CHANGES, copy, copy_patch)):
+                    await sandbox.download(remote=copy_patch, local=Path(folder) / "patch")
+                    await self.host.upload_file(local=Path(folder) / "patch", remote=patch)
+                    await _run_script(self.host, _APPLY_CHANGES, self.repo_path, patch)
+        return completed
 
     async def get_diff(self, *, binary: bool = False) -> str:
         """The checkout's changes since it diverged from the default branch,

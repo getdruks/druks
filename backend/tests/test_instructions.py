@@ -1,4 +1,5 @@
 import json
+import subprocess
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -555,7 +556,7 @@ async def test_after_agent_hooks_answer_the_turn_from_a_box_of_their_own(
     answers = []
 
     async def run_hooked(_harness, _manifest, **kwargs):
-        answers.append(await kwargs["hooks"]["after_agent"]())
+        answers.append(await kwargs["hooks"]["after_agent"](""))
         return make_agent_result({"ok": True}, agent=hooked.id)
 
     warm.run_agent = AsyncMock(side_effect=run_hooked)
@@ -582,6 +583,38 @@ async def test_after_agent_hooks_answer_the_turn_from_a_box_of_their_own(
     assert seen == [("PROMPT:dummy/agent.md:repo=None", "warm-host")]
     lease.assert_awaited_once()
     nested_box.run_agent.assert_awaited_once()
+
+
+async def test_an_exec_hook_runs_the_command_that_the_agent_sends(
+    druks_db, tmp_path, monkeypatch, current_run
+):
+    hooked = declare(prompt="dummy/agent.md", contract=DummyOutput)
+
+    @hooked.exec
+    async def run_command(*, command, workspace):
+        return subprocess.CompletedProcess(command, 3, f"{command} for {workspace.host_id}\n")
+
+    warm = _patch_runtime(monkeypatch, tmp_path, {"ok": True})
+    warm.record.id = "warm-host"
+    answers = []
+
+    async def run_hooked(_harness, _manifest, **kwargs):
+        answers.append(await kwargs["hooks"]["exec"]("make test"))
+        return make_agent_result({"ok": True}, agent=hooked.id)
+
+    warm.run_agent = AsyncMock(side_effect=run_hooked)
+
+    @asynccontextmanager
+    async def attach(*, host_id):
+        yield warm
+
+    monkeypatch.setattr(sandbox_client, "attach", attach)
+    monkeypatch.setattr(current_run, "_lease_host", AsyncMock(return_value="warm-host"))
+
+    await hooked._run(workflow_id="wf-9")
+
+    # What the helper script on the box reads: the exit code, then the output.
+    assert answers == ["3\nmake test for warm-host\n"]
 
 
 async def test_ephemeral_acquisition_keys_idempotency_to_workflow_step(

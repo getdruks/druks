@@ -98,6 +98,11 @@ class _FakeSFTP:
     async def exists(self, path: str) -> bool:
         return self.vm.exists(path)
 
+    async def listdir(self, path: str) -> list[str]:
+        return [
+            name.removeprefix(f"{path}/") for name in self.vm.files if name.startswith(f"{path}/")
+        ]
+
     async def rename(self, old: str, new: str) -> None:
         self.vm.files[new] = self.vm.files.pop(old)
 
@@ -477,7 +482,7 @@ async def test_wait_answers_the_after_agent_request_once(fast_sleep: list[float]
     asked = 0
     polls = 0
 
-    async def after_agent() -> str:
+    async def after_agent(request: str) -> str:
         nonlocal asked
         asked += 1
         return "Run the tests."
@@ -495,13 +500,44 @@ async def test_wait_answers_the_after_agent_request_once(fast_sleep: list[float]
     assert vm.files["/work/runs/r-1/after_agent.answer"] == b"Run the tests."
 
 
+async def test_wait_answers_each_request_of_a_hook_that_the_run_asks_again(
+    fast_sleep: list[float],
+):
+    vm = _FakeVM()
+    vm.write("/work/runs/r-1/exec.7.request", b"make test")
+    sandbox = _FakeSandbox(vm=vm)
+    run = Exec(host=sandbox, run_id="r-1", run_dir="/work/runs/r-1")  # type: ignore[arg-type]
+    commands = []
+    polls = 0
+
+    async def run_command(command: str) -> str:
+        commands.append(command)
+        return f"0\nran {command}\n"
+
+    async def fake_sleep(seconds: float) -> None:
+        nonlocal polls
+        polls += 1
+        if polls == 2:
+            vm.write("/work/runs/r-1/exec.9.request", b"make lint")
+        if polls == 4:
+            vm.write("/work/runs/r-1/exit_code", b"0")
+
+    with patch("druks.sandbox.runner.asyncio.sleep", fake_sleep):
+        assert await run.wait(hooks={"exec": run_command}) == 0
+
+    assert commands == ["make test", "make lint"]
+    assert vm.files["/work/runs/r-1/exec.7.answer"] == b"0\nran make test\n"
+    assert vm.files["/work/runs/r-1/exec.9.answer"] == b"0\nran make lint\n"
+    assert not run.unasked_hooks
+
+
 async def test_wait_names_a_hook_the_run_never_asked(fast_sleep: list[float]):
     vm = _FakeVM()
     vm.write("/work/runs/r-1/exit_code", b"0")
     sandbox = _FakeSandbox(vm=vm)
     run = Exec(host=sandbox, run_id="r-1", run_dir="/work/runs/r-1")  # type: ignore[arg-type]
 
-    async def after_agent() -> str:
+    async def after_agent(request: str) -> str:
         raise AssertionError("no request to answer")
 
     assert await run.wait(hooks={"after_agent": after_agent}) == 0
@@ -515,7 +551,7 @@ async def test_wait_kills_the_run_when_the_hook_raises(fast_sleep: list[float]):
     sandbox = _FakeSandbox(vm=vm)
     run = Exec(host=sandbox, run_id="r-1", run_dir="/work/runs/r-1")  # type: ignore[arg-type]
 
-    async def after_agent() -> str:
+    async def after_agent(request: str) -> str:
         raise ValueError("the hook failed")
 
     with pytest.raises(ValueError, match="the hook failed"):

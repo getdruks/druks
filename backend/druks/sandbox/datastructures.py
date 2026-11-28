@@ -21,7 +21,8 @@ if TYPE_CHECKING:
 
     from .host import Host
 
-Hook = Callable[[], Awaitable[str]]
+# What answers a request of a run: it takes the text of the request.
+Hook = Callable[[str], Awaitable[str]]
 
 
 class Profile(BaseModel):
