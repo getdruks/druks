@@ -86,6 +86,7 @@ export function AgentPage({ id, account }: { id: string; account: Account }) {
           {agentQuery.isPending && <p role="status">Loading agent…</p>}
           <h1>{agentQuery.data?.name}</h1>
           <p>{agentQuery.data?.description}</p>
+          {agentQuery.data && <p>{agentQuery.data.harness} · {agentQuery.data.model}</p>}
         </div>
       </header>
       {error && (

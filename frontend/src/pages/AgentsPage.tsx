@@ -171,6 +171,12 @@ export function AgentsPage({ account }: { account: Account }) {
       .map((name) => ({ name, description: 'Not enabled in Settings → Skills. Turn it off to save.' })),
   ]
 
+  const errorAlert = error && (
+    <div className="mcp-error" role="alert">
+      {error}
+    </div>
+  )
+
   return (
     <Page inset className="agents-page">
       <header className="agents-head">
@@ -203,11 +209,7 @@ export function AgentsPage({ account }: { account: Account }) {
           </Button>
         </p>
       )}
-      {error && (
-        <div className="mcp-error" role="alert">
-          {error}
-        </div>
-      )}
+      {!draft && errorAlert}
 
       {draft && (
         <section
@@ -370,11 +372,13 @@ export function AgentsPage({ account }: { account: Account }) {
               </Select>
             </Field>
           )}
+          {errorAlert}
           <div className="mcp-actions">
             <Button
               onClick={() => {
                 setDraft(null)
                 setEditingAgentId(null)
+                setError(null)
               }}
               disabled={busy}
             >
