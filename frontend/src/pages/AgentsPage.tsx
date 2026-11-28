@@ -378,6 +378,7 @@ export function AgentsPage({ account }: { account: Account }) {
               onClick={() => {
                 setDraft(null)
                 setEditingAgentId(null)
+                setError(null)
               }}
               disabled={busy}
             >
