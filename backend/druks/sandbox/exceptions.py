@@ -45,6 +45,10 @@ class IdentityDenied(SandboxError):
     """A fetch names no live sandbox identity for its bearer and secret."""
 
 
+class StaleSecretError(SandboxError):
+    """A live sandbox still holds an older value of a secret after a refresh."""
+
+
 class HostGone(SandboxError):
     """The provider says this host no longer exists.
 

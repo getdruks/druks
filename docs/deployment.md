@@ -288,9 +288,11 @@ Drukbox on another server reaches the issuer route through
 A subscription token is such a value. The issuer route is
 `GET /api/secrets/<identity id>/<name>`. It authenticates the sandbox's
 identity bearer and nothing else, and it answers `value` and the provider's
-`expires_at`. After every rotation Druks orders a refresh through the Drukbox
-API at `POST /hosts/<host id>/secrets/<service>/refresh`, one request for each
-live sandbox on the subscription. Druks never connects to the exchange.
+`expires_at`. When a stored credential changes, Druks orders a refresh through
+the Drukbox API at `POST /hosts/<host id>/secrets/<service>/refresh`, one
+request for each live sandbox that holds it.
+[Concepts](concepts.md#instructions-harnesses-workspaces-and-sandboxes) names
+the changes. Druks never connects to the exchange.
 
 An identity dies with its sandbox. Druks revokes it before it deletes the
 sandbox, and the issuer denies a terminal run's identity before any cleanup.

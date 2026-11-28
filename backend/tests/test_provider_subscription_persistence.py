@@ -3,9 +3,12 @@ import os
 import httpx
 import psycopg
 import pytest
+from dbos import run_dbos_database_migrations
 from druks.accounts.models import Account
 from druks.database import configure_session, get_session
 from druks.db import db_session
+from druks.durable.dbos_state import DBOS_SYSTEM_SCHEMA
+from druks.durable.engine import _dbos_database_url
 from druks.secrets.datastructures import Audience
 from druks.secrets.enums import SecretKind
 from druks.secrets.models import VaultSecret
@@ -46,6 +49,8 @@ async def engine():
     schema_engine = create_engine(URL)
     init_db(schema_engine)
     schema_engine.dispose()
+    # A vault change queues a DBOS workflow in its transaction, as in production.
+    run_dbos_database_migrations(_dbos_database_url(URL), schema=DBOS_SYSTEM_SCHEMA)
     created = create_async_engine(URL)
     configure_session(created)
     try:

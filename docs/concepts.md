@@ -248,7 +248,16 @@ its refresh margin rotates first, while the subscription is idle or the token
 is urgent. One rotator runs at a time, and
 new calls wait for it. After a rotation, Druks requests a refresh from the secrets
 exchange for every live sandbox on that subscription. A provider can revoke
-the previous token at the rotation. Druks revokes the identity when it
+the previous token at the rotation. Each change to a credential that sandboxes
+fetch from the issuer, such as a rotation, a reconnect, or a disconnect, also
+queues a refresh with the change. The issuer records which state of the
+credential each sandbox last got, so Druks knows the sandboxes that still hold an
+older value. It asks Drukbox to refresh those, again and again for about four
+minutes, until each one comes back to the issuer. A sandbox that comes back gets
+what the issuer answers then, and after a disconnect that is nothing. A sandbox
+that does not come back in that time keeps the old value until it expires. A
+provider API key is a fixed value in the sandbox, so a new key reaches only new
+sandboxes. Druks revokes the identity when it
 releases the sandbox, and a terminal run denies every fetch. An hourly task
 releases the sandbox of a run that ended without its cleanup. The identity
 expires with the sandbox lease.

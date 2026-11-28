@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import asyncssh
+from dbos import DBOS, StepOptions
 from drukbox_sdk import Issuer, SandboxAPI, SandboxHost, Secret
 from drukbox_sdk.exceptions import (
     SandboxAPIError,
@@ -20,16 +21,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from uuid_utils import uuid7
 
 from druks.durable.activity import set_run_phase
-from druks.durable.engine import _step_engine
+from druks.durable.engine import _step_engine, step_session
 from druks.harnesses.exceptions import HarnessSandboxProvisioningError
 from druks.settings import get_settings
 
 from .constants import (
+    REFRESH_SANDBOX_SECRETS_WORKFLOW,
     SANDBOX_HOST_LEASE_SECONDS,
     WORKFLOW_HOST_LEASE_SECONDS,
     WORKFLOW_HOST_RENEW_SECONDS,
 )
-from .exceptions import HostGone, SandboxError, TemplateNotFound
+from .exceptions import HostGone, SandboxError, StaleSecretError, TemplateNotFound
 from .host import Host
 from .layout import get_helper_script_path
 from .models import SandboxIdentity
@@ -296,24 +298,38 @@ class Client:
     ) -> None:
         """Order a refresh on every live box of the secret, except the one whose
         answer carries the new token. A failure is a log line."""
-        boxes = [
-            (identity.host_id, ref.name)
-            for identity in await SandboxIdentity.list_for_secret(session, secret_id)
-            if identity.host_id != except_host_id
-            for ref in identity.secret_refs
-            if ref.secret_id == secret_id
-        ]
+        await self._refresh_secrets(
+            [
+                (host_id, name)
+                for host_id, name in await SandboxIdentity.list_for_secret(session, secret_id)
+                if host_id != except_host_id
+            ]
+        )
+
+    async def refresh_sandbox_secrets(self, secret_id: str) -> None:
+        """Order a refresh on the live boxes that hold an older value of the secret
+        than the vault row. A box is done when it comes back to the issuer, which
+        records each answer. Raises ``StaleSecretError`` while a box has not, so the
+        caller can ask again. No session is open while Drukbox answers."""
+        async with step_session() as session:
+            boxes = await SandboxIdentity.list_for_secret(session, secret_id, only_stale=True)
+        await self._refresh_secrets(boxes)
+        async with step_session() as session:
+            if boxes := await SandboxIdentity.list_for_secret(session, secret_id, only_stale=True):
+                raise StaleSecretError(f"boxes {boxes} still hold an older value of {secret_id}")
+
+    async def _refresh_secrets(self, boxes: list[tuple[str, str]]) -> None:
         api = self._api()
         try:
-            answers = await asyncio.gather(
-                *(api.refresh_secret(host_id, service) for host_id, service in boxes),
+            errors = await asyncio.gather(
+                *(api.refresh_secret(host_id, name) for host_id, name in boxes),
                 return_exceptions=True,
             )
         finally:
             await api.aclose()
-        for (host_id, service), answer in zip(boxes, answers, strict=True):
-            if isinstance(answer, BaseException):
-                logger.warning("refresh of %s on box %s failed: %s", service, host_id, answer)
+        for (host_id, name), error in zip(boxes, errors, strict=True):
+            if error:
+                logger.warning("refresh of %s on box %s failed: %s", name, host_id, error)
 
     async def set_expiry(self, *, host_id: str, expires_at: datetime) -> None:
         """Set the box lease. The SDK raises if the box does not exist."""
@@ -419,3 +435,19 @@ async def _upload_helper_script(host: Host) -> None:
 
 
 sandbox_client = Client()
+
+# Eight attempts, 2 seconds apart at first and then twice as long each time. The waits
+# add up to about four minutes, which outlasts a Drukbox restart.
+_REFRESH_RETRIES: StepOptions = {
+    "retries_allowed": True,
+    "max_attempts": 8,
+    "interval_seconds": 2.0,
+}
+
+
+@DBOS.workflow(name=REFRESH_SANDBOX_SECRETS_WORKFLOW)
+async def refresh_sandbox_secrets(secret_id: str) -> None:
+    """Refresh a vault row's secret in the live sandboxes that hold an older value,
+    after a change to the row commits. The step runs again while a sandbox is still
+    stale, and the workflow fails when its attempts run out."""
+    await DBOS.run_step_async(_REFRESH_RETRIES, sandbox_client.refresh_sandbox_secrets, secret_id)

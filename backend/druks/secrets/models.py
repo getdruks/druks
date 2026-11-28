@@ -1,3 +1,6 @@
+import hashlib
+import hmac
+import json
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
@@ -8,16 +11,19 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy_encrypted_field import EncryptedJsonField
+from uuid_utils import uuid7
 
 from druks.core.models import Uuid7Pk
 from druks.database import get_session
 from druks.locks import lock
 from druks.models import Base
 from druks.registry import service_registry
+from druks.sandbox.constants import REFRESH_SANDBOX_SECRETS_WORKFLOW
 from druks.secrets.constants import TOKEN_MIN_TTL_SECONDS
 from druks.secrets.datastructures import Audience
 from druks.secrets.enums import IdentityStatus, SecretKind
 from druks.secrets.exceptions import SecretRevokedError
+from druks.settings import get_settings
 
 if TYPE_CHECKING:
     from druks.accounts.models import Account
@@ -193,7 +199,8 @@ class VaultSecret(Base, Uuid7Pk):
         refresh_token_expires_at: datetime | None = None,
     ) -> "VaultSecret":
         """Store the one row per audience, account, and header. A second store
-        replaces the first and revives a revoked row."""
+        replaces the first and revives a revoked row. A new value reaches the
+        sandboxes that hold the row; a new row is in no sandbox yet."""
         row = await session.scalar(
             select(cls).where(
                 cls.kind == kind,
@@ -205,6 +212,8 @@ class VaultSecret(Base, Uuid7Pk):
         if not row:
             row = cls(kind=kind, audience=audience, account_id=account_id, header=header)
             session.add(row)
+        elif row.secrets != secrets:
+            await row.refresh_sandbox_secrets()
         row.secrets = secrets
         row.identity = identity or {}
         row.scopes = scopes or []
@@ -355,6 +364,7 @@ class VaultSecret(Base, Uuid7Pk):
     ) -> None:
         """A fresh consent on a live or revoked connection. The stored client
         stays unless the consent registered a new one."""
+        await self.refresh_sandbox_secrets()
         kept = secrets or {
             key: value for key, value in self.secrets.items() if key != "refresh_token"
         }
@@ -507,9 +517,20 @@ class VaultSecret(Base, Uuid7Pk):
     def key_tail(self) -> str:
         return self.secrets["value"][-4:]
 
+    def get_fingerprint(self) -> str:
+        """A digest of the row's secrets under the installation's key. It changes when
+        they change, and it says nothing about them without the key. The issuer
+        records it for each answer, so a sandbox with another one holds an old value."""
+        key = get_settings().secrets_key.get_secret_value().encode()
+        secrets = json.dumps(dict(self.secrets), sort_keys=True)
+        return hmac.new(key, f"{self.id}:{secrets}".encode(), hashlib.sha256).hexdigest()
+
     async def update_secrets(self, secrets: dict[str, Any], *, expires_at: datetime | None) -> None:
         """A rotation's write, on the live row only, so an earlier revoke keeps
-        its cleared secrets."""
+        its cleared secrets. The rotation refreshes the sandboxes itself, before its
+        gate lets a new call start, and the queued refresh repairs the ones it missed."""
+        if self.is_live:
+            await self.refresh_sandbox_secrets()
         await self.session.execute(
             update(type(self))
             .where(type(self).id == self.id, type(self).revoked_at.is_(None))
@@ -518,8 +539,10 @@ class VaultSecret(Base, Uuid7Pk):
         await self.session.refresh(self)
 
     async def revoke(self, reason: str = "") -> None:
-        """A repeat revoke keeps the first stamp."""
+        """A repeat revoke keeps the first stamp. The sandboxes that hold the row lose it."""
         now = Base.utc_now()
+        if self.is_live:
+            await self.refresh_sandbox_secrets()
         await self.session.execute(
             update(VaultSecret)
             .where(VaultSecret.id == self.id, VaultSecret.revoked_at.is_(None))
@@ -528,6 +551,31 @@ class VaultSecret(Base, Uuid7Pk):
         self.revoked_at = self.revoked_at or now
         self.revoked_reason = self.revoked_reason or reason
         self.secrets = {}
+
+    async def refresh_sandbox_secrets(self) -> None:
+        """Queue a refresh of this row's secret in the sandboxes that hold an older
+        value. A sandbox keeps a fetched value until the value expires, and only a
+        refresh ends it early. A write queues the refresh before it changes the row,
+        so the two commit together, also in a session that commits each operation
+        on its own. A rollback drops both."""
+        # The durable package imports the vault.
+        from druks.durable.constants import TASK_QUEUE
+        from druks.durable.engine import enqueue_in_transaction
+
+        # A minted token is a cache of its grant. A sandbox holds the grant, and the
+        # issuer mints from it, so no sandbox holds a minted row.
+        if not self.audience.startswith((Audience.oauth(), Audience.resource())):
+            await enqueue_in_transaction(
+                self.session,
+                {
+                    "workflow_name": REFRESH_SANDBOX_SECRETS_WORKFLOW,
+                    "queue_name": TASK_QUEUE,
+                    # No deduplication: a refresh in progress can pass a sandbox before
+                    # this change commits, so each change queues its own.
+                    "workflow_id": str(uuid7()),
+                },
+                self.id,
+            )
 
     async def issue_token(
         self, resources: tuple[str, ...], *, name: str = "", host_id: str = ""

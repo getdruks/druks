@@ -1,23 +1,27 @@
 import hashlib
-import json
 import logging
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 from conftest import connect_provider, connect_service
+from drukbox_sdk import SandboxAPI
+from drukbox_sdk.exceptions import SandboxUnavailableError
 from druks.accounts.models import Account
 from druks.core.apis.exceptions import GitHubAppNotInstalledError
 from druks.core.apis.github import GitHubAppClient
 from druks.core.services import Github
 from druks.db import db_session
-from druks.durable.engine import _step_engine
+from druks.durable.engine import _step_engine, step_session
 from druks.harnesses import providers as pbase
 from druks.harnesses.providers import AnthropicProvider
 from druks.mcp.enums import IdentityMode, Toolkit
 from druks.mcp.inbound import get_druks_account_token
 from druks.mcp.models import McpServer
+from druks.sandbox.client import sandbox_client
 from druks.sandbox.constants import SANDBOX_HOST_LEASE_SECONDS
+from druks.sandbox.exceptions import StaleSecretError
 from druks.sandbox.models import SandboxIdentity, SecretRef
 from druks.secrets.datastructures import Audience
 from druks.secrets.models import VaultSecret
@@ -59,23 +63,6 @@ async def _bound_identity(subscription, *, state: str = "running") -> tuple[Sand
     )
     await identity.bind("host-1")
     return identity, entries["anthropic"].headers["Authorization"].removeprefix("Bearer ")
-
-
-def _resp(status: int, body: object) -> httpx.Response:
-    return httpx.Response(status, text=json.dumps(body), request=httpx.Request("POST", "https://x"))
-
-
-def _mock_post(monkeypatch, response):
-    calls = []
-
-    async def fake_post(self, url, *, json=None, **_kwargs):
-        calls.append(url)
-        if isinstance(response, Exception):
-            raise response
-        return response
-
-    monkeypatch.setattr(pbase.httpx.AsyncClient, "post", fake_post)
-    return calls
 
 
 def _no_gate(subscription_id: str):
@@ -210,7 +197,8 @@ async def test_a_ref_names_a_vault_row_that_exists(druks_db, source):
 async def test_the_issuer_answers_a_fresh_token_with_its_expiry(druks_db, tmp_path, monkeypatch):
     subscription = await _subscription(access="live")
     identity, bearer = await _bound_identity(subscription)
-    posts = _mock_post(monkeypatch, _resp(200, {}))
+    post = AsyncMock()
+    monkeypatch.setattr(pbase.httpx.AsyncClient, "post", post)
     monkeypatch.setattr(pbase.gate, "shut", _no_gate)
 
     response = await _fetch(tmp_path, identity.id, bearer)
@@ -219,7 +207,7 @@ async def test_the_issuer_answers_a_fresh_token_with_its_expiry(druks_db, tmp_pa
     assert response.headers["cache-control"] == "no-store"
     expiry = AnthropicProvider.load_token(subscription).expires_at
     assert response.json() == {"value": "live", "expires_at": expiry.isoformat()}
-    assert posts == []
+    post.assert_not_awaited()
 
 
 @pytest.mark.parametrize("wrong", ["bearer", "name", "identity", "revoked", "expired", "run"])
@@ -270,7 +258,9 @@ async def test_the_issuer_answers_503_when_the_source_holds_nothing_valid(
 ):
     subscription = await _subscription(access="old", life=-timedelta(minutes=1))
     identity, bearer = await _bound_identity(subscription)
-    _mock_post(monkeypatch, httpx.ConnectError("boom"))
+    monkeypatch.setattr(
+        pbase.httpx.AsyncClient, "post", AsyncMock(side_effect=httpx.ConnectError("boom"))
+    )
 
     with caplog.at_level(logging.WARNING, logger="druks.sandbox.routes"):
         response = await _fetch(tmp_path, identity.id, bearer)
@@ -281,6 +271,110 @@ async def test_the_issuer_answers_503_when_the_source_holds_nothing_valid(
         f"fetch of anthropic for identity {identity.id} failed: access token expired at"
         in caplog.text
     )
+
+
+async def test_the_boxes_of_a_secret_are_its_live_bound_ones(druks_db):
+    subscription = await _subscription()
+    identity, _ = await _bound_identity(subscription)
+
+    assert await SandboxIdentity.list_for_secret(db_session(), subscription.id) == [
+        ("host-1", "anthropic")
+    ]
+    await identity.revoke()
+    assert await SandboxIdentity.list_for_secret(db_session(), subscription.id) == []
+
+
+async def test_a_box_whose_run_ended_is_not_listed_for_its_secret(druks_db):
+    subscription = await _subscription()
+    await _bound_identity(subscription, state="finished")
+
+    assert await SandboxIdentity.list_for_secret(db_session(), subscription.id) == []
+
+
+@pytest.mark.parametrize("changes", [True, False])
+async def test_a_box_that_fetched_while_it_was_made_is_refreshed_when_its_row_changed(
+    druks_db, tmp_path, monkeypatch, changes
+):
+    subscription = await _subscription()
+    await seed_run(db_session(), kind=Summarize.kind, run_id="run-1")
+    identity, entries = await SandboxIdentity.create(
+        db_session(),
+        account_id=(await Account.get_for_run(db_session(), None)).id,
+        run_id="run-1",
+        scoped_to="workflow",
+        secret_refs=[_anthropic(subscription)],
+        secrets_hash="",
+    )
+    bearer = entries["anthropic"].headers["Authorization"].removeprefix("Bearer ")
+    # Drukbox fetches while it makes the box, before the box has a host to refresh.
+    assert (await _fetch(tmp_path, identity.id, bearer)).status_code == 200
+    if changes:
+        await subscription.update_secrets(_payload(access="rotated"), expires_at=None)
+    queued = []
+
+    async def enqueue(session, options, secret_id):
+        queued.append(secret_id)
+
+    monkeypatch.setattr("druks.durable.engine.enqueue_in_transaction", enqueue)
+
+    await identity.bind("host-1")
+
+    assert queued == ([subscription.id] if changes else [])
+
+
+async def _stale_boxes(subscription) -> list[tuple[str, str]]:
+    # A session of its own, as the refresh has: the test's session keeps
+    # the refs that it loaded before the issuer wrote to them.
+    async with step_session() as session:
+        return await SandboxIdentity.list_for_secret(session, subscription.id, only_stale=True)
+
+
+async def test_a_box_is_stale_until_the_issuer_answers_it_from_the_row_as_it_is(druks_db, tmp_path):
+    subscription = await _subscription()
+    identity, bearer = await _bound_identity(subscription)
+    assert await _stale_boxes(subscription) == [("host-1", "anthropic")]
+
+    assert (await _fetch(tmp_path, identity.id, bearer)).status_code == 200
+    assert await _stale_boxes(subscription) == []
+
+    await subscription.update_secrets(_payload(access="rotated"), expires_at=None)
+    assert await _stale_boxes(subscription) == [("host-1", "anthropic")]
+
+    # A revoked row refuses the fetch, and the box then holds what the row has: nothing.
+    await subscription.revoke("user")
+    assert (await _fetch(tmp_path, identity.id, bearer)).status_code == 422
+    assert await _stale_boxes(subscription) == []
+
+
+async def test_a_refresh_asks_each_stale_box_and_ends_when_it_came_back_to_the_issuer(
+    druks_db, tmp_path, monkeypatch
+):
+    subscription = await _subscription()
+    identity, bearer = await _bound_identity(subscription)
+    asked = []
+
+    async def refresh_secret(self, host_id, name):
+        asked.append((host_id, name))
+        # Drukbox makes the box's exchange fetch from the issuer.
+        await _fetch(tmp_path, identity.id, bearer)
+
+    monkeypatch.setattr(SandboxAPI, "refresh_secret", refresh_secret)
+
+    await sandbox_client.refresh_sandbox_secrets(subscription.id)
+    await sandbox_client.refresh_sandbox_secrets(subscription.id)
+
+    assert asked == [("host-1", "anthropic")]
+
+
+async def test_a_refresh_raises_while_a_box_has_not_come_back_to_the_issuer(druks_db, monkeypatch):
+    subscription = await _subscription()
+    await _bound_identity(subscription)
+    monkeypatch.setattr(
+        SandboxAPI, "refresh_secret", AsyncMock(side_effect=SandboxUnavailableError("down"))
+    )
+
+    with pytest.raises(StaleSecretError, match="host-1"):
+        await sandbox_client.refresh_sandbox_secrets(subscription.id)
 
 
 async def test_lookup_finds_the_live_bound_identity_of_a_scope(druks_db) -> None:
@@ -342,28 +436,21 @@ async def test_lookup_finds_the_live_bound_identity_of_a_scope(druks_db) -> None
         secret_refs=secrets,
     )
 
-    assert found is not None
     assert found.id == live.id
     more = [*secrets, SecretRef(name="github", secret_id="other", resources=["acme/widgets"])]
-    assert (
-        await SandboxIdentity.lookup(
-            db_session(),
-            account_id=(await Account.get_for_run(db_session(), None)).id,
-            run_id="run-1",
-            scoped_to="workflow",
-            secret_refs=more,
-        )
-        is None
+    assert not await SandboxIdentity.lookup(
+        db_session(),
+        account_id=(await Account.get_for_run(db_session(), None)).id,
+        run_id="run-1",
+        scoped_to="workflow",
+        secret_refs=more,
     )
-    assert (
-        await SandboxIdentity.lookup(
-            db_session(),
-            account_id=(await Account.get_for_run(db_session(), None)).id,
-            run_id="run-2",
-            scoped_to="workflow",
-            secret_refs=secrets,
-        )
-        is None
+    assert not await SandboxIdentity.lookup(
+        db_session(),
+        account_id=(await Account.get_for_run(db_session(), None)).id,
+        run_id="run-2",
+        scoped_to="workflow",
+        secret_refs=secrets,
     )
 
 

@@ -288,6 +288,7 @@ _OWN_DATABASE_MODULES = {
     "test_durable_sdk",
     "test_notifications_durable",
     "test_provider_subscription_persistence",
+    "test_sandbox_refresh_durable",
     "test_app_migrations",
     "test_proof_app_migration",
 }
