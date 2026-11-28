@@ -679,6 +679,45 @@ async def test_a_recovered_call_resumes_the_agent_its_box_still_runs(
         sandbox.resume_agent.assert_not_awaited()
 
 
+@pytest.mark.parametrize("has_session", [True, False])
+async def test_a_later_call_continues_the_session_of_the_call_before_it(
+    druks_db, tmp_path, monkeypatch, current_run, has_session
+):
+    """A later call of an instruction in a run is the next message of the session of the
+    last call that finished. A call whose session Druks does not hold is not continued:
+    the later call starts a session of its own."""
+    sandbox = _patch_runtime(monkeypatch, tmp_path, {"ok": True})
+    _patch_ephemeral(monkeypatch, sandbox)
+    config = await get_config(
+        db_session(), agent_name=DUMMY_INSTRUCTION.id, account_id=current_run.account_id
+    )
+    await AgentCall.start(
+        _step_engine(),
+        call_id="call-first",
+        run_id="wf-9",
+        model=config.model,
+        agent=DUMMY_INSTRUCTION.id,
+        host_id="host-gone",
+        subscription_id=config.subscription.id,
+        api_key_id=None,
+    )
+    await AgentCall.finish(
+        _step_engine(),
+        call_id="call-first",
+        result=make_agent_result({"ok": True}, agent=DUMMY_INSTRUCTION.id),
+    )
+    session = tmp_path / "run-wf-9" / "call-first" / ClaudeHarness.session_filename
+    if has_session:
+        session.parent.mkdir(parents=True)
+        session.write_text("")
+
+    assert await DUMMY_INSTRUCTION._run(workflow_id="wf-9") == DummyOutput(ok=True)
+
+    harness = sandbox.run_agent.await_args.args[0]
+    assert harness.continued_session == (session if has_session else None)
+    assert sandbox.run_agent.await_args.kwargs["prompt"] == "PROMPT:dummy/agent.md:repo=None"
+
+
 async def test_provisioning_failure_records_no_call(druks_db, tmp_path, monkeypatch, current_run):
     """A failure before the agent starts, such as no VM capacity, records no agent call.
     The row exists only once the call has a host to run on."""

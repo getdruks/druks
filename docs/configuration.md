@@ -673,6 +673,12 @@ After each push, the build waits for CI on the head before the review, and red
 CI returns the work to the implementer. The pull request leaves draft when the review of
 a head with green CI requests no changes, or when a person approves it.
 
+Each agent of a build keeps its conversation for the build. Red CI, a review that
+requests changes, and a person's request reach the implementer as the next
+message of that conversation, so it does not read the code and its own change
+again. This needs Claude Code as the agent's CLI. With another CLI, each round
+starts a new conversation.
+
 When Druks receives a push to the default branch that changes `config.yml`, the
 next build uses the new file. When a team lists Software Factory, this happens
 only for a push by a person who can use Software Factory. Druks refuses a push by

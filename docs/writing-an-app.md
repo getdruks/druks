@@ -569,6 +569,20 @@ It refuses a call that has no login, before any sandbox work. Then it
 provisions or attaches a sandbox, runs the CLI, validates the structured
 output, and records the call.
 
+A workflow can call an instruction more than once in a run, for example to send
+a review's findings back to the agent that wrote the change. Each later call is
+the next round of the same task, so the agent continues the conversation of the
+call before it: Druks sends the rendered prompt as its next message. The agent
+still has what it read and did in the earlier calls. Druks keeps the session of
+each call that finished, so the later call works on any sandbox, and it records
+only its own cost.
+
+Druks prepares the workspace before every call, so keep work that must stay in
+a place that the preparation does not reset, such as a pushed branch. Write the
+prompt so that it holds for every round and for a call that cannot continue:
+only Claude Code keeps a session, and with another CLI every call starts a new
+one. To give work a conversation of its own, start it as its own run.
+
 Override `InstructionOutput.to_result()` to map
 the strict output contract to a domain value. Override `to_artifact()` to
 publish a reviewable artifact. Override `to_event()` to record that saved

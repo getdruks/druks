@@ -2249,6 +2249,20 @@ class Instruction:
             running_call = await AgentCall.lookup_running(
                 session, run_id=workflow_id, agent=self.id
             )
+            # A later call of the instruction in a run is the next round of the same task,
+            # so it continues the session of the last call that finished. A browser call
+            # and a call from an after-agent hook run on a box of their own, and start a
+            # session there.
+            continued_session = None
+            session_filename = config.harness_class.session_filename
+            if session_filename and not self.browser and not _in_after_agent.get():
+                sessions = [
+                    artifact_dir / call.id / session_filename
+                    for call in await AgentCall.list_for_run(session, workflow_id)
+                    if call.agent == self.id and call.status == AgentCallStatus.SUCCEEDED
+                ]
+                if sessions and sessions[-1].is_file():
+                    continued_session = sessions[-1]
         model = config.model
         span.set_attributes({"druks.harness": config.harness, "druks.model": model})
         subscription_id = config.subscription.id if config.subscription else None
@@ -2318,7 +2332,10 @@ class Instruction:
                 # The override lookup reads the repository's credential from a row.
                 template = await get_template(self.prompt, repo=prompt_context.get("repo"))
                 harness = config.harness_class(
-                    model=config.model, fast_mode=config.fast_mode, effort=config.effort
+                    model=config.model,
+                    fast_mode=config.fast_mode,
+                    effort=config.effort,
+                    continued_session=continued_session,
                 )
                 agent_instructions = ""
                 if agent_id:
