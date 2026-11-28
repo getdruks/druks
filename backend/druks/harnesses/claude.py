@@ -15,7 +15,7 @@ from druks.sandbox.datastructures import (
     HomeFile,
     McpServer,
 )
-from druks.sandbox.layout import get_runs_root
+from druks.sandbox.layout import get_remote_home, get_runs_root
 from druks.sandbox.models import SecretRef
 from druks.secrets.models import VaultSecret
 from druks.settings import get_settings
@@ -28,6 +28,16 @@ from .datastructures import Manifest
 from .providers import AnthropicProvider
 
 logger = logging.getLogger(__name__)
+
+_MODEL_USAGE_FIELDS = {
+    "input_tokens": "inputTokens",
+    "output_tokens": "outputTokens",
+    "cache_creation_input_tokens": "cacheCreationInputTokens",
+    "cache_read_input_tokens": "cacheReadInputTokens",
+}
+# Claude Code writes its totals to the session file on lines of this type. A message that
+# quotes the marker escapes its quotes, so no other line holds it.
+_COST_STATE = b'"type":"cost-state"'
 
 
 class ClaudeHarness(Harness):
@@ -42,6 +52,7 @@ class ClaudeHarness(Harness):
     reply_command = (command, "-p")
     no_ask_mode = "bypassPermissions"
     skills_folder = ".claude/skills"
+    session_filename = "session.jsonl"
 
     @classmethod
     def get_acp_session(
@@ -150,7 +161,7 @@ class ClaudeHarness(Harness):
     ) -> AgentInvocation:
         in_vm_run_dir = f"{get_runs_root(ssh_username)}/{run_id}"
         in_vm_debug = f"{in_vm_run_dir}/debug.log"
-        in_vm_session = f"{in_vm_run_dir}/session.jsonl"
+        in_vm_session = f"{in_vm_run_dir}/{self.session_filename}"
         settings_hooks: dict[str, object] = {}
         write_hook = ""
         if "after_agent" in hooks:
@@ -186,6 +197,16 @@ class ClaudeHarness(Harness):
             "--disallowedTools",
             *CLAUDE_DISALLOWED_TOOLS,
         ]
+        credentials = _get_credentials(manifest, include_plugins=include_plugins)
+        if self.continued_session:
+            # The box gets a copy of the session, so the call continues it there, whichever
+            # box ran it. The fork gives the call a session of its own, under its own id,
+            # so a retry continues the same one.
+            in_vm_copy = f"{in_vm_run_dir}/continued-{self.session_filename}"
+            in_home = in_vm_copy.removeprefix(f"{get_remote_home(ssh_username)}/")
+            copy = HomeCopy(in_home, self.continued_session)
+            credentials = Credentials(home=(*credentials.home, copy))
+            claude_argv += ["--resume", in_vm_copy, "--fork-session"]
         # Grant tool access to the related-repo clones in the VM. Claude scopes
         # file tools to cwd + --add-dir; without these it can't read the
         # siblings even though the prompt names their paths.
@@ -226,39 +247,41 @@ class ClaudeHarness(Harness):
             name="claude",
             args=("sh", "-c", wrapper),
             stdin=prompt.encode("utf-8"),
-            credentials=_get_credentials(manifest, include_plugins=include_plugins),
+            credentials=credentials,
             env=extra_env,
-            extra_artifact_filenames=("debug.log", "session.jsonl"),
+            extra_artifact_filenames=("debug.log", self.session_filename),
         )
 
-    def _get_session_cost(
-        self, *, artifact_dir: Path, run_id: str
-    ) -> tuple[float | None, dict[str, Any] | None]:
-        """The totals Claude Code writes to its session file as it exits: the
-        last ``cost-state`` line."""
-        cost_state: dict[str, Any] = {}
-        session = artifact_dir / run_id / "session.jsonl"
-        if session.exists():
-            for line in session.read_bytes().splitlines():
-                # A message that quotes this marker escapes its quotes.
-                if b'"type":"cost-state"' in line:
-                    cost_state = json.loads(line)
-        return extract_claude_cost_from_envelope(
-            {
-                "total_cost_usd": cost_state.get("totalCostUSD"),
-                "modelUsage": cost_state.get("modelUsage"),
-            }
-        )
+    def _write_cost(
+        self,
+        cost_usd: float | None,
+        cost_metadata: dict[str, Any] | None,
+        *,
+        artifact_dir: Path,
+        run_id: str,
+    ) -> None:
+        """Record what the call cost. Claude Code reports the totals of a session since it
+        began, so the totals of the session that the call continues come off."""
+        if self.continued_session:
+            continued_usd, continued = _get_session_cost(self.continued_session)
+            if cost_usd and continued_usd:
+                cost_usd -= continued_usd
+            if cost_metadata and continued:
+                counts = _MODEL_USAGE_FIELDS.keys() & cost_metadata.keys() & continued.keys()
+                cost_metadata = cost_metadata | {
+                    name: cost_metadata[name] - continued[name] for name in counts
+                }
+        write_cost(artifact_dir / run_id, cost_usd=cost_usd, metadata=cost_metadata)
 
     def parse(self, result: HarnessRunResult, *, artifact_dir: Path, run_id: str) -> Any:
         try:
             envelope = collapse_claude_stream(result.stdout)
         except exceptions.StreamJsonError as error:
             # A killed claude streams no result event.
-            cost_usd, cost_metadata = self._get_session_cost(
-                artifact_dir=artifact_dir, run_id=run_id
+            cost_usd, cost_metadata = _get_session_cost(
+                artifact_dir / run_id / self.session_filename
             )
-            write_cost(artifact_dir / run_id, cost_usd=cost_usd, metadata=cost_metadata)
+            self._write_cost(cost_usd, cost_metadata, artifact_dir=artifact_dir, run_id=run_id)
             # Keep a provider failure when its stream is incomplete. Only a
             # successful malformed response is an output failure.
             self.check_returncode(result)
@@ -268,7 +291,7 @@ class ClaudeHarness(Harness):
             ) from error
 
         cost_usd, cost_metadata = extract_claude_cost_from_envelope(envelope)
-        write_cost(artifact_dir / run_id, cost_usd=cost_usd, metadata=cost_metadata)
+        self._write_cost(cost_usd, cost_metadata, artifact_dir=artifact_dir, run_id=run_id)
         self.check_returncode(result)
 
         structured: Any = envelope.get("structured_output")
@@ -409,12 +432,13 @@ def collapse_claude_stream(stdout: bytes) -> dict[str, Any]:
     return envelope
 
 
-_MODEL_USAGE_FIELDS = {
-    "input_tokens": "inputTokens",
-    "output_tokens": "outputTokens",
-    "cache_creation_input_tokens": "cacheCreationInputTokens",
-    "cache_read_input_tokens": "cacheReadInputTokens",
-}
+def _get_session_cost(session: Path) -> tuple[float | None, dict[str, Any] | None]:
+    """What a session cost since it began: the last totals in its file."""
+    lines = session.read_bytes().splitlines() if session.exists() else []
+    totals = json.loads(next((line for line in reversed(lines) if _COST_STATE in line), b"{}"))
+    return extract_claude_cost_from_envelope(
+        {"total_cost_usd": totals.get("totalCostUSD"), "modelUsage": totals.get("modelUsage")}
+    )
 
 
 def extract_claude_cost_from_envelope(

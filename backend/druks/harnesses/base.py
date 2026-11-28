@@ -58,6 +58,9 @@ class Harness(ABC):
     skills_folder: ClassVar[str] = ""
     # The argv that answers one prompt and exits.
     reply_command: ClassVar[tuple[str, ...]]
+    # The file among a call's artifacts that holds its session. A harness that names one can
+    # continue a call from that file. Empty for a harness that cannot.
+    session_filename: ClassVar[str] = ""
 
     def __init__(
         self,
@@ -65,10 +68,14 @@ class Harness(ABC):
         model: str | None,
         fast_mode: bool,
         effort: str | None,
+        continued_session: Path | None = None,
     ) -> None:
         self.model = model
         self.fast_mode = fast_mode
         self.effort = effort
+        # The session file of the call that this call continues: its prompt is the next
+        # message of that session. None starts a session.
+        self.continued_session = continued_session
 
     @abstractmethod
     async def build_invocation(self, manifest: Manifest, **kwargs: object) -> AgentInvocation:

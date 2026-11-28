@@ -11,7 +11,7 @@ from druks.harnesses.claude import ClaudeHarness
 from druks.harnesses.codex import CodexHarness
 from druks.harnesses.constants import CLAUDE_STRUCTURED_OUTPUT_INSTRUCTION
 from druks.harnesses.datastructures import Manifest
-from druks.sandbox.datastructures import McpServer
+from druks.sandbox.datastructures import HomeCopy, McpServer
 
 # A manifest for a call with no skills.
 _MANIFEST = Manifest(model="", harness="", mcp_servers=(), skills=())
@@ -340,3 +340,21 @@ def test_claude_mcp_flags_emit_env_ref_header_not_literal_token():
     # No servers → no flags, on both harnesses.
     assert ClaudeHarness(model="x", fast_mode=False, effort=None)._mcp_flags(()) == ()
     assert CodexHarness(model=_CODEX_MODEL, fast_mode=False, effort=None)._mcp_flags(()) == ()
+
+
+async def test_claude_continues_a_session_as_a_fork_of_its_copy_on_the_box():
+    session = Path("/artifacts/run-1/session.jsonl")
+    inv = await ClaudeHarness(
+        model="anthropic/claude-x", fast_mode=False, effort=None, continued_session=session
+    ).build_invocation(
+        _MANIFEST,
+        prompt="CI is red.",
+        schema={"type": "object"},
+        run_id="run-2",
+        ssh_username="exedev",
+    )
+
+    wrapper = inv.args[2]
+    copy = HomeCopy(path="work/runs/run-2/continued-session.jsonl", source=session)
+    assert copy in inv.credentials.home
+    assert "--resume /home/exedev/work/runs/run-2/continued-session.jsonl --fork-session" in wrapper
