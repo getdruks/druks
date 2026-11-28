@@ -32,7 +32,7 @@ class Channel:
     # Whether the channel shows a run's status in one message, which it edits as the run moves.
     has_editable_status: ClassVar[bool] = False
     # Whether the channel sends messages at the top of a room, in a conversation there.
-    can_message_room: ClassVar[bool] = False
+    has_room_messaging: ClassVar[bool] = False
     # The reaction that acknowledges a person's message, as the channel names it.
     reaction_ack: ClassVar[str]
 

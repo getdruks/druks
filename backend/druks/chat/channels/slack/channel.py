@@ -66,7 +66,7 @@ class SlackChannel(Channel):
     has_blocks = True
     has_account_notifications = True
     has_editable_status = True
-    can_message_room = True
+    has_room_messaging = True
     reaction_ack = "eyes"
 
     @classmethod

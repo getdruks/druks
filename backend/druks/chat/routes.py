@@ -513,7 +513,7 @@ async def create_room_conversation(
     room. Druks sends nothing until a schedule or a reminder does."""
     if conversation_id := current_conversation_id.get():
         conversation = await session.get(Conversation, conversation_id)
-        (channel,) = [channel for channel in channel_registry.all() if channel.can_message_room]
+        (channel,) = [channel for channel in channel_registry.all() if channel.has_room_messaging]
         created = await channel.create_room_conversation(session, conversation, room=room)
         await session.commit()
         await session.refresh(created)
