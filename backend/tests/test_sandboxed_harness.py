@@ -258,12 +258,12 @@ async def test_wait_answers_hooks_in_the_waiting_task():
     """Hooks run in the step's task, which holds the step's database session."""
     tasks = []
 
-    async def after_agent() -> str:
+    async def after_agent(request: str) -> str:
         tasks.append(asyncio.current_task())
         return ""
 
     async def wait(*, hooks: dict[str, Any]) -> int:
-        await hooks["after_agent"]()
+        await hooks["after_agent"]("")
         return 0
 
     run = SimpleNamespace(wait=wait)
@@ -362,7 +362,7 @@ async def test_run_prompt_builds_executes_and_parses(
             seen["parse"] = {"result": result, "artifact_dir": artifact_dir, "run_id": run_id}
             return {"answer": 42}
 
-    async def after_agent() -> str:
+    async def after_agent(request: str) -> str:
         return "Run the tests."
 
     manifest = Manifest(model="claude-opus-4-8", harness="claude", mcp_servers=(), skills=())
@@ -470,7 +470,7 @@ async def test_run_prompt_fails_a_finished_run_whose_hook_never_ran(ctx: SimpleN
             parsed.append(run_id)
             return {"answer": 42}
 
-    async def after_agent() -> str:
+    async def after_agent(request: str) -> str:
         return ""
 
     with pytest.raises(HarnessHookError, match="claude finished and never ran after_agent"):
@@ -488,6 +488,47 @@ async def test_run_prompt_fails_a_finished_run_whose_hook_never_ran(ctx: SimpleN
 
     # The parse writes the cost, so the failed call still records it.
     assert parsed == ["call-7"]
+
+
+async def test_run_prompt_tells_the_box_where_the_exec_hook_takes_its_requests(
+    ctx: SimpleNamespace,
+):
+    # The agent asks the exec hook when it needs it, so a run that never asked is no failure.
+    sandbox = _fake_sandbox(_FakeRun(unasked_hooks=("exec",)))
+    sandbox._start_run = functools.partial(Host._start_run, sandbox)
+    built: dict[str, Any] = {}
+
+    class _FakeHarness:
+        name = "claude"
+        first_byte_seconds = None
+
+        @staticmethod
+        def mint_run_id(call_id: str) -> str:
+            return call_id
+
+        async def build_invocation(self, _manifest: Any, **kwargs: Any) -> AgentInvocation:
+            built.update(kwargs)
+            return _inv(("claude", "--print"))
+
+        def parse(self, result: Any, *, artifact_dir: Path, run_id: str) -> Any:
+            return {"answer": 42}
+
+    async def run_command(command: str) -> str:
+        return "0\n"
+
+    await Host.run_prompt(
+        sandbox,
+        _FakeHarness(),
+        _MANIFEST,
+        prompt="do the thing",
+        schema={"type": "object"},
+        artifact_dir=ctx.artifact_dir,
+        timeout=60,
+        call_id="call-7",
+        hooks={"exec": run_command},
+    )
+
+    assert built["extra_env"] == {"DRUKS_EXEC": "/root/work/runs/call-7/exec"}
 
 
 def test_check_returncode_surfaces_the_streams_terminal_error():

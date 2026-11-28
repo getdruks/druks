@@ -59,3 +59,35 @@ def test_exec_kill_stops_the_cli_under_a_wrapper_that_then_finishes(tmp_path: Pa
     helper.wait(timeout=10)
     assert (run_dir / "exit_code").read_text() == "143"
     assert (run_dir / "copied").exists()
+
+
+def test_exec_asks_the_exec_hook_and_exits_with_its_answer(tmp_path: Path):
+    env = {"DRUKS_EXEC": str(tmp_path / "exec"), "PATH": "/usr/bin:/bin"}
+    asking = subprocess.Popen(  # noqa: S603 — the script is test-controlled
+        ["sh", str(SCRIPT), "exec", "make", "test"], env=env, stdout=subprocess.PIPE, text=True
+    )
+    deadline = time.monotonic() + 10
+    while not (requests := list(tmp_path.glob("exec.*.request"))):
+        assert time.monotonic() < deadline
+        time.sleep(0.05)
+    assert requests[0].read_text() == "make test"
+    partial = requests[0].with_suffix(".answer.partial")
+    partial.write_text("7\none failed\n")
+    partial.rename(requests[0].with_suffix(".answer"))
+
+    assert asking.communicate(timeout=10)[0] == "one failed\n"
+    assert asking.returncode == 7
+    assert not list(tmp_path.iterdir())
+
+
+def test_exec_refuses_an_agent_that_has_no_exec_hook():
+    refused = subprocess.run(  # noqa: S603 — the script is test-controlled
+        ["sh", str(SCRIPT), "exec", "make", "test"],
+        env={"PATH": "/usr/bin:/bin"},
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert refused.returncode == 69
+    assert "no exec hook" in refused.stderr

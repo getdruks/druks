@@ -46,6 +46,7 @@ def _build() -> SimpleNamespace:
         assignee_email=None,
         related_repos=[],
         blockers=[],
+        has_environment=False,
         skills=[
             SimpleNamespace(
                 name="python-house-rules",
@@ -277,3 +278,17 @@ async def test_get_for_repo_raises_when_the_repo_was_transferred(druks_db):
     await ProjectRepo.create(project_id=project.id, full_name="czpython/druks")
     with pytest.raises(FatalError, match="renamed or transferred"):
         await ProjectRepo.get_for_repo("clawhaven/druks", raise_on_missing=True)
+
+
+async def test_the_implementer_of_a_repo_with_an_environment_runs_its_commands_there():
+    build = _build()
+    build.has_environment = True
+
+    prompt = await render_prompt(
+        "software_factory/build/implement.md",
+        build=build,
+        verification="VERIFICATION-BLOCK",
+        workspace=_workspace(),
+    )
+
+    assert "`~/druks-sandbox exec '<command>'`" in prompt

@@ -42,7 +42,7 @@ from .datastructures import (
     McpServer,
 )
 from .exceptions import SandboxDownloadError, SandboxError, SandboxUploadError
-from .layout import get_helper_script_path, get_work_root
+from .layout import get_helper_script_path, get_runs_root, get_work_root
 
 if TYPE_CHECKING:
     from druks.harnesses.base import Harness
@@ -427,6 +427,11 @@ class Host:
             manifest=manifest,
         )
 
+        if hooks and "exec" in hooks:
+            # Where the helper script on the box writes the requests of ``exec``. Without
+            # it, the script refuses the verb.
+            requests = f"{get_runs_root(self.ssh_username)}/{run_id}/exec"
+            extra_env = {**(extra_env or {}), "DRUKS_EXEC": requests}
         invocation = await harness.build_invocation(
             manifest,
             prompt=prompt,
@@ -481,10 +486,10 @@ class Host:
     ) -> Any:
         output = harness.parse(result, artifact_dir=artifact_dir, run_id=run_id)
         # After the parse, so a failed run keeps its own error and the call its cost.
-        if result.unasked_hooks:
-            raise HarnessHookError(
-                f"{harness.name} finished and never ran {', '.join(result.unasked_hooks)}."
-            )
+        # The CLI runs the after-agent hook itself. The agent asks any other hook when it
+        # needs it.
+        if "after_agent" in result.unasked_hooks:
+            raise HarnessHookError(f"{harness.name} finished and never ran after_agent.")
         return output
 
     async def _start_run(

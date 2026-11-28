@@ -1963,6 +1963,9 @@ class Instruction:
     _after_agent: list[Callable[..., Awaitable[str | None]]] = field(
         default_factory=list, init=False, compare=False, repr=False
     )
+    _exec: Callable[..., Awaitable[subprocess.CompletedProcess[str]]] | None = field(
+        default=None, init=False, compare=False, repr=False
+    )
 
     def __post_init__(self) -> None:
         if self.browser and self.browser_client != BrowserClient.PINCHTAB:
@@ -2019,6 +2022,15 @@ class Instruction:
         """When this agent ends its turn, call ``hook(prompt=..., workspace=...)``. Druks
         sends the text that it returns to the agent as one more turn."""
         self._after_agent.append(hook)
+        return hook
+
+    def exec(
+        self, hook: Callable[..., Awaitable[subprocess.CompletedProcess[str]]]
+    ) -> Callable[..., Awaitable[subprocess.CompletedProcess[str]]]:
+        """When this agent runs ``~/druks-sandbox exec '<command>'``, call
+        ``hook(command=..., workspace=...)``. The agent waits, and gets the output and
+        the exit code of the process that the hook returns."""
+        object.__setattr__(self, "_exec", hook)
         return hook
 
     async def get_config(self) -> AgentConfig:
@@ -2405,6 +2417,8 @@ class Instruction:
                         prompt=prompt,
                         workspace=runner,
                     )
+                if self._exec:
+                    hooks["exec"] = partial(self._run_exec, workspace=runner)
                 if last_failure:
                     prompt = f"{prompt}\n\n{RETRY_PROMPT.format(failure=last_failure)}"
                 if resume_from:
@@ -2535,7 +2549,7 @@ class Instruction:
         return event, artifact
 
     async def _run_after_agent(
-        self, *, harness: type["Harness"], prompt: str, workspace: Workspace
+        self, _request: str, *, harness: type["Harness"], prompt: str, workspace: Workspace
     ) -> str:
         # The hooks run inside the hooked call's step. An agent call in a hook thus replays
         # with that step. It takes no checkpoint of its own.
@@ -2548,6 +2562,11 @@ class Instruction:
             _in_step.reset(step_token)
             _in_after_agent.reset(after_agent_token)
         return harness.get_after_agent_reply("\n\n".join(text for text in texts if text))
+
+    async def _run_exec(self, command: str, *, workspace: Workspace) -> str:
+        completed = await self._exec(command=command, workspace=workspace)
+        # What the helper script on the box reads: the exit code, then the output.
+        return f"{completed.returncode}\n{completed.stdout}"
 
 
 async def _quota_retry_wait(

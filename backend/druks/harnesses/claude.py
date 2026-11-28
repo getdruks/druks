@@ -176,6 +176,16 @@ class ClaudeHarness(Harness):
                 ]
             }
             write_hook = f"{self.write_after_agent_hook(in_vm_run_dir)} && "
+        env = extra_env
+        if "exec" in hooks:
+            # The exec hook runs a command for as long as the call can last. Claude Code
+            # otherwise moves a command to the background after two minutes and stops it
+            # there ten minutes later.
+            env = {
+                **(extra_env or {}),
+                "BASH_DEFAULT_TIMEOUT_MS": str(timeout * 1000),
+                "BASH_MAX_TIMEOUT_MS": str(timeout * 1000),
+            }
         # Prompt rides as stdin (SFTP-uploaded) to avoid the SSH exec
         # channel's per-request size limit.
         claude_argv = [
@@ -248,7 +258,7 @@ class ClaudeHarness(Harness):
             args=("sh", "-c", wrapper),
             stdin=prompt.encode("utf-8"),
             credentials=credentials,
-            env=extra_env,
+            env=env,
             extra_artifact_filenames=("debug.log", self.session_filename),
         )
 

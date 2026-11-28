@@ -26,4 +26,6 @@ class BuildPromptContext:
     related_repos: list[ProjectRepo]
     skills: list[Skill]
     blockers: list[dict]
+    # The repo declares the environment that its commands run in.
+    has_environment: bool
     journal: BuildJournal

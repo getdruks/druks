@@ -713,8 +713,18 @@ shows **Building sandbox** while the image builds. The profile fails when the
 default branch lacks a script that the config names, or when the image does not
 build, and the repository keeps its last profile.
 
-This version builds the image and checks the other keys. A build does not run
-its commands in the environment yet.
+The implementer of a build runs the repository's commands in the environment,
+with `~/druks-sandbox exec '<command>'` on its own sandbox, and waits for each
+one. Druks makes a second sandbox from the image for the implementer, copies the
+implementer's checkout to it, with the uncommitted changes, and runs the command
+at the root of that copy. The files that the command changes come back into the
+checkout. The second sandbox holds no credential: not the model's, not GitHub's,
+and not Druks'. It keeps what git ignores, such as installed dependencies,
+between the commands of a build, and drukbox removes it when it is idle for 30
+minutes. The time that a command takes counts against the timeout of the
+implementer.
+
+This version does not run `start`, set `env`, or apply `size` yet.
 
 The same folder holds `review.md`, the repository's rules for the implementer
 and the reviewer. The build and review prompts read it when the checkout has

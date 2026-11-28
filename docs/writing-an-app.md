@@ -760,6 +760,46 @@ An interrupted one runs again with its hooks. A hook that raises makes the
 hooked call fail. The run time of a hook counts against the timeout of the
 hooked call.
 
+### Run an agent's commands for it
+
+An agent runs its commands on its own sandbox. To run some of them somewhere
+else, decorate a function with the instruction's `exec`:
+
+```python
+# hooks.py
+import subprocess
+
+from druks.workspaces import RepoWorkspace
+
+from .app import NightWatch
+
+
+@NightWatch.write_report.exec
+async def run_tests(
+    *, command: str, workspace: RepoWorkspace
+) -> subprocess.CompletedProcess[str]:
+    return await workspace.run_on_copy(command, template=TEST_TEMPLATE)
+```
+
+The agent runs `~/druks-sandbox exec '<command>'` on its sandbox, and the
+prompt tells it when to do so. Druks calls the hook with the command and the
+workspace. The agent waits for the hook, then gets the output and the exit code
+of the process that the hook returns. An instruction has one `exec` hook, the
+last one that registers. Without one, `~/druks-sandbox exec` exits with 69 and
+runs nothing.
+
+`RepoWorkspace.run_on_copy(command, template=...)` runs the command at the root
+of a copy of the checkout, on a second sandbox from that template:
+`(await sandbox.build(label=...)).id`. The copy has the uncommitted changes.
+The files that the command changes come back into the checkout. The second
+sandbox gets none of the workspace's secrets. It keeps what git ignores from
+command to command, and the agent's sandbox keeps the same one for a template.
+
+The rules of an `after_agent` hook apply: the hook runs inside the step of the
+hooked call, a hook that raises makes the call fail, and its run time counts
+against the timeout of the call. For a Claude Code call with an `exec` hook,
+Druks raises the time limit of a shell command to the timeout of the call.
+
 `RepoWorkspace.get_diff()` returns the change of the checkout since it left the
 default branch: commits, uncommitted edits, and untracked files. It reads the
 checkout as it is, without a clone. A changed binary file reads "Binary files

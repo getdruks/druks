@@ -4,7 +4,11 @@
 # Uploaded by Druks to <home>/druks-sandbox (the SSH user's home; the
 # previous /usr/local/bin path needed root and broke when the image
 # SSHes as a non-root user like ``exedev``) at sandbox-acquire time and
-# invoked over SSH by the runner. Three verbs:
+# invoked over SSH by the runner. The agent calls ``exec``. Four verbs:
+#
+#   exec COMMAND
+#       Ask the agent's ``exec`` hook to run COMMAND, print its output, and
+#       exit with its exit code.
 #
 #   exec-start --run-id ID --cwd PATH [--env-file PATH]
 #               [--stdin-from PATH] -- CMD [ARGS...]
@@ -51,8 +55,27 @@ die() {
 }
 
 verb="${1:-}"
-[ -z "$verb" ] && die "usage: druks-sandbox <exec-start|exec-kill|read-file> [options]"
+[ -z "$verb" ] && die "usage: druks-sandbox <exec|exec-start|exec-kill|read-file> [options]"
 shift
+
+# exec asks the agent's ``exec`` hook to run a command, and waits for it. The agent calls it:
+#   druks-sandbox exec <command>
+# Druks reads the request over SFTP and writes the answer: the exit code on the first
+# line, then the output.
+if [ "$verb" = "exec" ]; then
+    [ -n "${DRUKS_EXEC:-}" ] || die "this agent has no exec hook: run the command here" 69
+    [ "$#" -eq 0 ] && die "usage: druks-sandbox exec <command>"
+    request="$DRUKS_EXEC.$$"
+    # An earlier process with this pid can have left its answer.
+    rm -f "$request.answer"
+    printf '%s' "$*" > "$request.new"
+    mv "$request.new" "$request.request"
+    until [ -e "$request.answer" ]; do sleep 0.5; done
+    code=$(head -n 1 "$request.answer")
+    tail -n +2 "$request.answer"
+    rm -f "$request.request" "$request.answer"
+    exit "$code"
+fi
 
 # read-file streams a bounded regular file that must resolve inside the given
 # workspace — the transport for agent-declared output files:
