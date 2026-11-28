@@ -1297,6 +1297,11 @@ Druks sends these notifications:
   it in one message that Druks edits as the work continues. See
   [Report status](writing-an-app.md#report-status).
 
+The notification of a run's question or of its failure opens with a card: the
+app, then what the run is about, such as a repository or an email. A run with no
+subject shows its app alone. When nobody answers a question in time, the run
+fails, and its notification says `Failed: Nobody answered the question in time.`
+
 **Settings → Preferences → Notifications** chooses where the bot sends your
 notifications:
 

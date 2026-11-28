@@ -77,8 +77,16 @@ export function NotificationBell() {
             )}
             <ul>
               {notifications.map((notification) => {
-                // An approval opens with its label as a markdown heading.
-                const text = /^# (.*)/.exec(notification.body)?.[1] ?? notification.body
+                // A message about a run opens with its card: its app as a heading, then what
+                // the run is about, then its label or its failure. Any other approval opens
+                // with its label as a heading.
+                const text = notification.body.startsWith('### ')
+                  ? notification.body
+                      .split('\n\n')
+                      .slice(0, 3)
+                      .map((part) => part.replace(/^#+ /, ''))
+                      .join(' · ')
+                  : (/^# (.*)/.exec(notification.body)?.[1] ?? notification.body)
                 return (
                   <li key={notification.id} className={notification.readAt ? undefined : 'notification-unread'}>
                     {notification.deepLink ? <a href={notification.deepLink}>{text}</a> : <span>{text}</span>}

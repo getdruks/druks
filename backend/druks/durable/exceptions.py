@@ -44,7 +44,7 @@ class GateTimeout(FatalError):
     code = "gate_timeout"
 
     def __init__(self, gate: str) -> None:
-        super().__init__(f"gate {gate!r} timed out")
+        super().__init__("Nobody answered the question in time.")
         self.gate = gate
 
 

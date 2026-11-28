@@ -1,8 +1,9 @@
 # What a notification's message says in place of its buttons once its question is over.
 CLOSED_MESSAGE = "This question is closed."
 
-# What the run's account reads when the run fails and no chat reports it.
-RUN_FAILED_MESSAGE = "Your run {run} failed: {failure}"
+# What the run's account reads under the card of the run when the run fails and no chat
+# reports it.
+RUN_FAILED_MESSAGE = "Failed: {failure}"
 
 # The names of a run's inputs: a question's id after the prefix, and the note's own name.
 QUESTION_FIELD_PREFIX = "question:"

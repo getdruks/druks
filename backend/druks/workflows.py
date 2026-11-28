@@ -113,10 +113,10 @@ from druks.harnesses.exceptions import (
     Retry,
 )
 from druks.models import StoredSubject, snake_name
-from druks.notifications.constants import RUN_FAILED_MESSAGE, STATUS_REASON
+from druks.notifications.constants import STATUS_REASON
 from druks.notifications.models import Notification
 from druks.notifications.outbox import queue_status_send, send_notification
-from druks.notifications.services import create_park_notification
+from druks.notifications.services import create_failure_notification, create_park_notification
 from druks.prompts.resolver import get_template
 from druks.registry import get_app, get_app_by_module, get_app_name, get_instruction
 from druks.sandbox import gate as sandbox_gate
@@ -629,16 +629,7 @@ async def _create_failure_notification(
         # agent, and the run then has none.
         if run.conversation_id:
             return
-        notification = await Notification.create(
-            session,
-            account_id=run.account_id,
-            reason="run.failed",
-            body=RUN_FAILED_MESSAGE.format(run=run.subject_key or run.kind, failure=failure),
-            subject=subject,
-            run_id=run.id,
-            deep_link=run.get_link(),
-        )
-        return notification.id
+        return await create_failure_notification(session, run, subject, failure)
 
 
 async def _replace_status(workflow_id: str, subject: dict | None, stack: Stack) -> None:

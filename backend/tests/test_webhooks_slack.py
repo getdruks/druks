@@ -517,6 +517,7 @@ async def _approval(
     druks_db.add(run)
     await druks_db.flush()
     await seed_dbos_status(druks_db, run.id, "parked")
+    await druks_db.refresh(run, ["subject_key"])
     notification_id = await create_park_notification(
         druks_db,
         run,
@@ -840,12 +841,14 @@ async def test_a_click_on_an_action_runs_its_route_as_the_clicker_and_names_them
     stored = await druks_db.get(Notification, approval.id)
     line = ui.Text("member@example.com ran Archive.").model_dump(mode="json", by_alias=True)
     assert stored.blocks == [approval.blocks[0], line, *approval.blocks[2:]]
-    assert stored.body.startswith("# Review\n\nmember@example.com ran Archive.\n\nWhich database?")
+    assert stored.body.startswith(
+        "### Field Notes\n\n# Review\n\nmember@example.com ran Archive.\n\nWhich database?"
+    )
     # The action neither answers the run nor closes its question.
     assert (resume_spy, stored.is_acknowledged) == ([], False)
     (edit,) = slack_api.calls
     assert (edit["method"], edit["ts"]) == ("chat.update", _MESSAGE_TS)
-    assert edit["blocks"][0]["text"].startswith("# Review\n\nmember@example.com ran Archive.")
+    assert edit["blocks"][1]["text"].startswith("# Review\n\nmember@example.com ran Archive.")
     assert [button["action_id"] for button in edit["blocks"][-1]["elements"]] == [
         encode_button(approval.correlation_token, "approve"),
         encode_button(approval.correlation_token, "request_changes"),
@@ -895,7 +898,7 @@ async def test_a_click_on_a_row_s_action_runs_it_on_the_note_of_that_row_as_the_
         "text": {"type": "plain_text", "text": "Archive"},
         "action_id": encode_action(token, 1, 0, 1),
     }
-    assert (edit["method"], edit["text"], edit["blocks"][1]["rows"][1:]) == (
+    assert (edit["method"], edit["text"], edit["blocks"][2]["rows"][1:]) == (
         "chat.update",
         stored.body,
         [
@@ -1146,7 +1149,7 @@ async def test_an_action_sends_its_other_arguments_as_the_body_of_its_request(
 
     assert await druks_db.scalar(select(Note.id).where(Note.body == "Rack 3 is quiet."))
     (edit,) = slack_api.calls
-    assert edit["blocks"][0]["text"].startswith("# Review\n\nmember@example.com ran Write.")
+    assert edit["blocks"][1]["text"].startswith("# Review\n\nmember@example.com ran Write.")
 
 
 @pytest.mark.parametrize(
@@ -1238,7 +1241,7 @@ async def test_an_action_s_line_is_stored_before_its_edit_so_a_failed_edit_runs_
 
     assert called == [member.id]
     _, edit = slack_api.calls
-    assert edit["blocks"][0]["text"].startswith("# Review\n\nmember@example.com ran Archive.")
+    assert edit["blocks"][1]["text"].startswith("# Review\n\nmember@example.com ran Archive.")
     assert started.await_args == call(
         explain_reason, "C1", user="U7", reason="This action already ran.", thread_ts=_THREAD_TS
     )
@@ -1259,7 +1262,7 @@ async def test_an_answer_while_an_action_runs_keeps_its_outcome_and_the_action_s
     await replace_buttons(approval.id, channel="C1", message_ts=_MESSAGE_TS, outcome="")
 
     (edit,) = slack_api.calls
-    assert edit["blocks"][0]["text"].startswith("# Review\n\nmember@example.com ran Archive.")
+    assert edit["blocks"][1]["text"].startswith("# Review\n\nmember@example.com ran Archive.")
     assert edit["blocks"][-1]["text"]["text"].startswith("<@U7> chose Approve.")
 
 

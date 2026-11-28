@@ -218,6 +218,7 @@ async def _parked_notification(druks_db, *, ask=None, run_state="parked"):
     druks_db.add(run)
     await druks_db.flush()
     await seed_dbos_status(druks_db, run.id, run_state)
+    await druks_db.refresh(run, ["subject_key"])
     notification = await Notification.create(
         druks_db,
         account_id=run.account_id,
@@ -311,6 +312,7 @@ async def _thread_notification(druks_db, *, ask):
     druks_db.add(run)
     await druks_db.flush()
     await seed_dbos_status(druks_db, run.id, "parked")
+    await druks_db.refresh(run, ["subject_key"])
     notification_id = await create_park_notification(
         druks_db, run, {"type": "notification_probe", "id": 1}, conversation_id=conversation.id
     )
@@ -332,7 +334,9 @@ async def _account_notification(druks_db, *, ask):
 async def test_a_park_keeps_the_whole_ask_every_control_and_its_inputs(druks_db, park):
     _, notification = await park(druks_db, ask={**_IN_APP_ASK, "questions": QUESTIONS})
 
+    # The card of a run with no subject names its app alone.
     assert notification.body == (
+        "### Field Notes\n\n"
         "# Review\n\n"
         "Which database?\n- Postgres (recommended)\n- MySQL\n\n"
         "Which cache?\n- Redis\n\n"
