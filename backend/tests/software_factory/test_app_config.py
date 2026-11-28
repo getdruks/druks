@@ -6,6 +6,7 @@ from druks.apps.exceptions import AppConfigError
 from druks.contrib.software_factory.policy import RepoPolicy
 from druks.core.apis.exceptions import GitHubAppNotInstalledError
 from druks.testing import make_settings
+from pydantic import ValidationError
 
 REPO = "acme/widget"
 ORG_DRUKS = "acme/.druks"
@@ -200,10 +201,21 @@ class TestPolicyKeysParsing:
                     "delete_branch: false\n"
                     "verification:\n"
                     "  test_commands: [make test]\n"
+                    "environment:\n"
+                    "  setup: .druks/software_factory/setup.sh\n"
+                    "  start: .druks/software_factory/start.sh\n"
+                    "  env: {DATABASE_URL: postgres://localhost/test}\n"
+                    "  size: {cpu: 8, memory_gb: 16}\n"
                 ),
             },
         )
         policy = await RepoPolicy.resolve(REPO)
+        assert policy.environment.model_dump() == {
+            "setup": ".druks/software_factory/setup.sh",
+            "start": ".druks/software_factory/start.sh",
+            "env": {"DATABASE_URL": "postgres://localhost/test"},
+            "size": {"cpu": 8, "memory_gb": 16},
+        }
         assert policy.gates.plan_approval == "machine"
         assert policy.gates.implementation_approval == "none"
         assert policy.on_approval == "merge"
@@ -272,3 +284,18 @@ class TestPolicyKeysParsing:
         assert policy.plan_approval_gate("human") == "human"
         assert policy.plan_approval_gate("machine") == "machine"
         assert policy.plan_approval_gate("machine_then_human") == "machine_then_human"
+
+
+@pytest.mark.parametrize(
+    "environment",
+    [
+        {"start": ".druks/software_factory/start.sh"},
+        {"setup": "scripts/setup.sh"},
+        {"setup": ".druks/software_factory/../../setup.sh"},
+        {"setup": ".druks/software_factory/setup.sh", "env": {"NOT-A-NAME": "1"}},
+        {"setup": ".druks/software_factory/setup.sh", "size": {"cpu": 8}},
+    ],
+)
+def test_an_environment_that_druks_cannot_build_is_refused(environment):
+    with pytest.raises(ValidationError):
+        RepoPolicy.model_validate({"environment": environment})

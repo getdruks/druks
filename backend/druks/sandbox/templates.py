@@ -67,6 +67,22 @@ async def wait_for_build(sandbox: Sandbox, template: SandboxTemplate) -> Sandbox
     return template
 
 
+async def build_template(sandbox: Sandbox, *, label: str) -> SandboxTemplate:
+    """The available template of the sandbox's script, built now when drukbox has none."""
+    template = await sandbox_client.create_template(
+        setup_script=sandbox.read_setup_script().decode("utf-8"),
+        provider=sandbox.provider,
+        base_image=sandbox.get_base_image() or None,
+        label=label,
+    )
+    if template.status == "building":
+        await set_run_phase("sandbox_building")
+        template = await wait_for_build(sandbox, template)
+    if template.status == "available":
+        return template
+    raise TemplateUnavailable(f"sandbox template {label} failed to build: {template.last_error}")
+
+
 async def get_template_id(sandbox: Sandbox, *, wait: bool = True) -> str:
     setup_script_hash = sandbox.setup_script_hash
     base_image = sandbox.get_base_image()

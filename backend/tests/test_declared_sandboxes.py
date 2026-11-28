@@ -442,3 +442,43 @@ async def test_client_template_primitives_use_sdk_contract(monkeypatch):
         setup_script="setup", provider=None, base_image="base", label="notes"
     )
     assert api.aclose.await_count == 4
+
+
+@pytest.mark.parametrize("status", ["available", "failed"])
+async def test_a_sandbox_builds_its_template_and_reports_a_failure(monkeypatch, status):
+    sandbox = Sandbox(setup="setup.sh", script="apt-get install -y redis")
+    built = SimpleNamespace(status=status, id="template-1", last_error="OSError: no disk")
+    create_template = AsyncMock(return_value=SimpleNamespace(status="building"))
+    phases = []
+
+    async def set_run_phase(phase):
+        phases.append(phase)
+
+    monkeypatch.setattr(
+        datastructures,
+        "get_settings",
+        lambda: SimpleNamespace(sandbox=SimpleNamespace(image="base")),
+    )
+    monkeypatch.setattr(
+        templates,
+        "sandbox_client",
+        SimpleNamespace(
+            create_template=create_template, get_template=AsyncMock(return_value=built)
+        ),
+    )
+    monkeypatch.setattr(templates, "set_run_phase", set_run_phase)
+    monkeypatch.setattr(templates.asyncio, "sleep", AsyncMock())
+
+    if status == "available":
+        assert await sandbox.build(label="acme/widget:setup.sh") == built
+    else:
+        with pytest.raises(TemplateUnavailable, match="setup.sh failed to build: OSError"):
+            await sandbox.build(label="acme/widget:setup.sh")
+
+    assert phases == ["sandbox_building"]
+    create_template.assert_awaited_once_with(
+        setup_script="apt-get install -y redis",
+        provider=None,
+        base_image="base",
+        label="acme/widget:setup.sh",
+    )

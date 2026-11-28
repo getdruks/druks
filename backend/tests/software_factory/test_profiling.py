@@ -1,11 +1,16 @@
+from types import SimpleNamespace
+
 import pytest
 from conftest import connect_service
+from druks.apps.exceptions import AppConfigError
+from druks.contrib.software_factory import workflows
 from druks.contrib.software_factory.app import SoftwareFactory
 from druks.contrib.software_factory.models import Project, ProjectRepo
-from druks.contrib.software_factory.policy import RepoPolicy, VerificationProfile
+from druks.contrib.software_factory.policy import Environment, RepoPolicy, VerificationProfile
 from druks.contrib.software_factory.workflows import Profile
 from druks.db import db_session
 from druks.durable.engine import configure_engine
+from druks.sandbox import Sandbox
 from druks.services.exceptions import ServiceNotConnectedError
 from druks.skills.datastructures import InstalledSkill
 from druks.skills.models import SkillCollection
@@ -235,3 +240,44 @@ class TestRefreshOnly:
         assert repo.effective_profile["verification"]["test_commands"] == [
             {"command": "make test", "ci_check": None}
         ]
+
+
+@pytest.mark.parametrize("has_start_script", [True, False])
+async def test_a_profile_builds_the_image_of_the_environment(
+    druks_db, monkeypatch, has_start_script
+):
+    """The profile builds the image from the setup script of the default branch. A script
+    that the default branch lacks fails the profile before any build."""
+    repo = await _seed_repo()
+    baseline = _profiled()["baseline"]
+    await repo.set_profile(baseline=baseline, effective=baseline)
+    folder = ".druks/software_factory"
+    environment = Environment(setup=f"{folder}/setup.sh", start=f"{folder}/start.sh")
+    scripts = {environment.setup: "apt-get install -y redis"}
+    if has_start_script:
+        scripts[environment.start] = "redis-server --daemonize yes"
+    built = []
+
+    async def _policy(repo):
+        return RepoPolicy(environment=environment)
+
+    async def _fetch_file(*, repo: str, path: str):
+        return scripts.get(path)
+
+    async def _build(sandbox, *, label: str):
+        built.append((sandbox.script, label))
+        return SimpleNamespace(id="template-1")
+
+    monkeypatch.setattr(RepoPolicy, "resolve", staticmethod(_policy))
+    monkeypatch.setattr(workflows, "fetch_file", _fetch_file)
+    monkeypatch.setattr(Sandbox, "build", _build)
+
+    if has_start_script:
+        await Profile().run(repo_id=repo.id, refresh_only=True)
+        await db_session().refresh(repo)
+        assert built == [("apt-get install -y redis", f"acme/widget:{folder}/setup.sh")]
+        assert repo.effective_profile["environment_template"] == "template-1"
+    else:
+        with pytest.raises(AppConfigError, match="start.sh"):
+            await Profile().run(repo_id=repo.id, refresh_only=True)
+        assert not built
