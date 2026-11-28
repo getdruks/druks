@@ -7,6 +7,9 @@ WORKFLOW_HOST_RENEW_SECONDS = 5 * 60
 # a refresh runs, and the zset of active users scored by expiry.
 ROTATING_PREFIX = "druks:sandbox:rotating:"
 GATE_USERS_PREFIX = "druks:sandbox:gate:users:"
+# The workflow that refreshes a vault row's secret in the sandboxes that hold it, after a
+# change to the row commits.
+REFRESH_SANDBOX_SECRETS_WORKFLOW = "sandbox.refresh_sandbox_secrets"
 
 # Tar excludes for every tree copied into a sandbox home. These never carry
 # value into the VM and dominate upload time when shipped naively:

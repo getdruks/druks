@@ -5,6 +5,8 @@ from druks.accounts.models import Account
 from druks.db import db_session
 from druks.mcp import oauth
 from druks.registry import service_registry
+from druks.sandbox.constants import REFRESH_SANDBOX_SECRETS_WORKFLOW
+from druks.secrets.datastructures import Audience
 from druks.secrets.enums import SecretKind
 from druks.secrets.exceptions import SecretRevokedError
 from druks.secrets.models import VaultSecret
@@ -69,11 +71,8 @@ async def test_a_revoked_secret_keeps_its_facts_and_loses_its_secrets(druks_db):
     assert dict(row.secrets) == {}
     assert row.identity == {"slug": "linear"}
     assert not (await db_session().get(VaultSecret, row.id)).is_live
-    assert (
-        await VaultSecret.lookup(
-            db_session(), SecretKind.STATIC, "mcp:linear", header="Authorization"
-        )
-        is None
+    assert not await VaultSecret.lookup(
+        db_session(), SecretKind.STATIC, "mcp:linear", header="Authorization"
     )
 
 
@@ -88,6 +87,88 @@ async def test_revoking_tokens_spares_a_sibling_audience(druks_db):
 
     assert installation.revoked_at and repos.revoked_at
     assert sibling.is_live
+
+
+def _record_refreshes(monkeypatch) -> list[tuple[str, str]]:
+    """The refreshes the vault queues, as the workflow and the row it names."""
+    queued = []
+
+    async def enqueue(session, options, secret_id):
+        queued.append((options["workflow_name"], secret_id))
+
+    monkeypatch.setattr("druks.durable.engine.enqueue_in_transaction", enqueue)
+    return queued
+
+
+async def test_a_change_to_a_stored_row_refreshes_its_sandbox_secrets(druks_db, monkeypatch):
+    queued = _record_refreshes(monkeypatch)
+    pasted = await VaultSecret.store(
+        db_session(), SecretKind.STATIC, "mcp:linear", secrets={"value": "one"}
+    )
+    connection = await VaultSecret.connect(
+        db_session(), "service:acme", account_id=None, refresh_token="rt", scopes=[]
+    )
+    # A new row is in no sandbox yet.
+    assert queued == []
+
+    for _ in range(2):
+        # The second store keeps the value, so no sandbox holds an old one.
+        await VaultSecret.store(
+            db_session(), SecretKind.STATIC, "mcp:linear", secrets={"value": "two"}
+        )
+    await connection.reconnect(refresh_token="rt2", scopes=[], identity={})
+    await pasted.update_secrets({"value": "three"}, expires_at=None)
+    await pasted.revoke("user")
+    await pasted.revoke("server_removed")
+
+    assert queued == [
+        (REFRESH_SANDBOX_SECRETS_WORKFLOW, pasted.id),
+        (REFRESH_SANDBOX_SECRETS_WORKFLOW, connection.id),
+        (REFRESH_SANDBOX_SECRETS_WORKFLOW, pasted.id),
+        (REFRESH_SANDBOX_SECRETS_WORKFLOW, pasted.id),
+    ]
+
+
+async def test_a_write_queues_its_refresh_before_it_changes_the_row(druks_db, monkeypatch):
+    row = await _static()
+    was_live = []
+
+    async def enqueue(session, options, secret_id):
+        was_live.append(row.is_live)
+
+    monkeypatch.setattr("druks.durable.engine.enqueue_in_transaction", enqueue)
+
+    await row.revoke("user")
+
+    # A session that commits each operation on its own then commits the two together.
+    assert was_live == [True]
+
+
+async def test_a_fingerprint_follows_the_secrets_of_its_own_row(druks_db):
+    row = await _static("mcp:linear")
+    twin = await _static("mcp:notion")
+    fingerprint = row.get_fingerprint()
+
+    # The same secrets in another row have another fingerprint.
+    assert fingerprint != twin.get_fingerprint()
+    assert "lin_secret" not in fingerprint
+    row.identity = {"slug": "linear"}
+    assert row.get_fingerprint() == fingerprint
+    await row.revoke("user")
+    assert row.get_fingerprint() != fingerprint
+
+
+async def test_a_minted_token_refreshes_no_sandbox_secret(druks_db, monkeypatch):
+    queued = _record_refreshes(monkeypatch)
+
+    for audience in (Audience.oauth("acme", "c1"), Audience.resource("github", "installation", 7)):
+        for value in ("one", "two"):
+            minted = await VaultSecret.store(
+                db_session(), SecretKind.STATIC, audience, secrets={"value": value}
+            )
+        await minted.revoke()
+
+    assert queued == []
 
 
 async def test_the_secrets_column_is_ciphertext_bound_to_the_vault(druks_db):

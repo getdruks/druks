@@ -35,6 +35,9 @@ async def secret(
         # The ref is the whole selection: the vault row and the resources.
         # Nothing in the request can pick another.
         ref = identity.get_secret_ref(name)
+        # Read before the source I/O. A record older than the answer costs one more
+        # refresh, and a newer one would hide a box that holds an old value.
+        fingerprint = ref.secret.get_fingerprint()
         value, expires_at = await ref.secret.issue_token(
             tuple(ref.resources), name=ref.name, host_id=identity.host_id or ""
         )
@@ -44,10 +47,13 @@ async def secret(
         raise HTTPException(status_code=403) from None
     except MissingSecretError as exc:
         logger.warning("fetch of %s for identity %s failed: %s", name, identity_id, exc)
+        # The box came for the row as it is now and got no value.
+        await ref.record_fingerprint(fingerprint)
         raise HTTPException(status_code=422, detail=str(exc)) from None
     except Exception as exc:  # noqa: BLE001 — the source failed; the box gets a 503 and the exchange retries
         logger.warning("fetch of %s for identity %s failed: %s", name, identity_id, exc)
         raise HTTPException(status_code=503) from None
+    await ref.record_fingerprint(fingerprint)
     return JSONResponse(
         {"value": value, "expires_at": expires_at.isoformat() if expires_at else None},
         headers={"Cache-Control": "no-store"},

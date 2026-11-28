@@ -43,13 +43,17 @@ class SecretRef(Base):
     )
     # The Drukbox catalog name: the key of the box's secret and its variable.
     name: Mapped[str] = mapped_column(primary_key=True)
-    secret_id: Mapped[str] = mapped_column(ForeignKey("vault.id", ondelete="CASCADE"))
+    # Indexed for the refresh that finds the sandboxes of a changed row.
+    secret_id: Mapped[str] = mapped_column(ForeignKey("vault.id", ondelete="CASCADE"), index=True)
     # What the one token covers, such as repos. Empty for a subscription.
     resources: Mapped[list[str]] = mapped_column(JSONB, default=list)
     # The host the box's placeholder is swapped at, for a custom entry such
     # as an MCP server, or ``github.com`` for Drukbox's GitHub service. Empty
     # for a Drukbox catalog entry.
     host: Mapped[str] = mapped_column(default="")
+    # The fingerprint of the vault row at the issuer's last answer to the box. None
+    # before the first fetch.
+    fingerprint: Mapped[str | None]
 
     identity: Mapped["SandboxIdentity"] = relationship(back_populates="secret_refs", lazy="raise")
     secret: Mapped[VaultSecret] = relationship(lazy="selectin")
@@ -57,6 +61,19 @@ class SecretRef(Base):
     @property
     def key(self) -> tuple[str, str, tuple[str, ...], str]:
         return (self.name, self.secret_id, tuple(self.resources or ()), self.host or "")
+
+    @property
+    def is_stale(self) -> bool:
+        """The vault row changed after the issuer's last answer to the box."""
+        return self.fingerprint != self.secret.get_fingerprint()
+
+    async def record_fingerprint(self, fingerprint: str) -> None:
+        """Record the fingerprint of the vault row that the issuer answered the box
+        from, with a value or with a refusal. It commits on its own, so the error
+        response of a refusal does not roll it back."""
+        if self.fingerprint != fingerprint:
+            self.fingerprint = fingerprint
+            await self.session.commit()
 
 
 class SandboxIdentity(Base, Uuid7Pk):
@@ -226,6 +243,19 @@ class SandboxIdentity(Base, Uuid7Pk):
         # The box lease starts now, after any wait for a slot.
         self.expires_at = Base.utc_now() + timedelta(seconds=lease_seconds)
         await self.session.commit()
+        # Drukbox fetches from the issuer while it makes the box, when no refresh can
+        # name the box yet. A vault row that changed since that fetch is refreshed now,
+        # after the commit, so a change from here on finds the box by its host.
+        fetched = await self.session.scalars(
+            select(SecretRef)
+            .where(SecretRef.identity_id == self.id, SecretRef.fingerprint.is_not(None))
+            .execution_options(populate_existing=True)
+        )
+        for ref in fetched:
+            await self.session.refresh(ref.secret)
+            if ref.is_stale:
+                await ref.secret.refresh_sandbox_secrets()
+        await self.session.commit()
 
     async def revoke(self) -> None:
         # A second revoke keeps the first stamp.
@@ -270,11 +300,14 @@ class SandboxIdentity(Base, Uuid7Pk):
 
     @classmethod
     async def list_for_secret(
-        cls, session: AsyncSession, secret_id: str
-    ) -> list["SandboxIdentity"]:
-        """The live identities with a bound box that hold a ref to the secret."""
+        cls, session: AsyncSession, secret_id: str, *, only_stale: bool = False
+    ) -> list[tuple[str, str]]:
+        """The host id and the entry name of each live box that holds the secret.
+        ``only_stale`` keeps the boxes that hold an older value than the vault row.
+        A box whose run ended is not one: the issuer denies it every fetch."""
         rows = await session.scalars(
             select(cls)
+            .options(selectinload(cls.run))
             .join(cls.secret_refs)
             .where(
                 SecretRef.secret_id == secret_id,
@@ -283,4 +316,10 @@ class SandboxIdentity(Base, Uuid7Pk):
             )
             .distinct()
         )
-        return [row for row in rows if row.is_live]
+        return [
+            (row.host_id, ref.name)
+            for row in rows
+            if row.is_live and (not row.run or row.run.is_active)
+            for ref in row.secret_refs
+            if ref.secret_id == secret_id and (not only_stale or ref.is_stale)
+        ]
