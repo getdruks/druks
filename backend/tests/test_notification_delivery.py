@@ -836,6 +836,7 @@ async def test_an_approval_keeps_its_blocks_beside_their_text_form(druks_db):
     await druks_db.refresh(notification)
 
     assert notification.body == (
+        f"### Field Notes\n\nnote {note.id}\n\n"
         "# Review: Plan\n\n"
         f"- **Note**: [Rack 3](https://druks.example/field_notes/notes/{note.id})\n"
         "- **Work**: needs you\n\n"
@@ -845,7 +846,9 @@ async def test_an_approval_keeps_its_blocks_beside_their_text_form(druks_db):
         "## Steps\nShip it."
     )
     assert ui.Stack(notification.blocks).to_markdown() == notification.body
-    label, facts, notes, nowhere_link, question, document = notification.blocks
+    head, facts, notes, nowhere_link, question, document = notification.blocks
+    card, label = head["blocks"]
+    assert (card["title"], card["description"]) == ("Field Notes", f"note {note.id}")
     assert (label["text"], question["text"], document["text"]) == (
         "# Review: Plan",
         "Which rack?\n- Rack 3",
@@ -1575,11 +1578,12 @@ async def test_an_approval_keeps_its_action_and_its_text_links_the_label_to_the_
         deep_link=notification.deep_link,
     )
 
-    text = f"# Review\n\n{label}"
+    text = f"### Field Notes\n\n# Review\n\n{label}"
     assert notification.body == text
     assert notification.blocks[1] == archive.model_dump(mode="json", by_alias=True)
     refused_post, text_post = slack.posts
-    assert refused_post["blocks"][1]["elements"][0]["action_id"] == encode_action(
+    # The card of the run comes before the label, and the action keeps its position.
+    assert refused_post["blocks"][2]["elements"][0]["action_id"] == encode_action(
         notification.correlation_token, 1
     )
     # Slack refuses the blocks. Their text goes in their place.
@@ -1733,13 +1737,19 @@ async def test_an_approval_shows_its_inputs_above_every_control_until_its_answer
             ],
         },
     ]
-    (markdown, section) = answer_edit["blocks"]
-    assert markdown == {"type": "markdown", "text": approval.body}
+    # The first post has no blocks. The edits draw the stored blocks, where the card of the
+    # run is a block of its own.
+    content = [
+        {"type": "card", "title": _label("Field Notes")},
+        {"type": "markdown", "text": approval.body.removeprefix("### Field Notes\n\n")},
+    ]
+    (*answer_content, section) = answer_edit["blocks"]
+    assert answer_content == content
     assert len(section["text"]["text"]) <= SECTION_TEXT_LIMIT
     assert section["text"]["text"].startswith(outcome[:80])
     assert section["text"]["text"].endswith("Then retry it.\n\n…")
     assert close_edit["blocks"] == [
-        {"type": "markdown", "text": approval.body},
+        *content,
         {"type": "section", "text": {"type": "mrkdwn", "text": CLOSED_MESSAGE}},
     ]
 
@@ -1761,6 +1771,7 @@ async def test_a_thread_approval_shows_its_inputs_with_every_control_until_it_cl
     assert (first_post["channel"], first_post["thread_ts"]) == ("C1", "1700000000.000100")
     assert [block.get("block_id") for block in first_post["blocks"]] == [
         None,
+        None,
         "question:database",
         "note",
         None,
@@ -1771,7 +1782,8 @@ async def test_a_thread_approval_shows_its_inputs_with_every_control_until_it_cl
     ]
     for post in close_edits:
         assert post["blocks"] == [
-            {"type": "markdown", "text": approval.body},
+            {"type": "card", "title": _label("Field Notes")},
+            {"type": "markdown", "text": approval.body.removeprefix("### Field Notes\n\n")},
             {"type": "section", "text": {"type": "mrkdwn", "text": CLOSED_MESSAGE}},
         ]
 
@@ -1796,13 +1808,15 @@ async def test_an_approval_s_actions_are_buttons_until_it_closes_and_the_line_of
     await SlackChannel.remove_buttons(druks_db, conversation, approval)
 
     post, redraw, answer_edit, close_edit = slack.posts
+    card = {"type": "card", "title": _label("Field Notes")}
     clear_button = {
         "type": "actions",
         "elements": [
             {"type": "button", "text": _label("Clear gist"), "action_id": encode_action(token, 2)}
         ],
     }
-    assert post["blocks"][:3] == [
+    assert post["blocks"][:4] == [
+        card,
         {"type": "markdown", "text": "# Review"},
         {
             "type": "actions",
@@ -1813,14 +1827,16 @@ async def test_an_approval_s_actions_are_buttons_until_it_closes_and_the_line_of
         clear_button,
     ]
     # The approval keeps its inputs and buttons beside the action that did not run.
-    assert redraw["blocks"][:2] == [
+    assert redraw["blocks"][:3] == [
+        card,
         {"type": "markdown", "text": "# Review\n\nmember@example.com ran Archive."},
         clear_button,
     ]
-    assert [block.get("block_id") for block in redraw["blocks"][2:]] == ["note", None]
+    assert [block.get("block_id") for block in redraw["blocks"][3:]] == ["note", None]
     # An outcome replaces every button. With no endpoint, an action shows its label.
     for edit, outcome in ((answer_edit, "<@U1> chose Approve."), (close_edit, CLOSED_MESSAGE)):
         assert edit["blocks"] == [
+            card,
             {
                 "type": "markdown",
                 "text": "# Review\n\nmember@example.com ran Archive.\n\nClear gist",
@@ -2887,7 +2903,8 @@ async def test_an_approval_s_card_with_an_image_and_a_link_goes_out_as_slack_s_c
 
     (post,) = slack.posts
     # Slack's image element has no title. The hero image shows no caption.
-    assert post["blocks"][:2] == [
+    assert post["blocks"][:3] == [
+        {"type": "card", "title": _label("Field Notes")},
         {"type": "markdown", "text": "# Review"},
         {
             "type": "card",

@@ -78,6 +78,36 @@ describe('NotificationBell', () => {
     expect(screen.queryByText(/Which database/)).toBeNull()
   })
 
+  it('names the app and what a message about a run is about before its label or its failure', async () => {
+    const approval: NotificationResponse = {
+      ...disconnect,
+      id: 'n3',
+      readAt: '2026-11-17T09:05:00Z',
+      body: '### Security Sweep\n\nacme/api\n\n# Add a dependabot.yml?\n\nSkip, and later sweeps will not offer it again.',
+    }
+    const failure: NotificationResponse = {
+      ...approval,
+      id: 'n4',
+      body: '### Inbox Manager\n\nJoin us for a live demo\n\nFailed: Nobody answered the question in time.',
+    }
+    const subjectless: NotificationResponse = {
+      ...approval,
+      id: 'n5',
+      body: '### Usage\n\nFailed: The provider is down.',
+    }
+    vi.mocked(api.listNotifications).mockResolvedValue([approval, failure, subjectless])
+    renderBell()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Notifications' }))
+
+    const rows = await screen.findAllByRole('link')
+    expect(rows.map((row) => row.textContent)).toEqual([
+      'Security Sweep · acme/api · Add a dependabot.yml?',
+      'Inbox Manager · Join us for a live demo · Failed: Nobody answered the question in time.',
+      'Usage · Failed: The provider is down.',
+    ])
+  })
+
   it('says how to choose a route to a person with no channel and no Slack account', async () => {
     vi.mocked(api.listNotifications).mockResolvedValue([])
     vi.mocked(api.getPersonalSettings).mockResolvedValue({

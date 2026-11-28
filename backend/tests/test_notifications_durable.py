@@ -731,7 +731,9 @@ async def test_in_app_park_notifies_with_actions(runtime, deliver_spy):
     notification = await _wait_notification(runtime, workflow_id, "delivered")
     assert len(await _notifications_for_run(runtime, workflow_id)) == 1
     assert notification.reason == "gate.parked"
-    assert notification.body.startswith("# Review")
+    assert notification.body.startswith(
+        "### Notifications Durable\n\nnotification probe 9001\n\n# Review"
+    )
     assert "Which database?\n- Postgres" in notification.body
     assert notification.actions == [
         {"id": "approve", "label": "Approve"},
@@ -758,7 +760,9 @@ async def test_external_park_notifies_without_actions(runtime, deliver_spy):
     await _wait_run(runtime, workflow_id, lambda run: run.state == RunState.PARKED)
 
     notification = await _wait_notification(runtime, workflow_id, "delivered")
-    assert notification.body == "Answer on the ticket"
+    assert notification.body == (
+        "### Notifications Durable\n\nnotification probe 9002\n\nAnswer on the ticket"
+    )
     assert (notification.actions, notification.fields) == (None, None)
     assert not notification.deep_link
     (call,) = deliver_spy.calls
@@ -862,7 +866,8 @@ async def test_each_park_round_gets_its_own_notification(runtime, deliver_spy):
         runtime, workflow_id, lambda rows: len(rows) == 2 and rows[1].state == "delivered"
     )
 
-    assert [row.body for row in rows] == ["Round one", "Round two"]
+    card = "### Notifications Durable\n\nnotification probe 9008\n\n"
+    assert [row.body for row in rows] == [f"{card}Round one", f"{card}Round two"]
     assert rows[0].run_parked_at != rows[1].run_parked_at
     assert len(deliver_spy.calls) == 2
 

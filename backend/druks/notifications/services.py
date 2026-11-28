@@ -21,6 +21,7 @@ from druks.notifications.constants import (
     NOTE_FIELD,
     NOTE_REQUIRED_MESSAGE,
     QUESTION_FIELD_PREFIX,
+    RUN_FAILED_MESSAGE,
     TEAM_ONLY_MESSAGE,
 )
 from druks.notifications.exceptions import (
@@ -124,17 +125,24 @@ async def create_park_notification(
     deep_link: str | None = None,
 ) -> str:
     """Create the notification of the question that ``run`` parked on, for the account
-    or in the conversation, and return its id. The caller queues its delivery. The
-    notification keeps the run and the time that it parked. Druks thus refuses a click on an
-    old button after the run parks again."""
+    or in the conversation, and return its id. The card of the run comes before the ask.
+    The caller queues its delivery. The notification keeps the run and the time that it
+    parked. Druks thus refuses a click on an old button after the run parks again."""
+    card = await _get_run_card(run)
     rendered = await get_rendered_ask(session, run)
+    # An external ask is its label alone, with no blocks.
+    first, *rest = rendered["blocks"] or [
+        ui.Markdown(rendered["body"]).model_dump(mode="json", by_alias=True)
+    ]
+    # The card joins the first block of the ask, so that each action keeps its position.
+    head = ui.Stack([card, first]).model_dump(mode="json", by_alias=True)
     notification = await Notification.create(
         session,
         account_id=account_id,
         conversation_id=conversation_id,
         reason="gate.parked",
-        body=rendered["body"],
-        blocks=rendered["blocks"],
+        body=f"{card.to_markdown()}\n\n{rendered['body']}",
+        blocks=[head, *rest],
         subject=subject,
         actions=rendered["actions"],
         fields=rendered["fields"],
@@ -143,6 +151,32 @@ async def create_park_notification(
         deep_link=rendered["deep_link"] or deep_link,
     )
     return notification.id
+
+
+async def create_failure_notification(
+    session: AsyncSession, run: Run, subject: dict | None, failure: str
+) -> str:
+    """Create the notification that tells the account of ``run`` that the run failed with
+    ``failure``, under the card of the run, and return its id. The caller queues its
+    delivery."""
+    blocks = [await _get_run_card(run), ui.Markdown(RUN_FAILED_MESSAGE.format(failure=failure))]
+    notification = await Notification.create(
+        session,
+        account_id=run.account_id,
+        reason="run.failed",
+        body=ui.Stack(blocks).to_markdown(),
+        blocks=[block.model_dump(mode="json", by_alias=True) for block in blocks],
+        subject=subject,
+        run_id=run.id,
+        deep_link=run.get_link(),
+    )
+    return notification.id
+
+
+async def _get_run_card(run: Run) -> ui.Card:
+    """The card that opens a message about ``run``: its app as the dashboard names it, then
+    what the run is about. A run with no subject shows its app alone."""
+    return ui.Card(title=run.app.replace("_", " ").title(), description=run.subject_key or "")
 
 
 async def get_action_request(
